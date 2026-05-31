@@ -31,11 +31,11 @@ This project exposes local development tools to ChatGPT. Treat it as local-machi
 Recommended deployment:
 
 - Run the MCP server on `127.0.0.1`.
-- Expose it only through a trusted private network path such as Tailscale, another secure VPN, or a tightly controlled tunnel.
+- Prefer OpenAI Secure MCP Tunnel for ChatGPT access. It keeps the MCP server private and uses an outbound-only `tunnel-client` connection to OpenAI.
 - Register only the project directories you actually want ChatGPT to access.
 - Keep `.env`, `.ssh`, credentials, secrets, build outputs, logs, and local-only config out of git and in `denied_paths` where appropriate.
 
-The server provides defense-in-depth, but it is not a hard OS sandbox. The current sandbox type is `host`, so shell commands run on the local machine with the permissions of the user account running this server. Keep the server bound to localhost and use VPN/tunnel access controls.
+The server provides defense-in-depth, but it is not a hard OS sandbox. The current sandbox type is `host`, so shell commands run on the local machine with the permissions of the user account running this server. Keep the server bound to localhost and use OpenAI Tunnel / connector access controls.
 
 Safety controls included in this repo:
 
@@ -46,7 +46,7 @@ Safety controls included in this repo:
 - `forbidden` shell commands are blocked, including common secret reads and catastrophic system operations.
 - Shell output is redacted for common token, key, and credential patterns before being returned.
 - HTTP MCP access uses OAuth bearer tokens. The authorization endpoint is protected by a passphrase.
-- The server listens on `127.0.0.1`; external access should be provided by VPN or a controlled tunnel.
+- The server listens on `127.0.0.1`; ChatGPT access should go through OpenAI Secure MCP Tunnel or another controlled private path.
 
 Important limitations:
 
@@ -177,25 +177,37 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    local-dev-mcp MCP server running.
    ```
 
-8. If the user wants ChatGPT to connect from outside the machine, configure a trusted VPN or controlled tunnel.
+8. If the user wants ChatGPT to connect, configure OpenAI Secure MCP Tunnel.
 
-   Prefer Tailscale, another secure VPN, or a tightly scoped HTTPS tunnel over direct public exposure. This repo includes `scripts/tunnel.sh` for Cloudflare Tunnel. It requires these `.env` values:
+   This is the recommended path for this project. It keeps the MCP server on `127.0.0.1` and lets `tunnel-client` make an outbound HTTPS connection to OpenAI. It requires a tunnel created in [Platform tunnel settings](https://platform.openai.com/settings/organization/tunnels), plus a runtime API key with Tunnels Read + Use permission.
 
    ```bash
-   LOCAL_DEV_MCP_PUBLIC_ORIGIN=https://your-tunnel.example.com
-   LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID=your-tunnel-id
-   LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE=/absolute/path/to/credentials.json
+   LOCAL_DEV_MCP_OPENAI_TUNNEL_ID=tunnel_...
+   CONTROL_PLANE_API_KEY=sk-...
+   LOCAL_DEV_MCP_TUNNEL_SHARED_SECRET=...
    LOCAL_DEV_MCP_PROJECTS_CONFIG=/absolute/path/to/local-dev-mcp/config/projects.local.yaml
    ```
 
-   If those values are not already available, stop and ask the user for the VPN/tunnel details or ask whether they want only local HTTP setup for now. Do not invent tunnel IDs, hostnames, or credential paths.
+   Generate `LOCAL_DEV_MCP_TUNNEL_SHARED_SECRET` locally:
+
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
+   ```
+
+   Then run:
+
+   ```bash
+   pnpm tunnel:openai
+   ```
+
+   If the OpenAI tunnel ID or runtime API key is not available, stop and ask the user to create them. Do not invent tunnel IDs or API keys, and do not ask the user to paste keys into chat.
 
 9. Give the user the ChatGPT connection target:
 
    - Local HTTP endpoint for local testing: `http://127.0.0.1:3456/mcp`
-   - ChatGPT-reachable VPN/tunnel endpoint: `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`
+   - ChatGPT connector target: choose **Tunnel** in ChatGPT connector settings and select the OpenAI tunnel ID
 
-   ChatGPT should use the HTTP MCP endpoint that is reachable from the ChatGPT connector flow. Stdio is mainly useful for local MCP clients and debugging.
+   Stdio is mainly useful for local MCP clients and debugging.
 
 10. Tell the user to add the app in ChatGPT Developer Mode.
 
@@ -205,18 +217,16 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
 
    1. Open ChatGPT on the web.
    2. Enable Developer Mode. Depending on the workspace plan and permissions, this is under Settings -> Apps -> Advanced settings -> Developer mode, or Workspace settings -> Apps / Permissions & Roles.
-   3. Open Apps settings and choose Create app.
-   4. Enter the ChatGPT-reachable MCP endpoint, for example `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`.
-   5. Choose OAuth authentication.
-   6. Click Scan Tools.
-   7. When the authorization page opens, enter the `LOCAL_DEV_MCP_PASSPHRASE` value from `.env`.
-   8. Wait for the tool scan to finish, then click Create.
-   9. Open a new chat and select the draft app from the tools / plus menu or Developer Mode tool picker.
-   10. Test with a read-only prompt first, such as "Use local-dev-mcp to list projects."
+   3. Open connector settings and create a custom connector.
+   4. Choose **Tunnel** under Connection.
+   5. Select the available tunnel, or paste the `LOCAL_DEV_MCP_OPENAI_TUNNEL_ID`.
+   6. Scan tools while `pnpm tunnel:openai` is running.
+   7. Open a new chat and select the draft connector/app from the tools / plus menu or Developer Mode tool picker.
+   8. Test with a read-only prompt first, such as "Use local-dev-mcp to list projects."
 
    Notes for the user:
 
-   - ChatGPT must be able to reach the MCP endpoint. `127.0.0.1` is only for local testing; use a trusted ChatGPT-reachable VPN / tunnel endpoint for ChatGPT.
+   - ChatGPT does not connect directly to `127.0.0.1`. It connects to the OpenAI-hosted tunnel endpoint while `tunnel-client` forwards requests locally.
    - Developer Mode and full MCP write/modify support depend on the user's ChatGPT plan, workspace settings, and admin permissions.
    - ChatGPT may ask for confirmation frequently. Review the tool payload before approving write or command execution.
 
@@ -225,9 +235,9 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    - The absolute path of `config/projects.local.yaml`
    - The selected project IDs
    - Whether `pnpm typecheck` and `pnpm test` passed
-   - Whether only local HTTP is ready or the public tunnel is also ready
-   - The ChatGPT MCP endpoint to use
-   - That the remaining ChatGPT Developer Mode app creation step must be completed by the user
+   - Whether only local HTTP is ready or OpenAI Secure MCP Tunnel is also running
+   - The OpenAI tunnel ID to select in ChatGPT
+   - That the remaining ChatGPT connector/app creation step must be completed by the user
 
 Do not commit or print the contents of `.env`, `.local-dev-mcp`, `logs`, `generated`, `dist`, `node_modules`, or `config/projects.local.yaml`.
 
@@ -247,6 +257,37 @@ For local debugging or non-ChatGPT MCP clients, these connection forms are avail
 
 Use the MCP client's native configuration mechanism to register either the stdio command or the HTTP endpoint. Do not hard-code another user's local paths.
 
+## OpenAI Secure MCP Tunnel
+
+OpenAI Secure MCP Tunnel is the recommended ChatGPT connection path for this project. The local MCP server remains private on `127.0.0.1`, and `tunnel-client` keeps an outbound HTTPS connection to OpenAI. Do not create a public HTTPS URL for this server unless you intentionally choose a different deployment model.
+
+User-only OpenAI setup:
+
+1. Open [Platform tunnel settings](https://platform.openai.com/settings/organization/tunnels).
+2. Create a tunnel and copy its `tunnel_id`.
+3. Create a runtime API key with Tunnels Read + Use permission for that tunnel.
+4. Keep tunnel management permission limited to yourself or the intended operator group.
+
+Local setup:
+
+1. Download `tunnel-client` from [openai/tunnel-client releases](https://github.com/openai/tunnel-client/releases/latest), or set `TUNNEL_CLIENT_BIN` to an existing binary.
+2. Put these values in local `.env`:
+
+   ```bash
+   LOCAL_DEV_MCP_OPENAI_TUNNEL_ID=tunnel_...
+   CONTROL_PLANE_API_KEY=sk-...
+   LOCAL_DEV_MCP_TUNNEL_SHARED_SECRET=...
+   LOCAL_DEV_MCP_PROJECTS_CONFIG=/absolute/path/to/local-dev-mcp/config/projects.local.yaml
+   ```
+
+3. Start the tunnel:
+
+   ```bash
+   pnpm tunnel:openai
+   ```
+
+The script starts the local HTTP MCP server if needed, then runs `tunnel-client` with an extra `X-Local-Dev-MCP-Tunnel-Secret` header. The MCP server accepts that header only when it matches `LOCAL_DEV_MCP_TUNNEL_SHARED_SECRET`; otherwise it falls back to normal OAuth bearer-token authentication.
+
 ## Add The App In ChatGPT Developer Mode
 
 This part must be done by the user in ChatGPT. A local coding agent can prepare the server and provide the endpoint, but it cannot click through the user's ChatGPT workspace settings or approve the app on their behalf.
@@ -254,8 +295,8 @@ This part must be done by the user in ChatGPT. A local coding agent can prepare 
 Prerequisites:
 
 - ChatGPT web access with Developer Mode available for the account/workspace.
-- A ChatGPT-reachable MCP endpoint, usually `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`.
-- `LOCAL_DEV_MCP_PASSPHRASE` set in the local `.env`.
+- A running OpenAI Secure MCP Tunnel from `pnpm tunnel:openai`.
+- A tunnel that is visible to the ChatGPT workspace/account.
 
 Steps:
 
@@ -263,20 +304,14 @@ Steps:
 2. Enable Developer Mode:
    - User settings path: Settings -> Apps -> Advanced settings -> Developer mode.
    - Workspace/admin path: Workspace settings -> Apps, or Workspace settings -> Permissions & Roles, depending on plan and permissions.
-3. Open Apps settings and click Create app.
-4. Enter the MCP endpoint, for example:
-
-   ```text
-   https://your-trusted-endpoint.example.com/mcp
-   ```
-
-5. Choose OAuth authentication.
-6. Click Scan Tools.
-7. Complete the authorization prompt by entering your `LOCAL_DEV_MCP_PASSPHRASE`.
-8. After the tool scan completes, click Create.
-9. Confirm the app appears as a draft / developer app.
-10. Start a new chat and select the app from the tools / plus menu or Developer Mode tool picker.
-11. Test with read-only prompts first:
+3. Open ChatGPT connector settings and create a custom connector.
+4. Choose **Tunnel** under Connection.
+5. Select the OpenAI tunnel, or paste the `tunnel_id`.
+6. Scan tools while `pnpm tunnel:openai` is running.
+7. After the tool scan completes, click Create.
+8. Confirm the connector/app appears as a draft / developer app.
+9. Start a new chat and select it from the tools / plus menu or Developer Mode tool picker.
+10. Test with read-only prompts first:
 
    ```text
    Use local-dev-mcp to list projects.
@@ -286,11 +321,12 @@ Steps:
    Use local-dev-mcp to select my project, then show the current project.
    ```
 
-Write and command execution prompts can trigger ChatGPT confirmation dialogs. Review the JSON payload before approving. If ChatGPT cannot connect, verify the endpoint is reachable from ChatGPT, OAuth discovery works, the passphrase is correct, and the server logs show the request.
+Write and command execution prompts can trigger ChatGPT confirmation dialogs. Review the JSON payload before approving. If ChatGPT cannot connect, verify that `tunnel-client` is running, the tunnel is visible to the workspace, the runtime API key has Tunnels Read + Use permission, the shared secret matches, and the local server logs show the request.
 
 Official references:
 
 - [ChatGPT Developer mode](https://developers.openai.com/api/docs/guides/developer-mode)
+- [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 - [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)
 
 ### Manual Setup
@@ -342,7 +378,7 @@ Each project entry supports:
 
 ## Cloudflare Tunnel
 
-`scripts/tunnel.sh` can start the HTTP server and a Cloudflare Tunnel. Use this only when the tunnel is part of your trusted access path. If you use Tailscale or another VPN, adapt the endpoint and routing to that environment instead of exposing the server directly.
+`scripts/tunnel.sh` can start the HTTP server and a Cloudflare Tunnel. This is a secondary option kept for users who intentionally want that deployment model. For ChatGPT access, prefer OpenAI Secure MCP Tunnel so the MCP server does not need a public HTTPS origin.
 
 Configure these values in `.env` first:
 

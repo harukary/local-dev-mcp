@@ -10,7 +10,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "tunnel": "bash scripts/tunnel.sh"
+    "tunnel": "bash scripts/tunnel.sh",
+    "tunnel:openai": "bash scripts/openai-tunnel.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
