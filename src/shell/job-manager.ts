@@ -200,13 +200,16 @@ export function startJob(
 }
 
 function shouldBlockCommand(project: ProjectConfig, command: string, riskLevel: RiskLevel): boolean {
+  if (riskLevel === "forbidden") {
+    return true;
+  }
   if (project.approvalMode === "never") {
     return false;
   }
   if (project.approvalMode === "catastrophic_only") {
     return isCatastrophicCommand(command);
   }
-  return riskLevel === "forbidden";
+  return false;
 }
 
 export function cancelJob(jobId: string): boolean {

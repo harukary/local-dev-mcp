@@ -54,7 +54,7 @@ export function validateProjectConfig(
       `Project "${projectId}" has invalid write_policy "${raw.write_policy}"`
     );
   }
-  const approvalMode = (raw.approval_mode || "catastrophic_only") as ApprovalMode;
+  const approvalMode = (raw.approval_mode || "policy") as ApprovalMode;
   if (!validApprovalModes.includes(approvalMode)) {
     throw new Error(
       `Project "${projectId}" has invalid approval_mode "${raw.approval_mode}"`

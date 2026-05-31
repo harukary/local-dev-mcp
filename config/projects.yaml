@@ -8,8 +8,8 @@ projects:
     default_timeout_seconds: 30
     max_timeout_seconds: 300
     network_policy: ask
-    write_policy: allow
-    approval_mode: catastrophic_only
+    write_policy: confirm
+    approval_mode: policy
     denied_paths:
       - .env
       - .env.*

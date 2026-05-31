@@ -272,13 +272,16 @@ async function logApprovalApproved(
 }
 
 function shouldBlockApprovedCommand(approvalMode: string, command: string, riskLevel: string): boolean {
+  if (riskLevel === "forbidden") {
+    return true;
+  }
   if (approvalMode === "never") {
     return false;
   }
   if (approvalMode === "catastrophic_only") {
     return isCatastrophicCommand(command);
   }
-  return riskLevel === "forbidden";
+  return false;
 }
 
 export async function handleShellReject(ctx: AppContext, chatContextId: string, args: { approval_request_id: string }) {

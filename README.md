@@ -12,6 +12,59 @@ The intended workflow is:
 
 Codex, Claude Code, and similar coding agents are useful for setting up this repository on the user's machine. They are not the primary runtime client this project was built for.
 
+![local-dev-mcp system overview](docs/local-dev-mcp-system-overview.jpg)
+
+## Intended Uses
+
+- Let ChatGPT inspect local code, logs, test output, and project documents without copy-pasting large context into the chat.
+- Discuss architecture, implementation plans, bugs, and refactors in ChatGPT using the actual local repository as context.
+- Run selected local commands from ChatGPT when the user approves the operation.
+- Use ChatGPT alongside Codex or Claude Code: Codex can keep doing direct coding work, while ChatGPT can discuss and inspect local state through this MCP server.
+- Save Codex usage for implementation-heavy work by using ChatGPT for local-code-aware discussion, review, and lightweight operations.
+
+## Security Model
+
+This project exposes local development tools to ChatGPT. Treat it as local-machine access infrastructure, not as a public web app.
+
+Recommended deployment:
+
+- Run the MCP server on `127.0.0.1`.
+- Expose it only through a trusted private network path such as Tailscale, another secure VPN, or a tightly controlled tunnel.
+- Register only the project directories you actually want ChatGPT to access.
+- Keep `.env`, `.ssh`, credentials, secrets, build outputs, logs, and local-only config out of git and in `denied_paths` where appropriate.
+
+The server provides defense-in-depth, but it is not a hard OS sandbox. The current sandbox type is `host`, so shell commands run on the local machine with the permissions of the user account running this server. Keep the server bound to localhost and use VPN/tunnel access controls.
+
+Safety controls included in this repo:
+
+- Project registry allowlist: ChatGPT must select from configured projects.
+- Workspace file tools reject paths outside the selected project root.
+- `denied_paths` blocks configured secret paths for workspace tools and forbidden shell classifications.
+- Shell risk classification separates read-only, local compute, workspace write, network/dependency, destructive/process-control, and forbidden operations.
+- `forbidden` shell commands are blocked, including common secret reads and catastrophic system operations.
+- Shell output is redacted for common token, key, and credential patterns before being returned.
+- HTTP MCP access uses OAuth bearer tokens. The authorization endpoint is protected by a passphrase.
+- The server listens on `127.0.0.1`; external access should be provided by VPN or a controlled tunnel.
+
+Important limitations:
+
+- A determined command can still be dangerous if the user approves it. Review shell commands before approving.
+- Static risk classification is conservative but not perfect.
+- This does not replace OS-level sandboxing, container isolation, filesystem permissions, or network ACLs.
+- Do not expose the HTTP endpoint directly to the public internet.
+
+## ChatGPT Approvals
+
+ChatGPT may show frequent confirmation or approval prompts when using MCP tools, especially for local file access, command execution, network/dependency commands, writes, and destructive operations. That is expected and intentional. The prompts are part of ChatGPT's safety model and should be treated as a review point, not as a bug.
+
+For this project, the recommended default is:
+
+- `approval_mode: policy`
+- `write_policy: confirm`
+- `network_policy: ask`
+
+This means routine reads can stay smooth, while writes and network/dependency operations usually ask for confirmation.
+
 ## Features
 
 - Project selection from a YAML registry
@@ -54,7 +107,21 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    test -f config/projects.local.yaml || cp config/projects.yaml config/projects.local.yaml
    ```
 
-4. Edit `config/projects.local.yaml` for the user's machine.
+4. Set an OAuth authorization passphrase in `.env`.
+
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
+   ```
+
+   Put the generated value in:
+
+   ```bash
+   LOCAL_DEV_MCP_PASSPHRASE=...
+   ```
+
+   Do not print the final `.env` contents back to the user.
+
+5. Edit `config/projects.local.yaml` for the user's machine.
 
    Replace `/absolute/path/to/your/project` with the absolute path of the project the user wants ChatGPT to operate. If the user did not name a project, ask for the project path before editing. Keep secret-bearing paths in `denied_paths`.
 
@@ -71,8 +138,8 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
        default_timeout_seconds: 30
        max_timeout_seconds: 300
        network_policy: ask
-       write_policy: allow
-       approval_mode: catastrophic_only
+       write_policy: confirm
+       approval_mode: policy
        denied_paths:
          - .env
          - .env.*
@@ -83,14 +150,14 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
        redaction_profile: default
    ```
 
-5. Validate the setup:
+6. Validate the setup:
 
    ```bash
    pnpm typecheck
    pnpm test
    ```
 
-6. Start the local HTTP server:
+7. Start the local HTTP server:
 
    ```bash
    pnpm dev:http -- config/projects.local.yaml
@@ -108,9 +175,9 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    local-dev-mcp MCP server running.
    ```
 
-7. If the user wants ChatGPT to connect from outside the machine, configure a tunnel.
+8. If the user wants ChatGPT to connect from outside the machine, configure a trusted VPN or controlled tunnel.
 
-   This repo includes `scripts/tunnel.sh` for Cloudflare Tunnel. It requires these `.env` values:
+   Prefer Tailscale, another secure VPN, or a tightly scoped HTTPS tunnel over direct public exposure. This repo includes `scripts/tunnel.sh` for Cloudflare Tunnel. It requires these `.env` values:
 
    ```bash
    LOCAL_DEV_MCP_PUBLIC_ORIGIN=https://your-tunnel.example.com
@@ -119,16 +186,16 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    LOCAL_DEV_MCP_PROJECTS_CONFIG=/absolute/path/to/local-dev-mcp/config/projects.local.yaml
    ```
 
-   If those values are not already available, stop and ask the user for the tunnel details or ask whether they want only local HTTP setup for now. Do not invent tunnel IDs, hostnames, or credential paths.
+   If those values are not already available, stop and ask the user for the VPN/tunnel details or ask whether they want only local HTTP setup for now. Do not invent tunnel IDs, hostnames, or credential paths.
 
-8. Give the user the ChatGPT connection target:
+9. Give the user the ChatGPT connection target:
 
-   - Local HTTP endpoint: `http://127.0.0.1:3456/mcp`
-   - Public tunnel endpoint: `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`
+   - Local HTTP endpoint for local testing: `http://127.0.0.1:3456/mcp`
+   - ChatGPT-reachable VPN/tunnel endpoint: `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`
 
-   ChatGPT should use the HTTP MCP endpoint. Stdio is mainly useful for local MCP clients and debugging.
+   ChatGPT should use the HTTP MCP endpoint that is reachable from the ChatGPT connector flow. Stdio is mainly useful for local MCP clients and debugging.
 
-9. Report back with:
+10. Report back with:
 
    - The absolute path of `config/projects.local.yaml`
    - The selected project IDs
@@ -160,6 +227,12 @@ Use the MCP client's native configuration mechanism to register either the stdio
 pnpm install
 cp .env.example .env
 cp config/projects.yaml config/projects.local.yaml
+```
+
+Set `LOCAL_DEV_MCP_PASSPHRASE` in `.env` before using the OAuth authorization flow:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
 ```
 
 Edit `config/projects.local.yaml` so every `host_root` and `sandbox_root` points to a local project you want to expose.
@@ -197,7 +270,9 @@ Each project entry supports:
 
 ## Cloudflare Tunnel
 
-`scripts/tunnel.sh` can start the HTTP server and a Cloudflare Tunnel. Configure these values in `.env` first:
+`scripts/tunnel.sh` can start the HTTP server and a Cloudflare Tunnel. Use this only when the tunnel is part of your trusted access path. If you use Tailscale or another VPN, adapt the endpoint and routing to that environment instead of exposing the server directly.
+
+Configure these values in `.env` first:
 
 ```bash
 LOCAL_DEV_MCP_PUBLIC_ORIGIN=https://your-tunnel.example.com

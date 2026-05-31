@@ -246,13 +246,16 @@ export async function handleShellRun(
 }
 
 function shouldBlockCommand(project: { approvalMode: string }, command: string, riskLevel: string): boolean {
+  if (riskLevel === "forbidden") {
+    return true;
+  }
   if (project.approvalMode === "never") {
     return false;
   }
   if (project.approvalMode === "catastrophic_only") {
     return isCatastrophicCommand(command);
   }
-  return riskLevel === "forbidden";
+  return false;
 }
 
 function resolveCurrentProjectId(ctx: AppContext, chatContextId: string): string | undefined {

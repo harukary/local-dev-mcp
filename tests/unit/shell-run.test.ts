@@ -26,22 +26,10 @@ describe("handleShellRun", () => {
     expect(contextStore.getCurrentProject("chat-a")).toBeUndefined();
   });
 
-  it("does not require approval for forbidden-classified commands in catastrophic_only mode", async () => {
+  it("blocks forbidden-classified commands even in catastrophic_only mode", async () => {
     const contextStore = new ChatContextStore();
     contextStore.setCurrentProject("chat-a", "alpha");
-    const shellRunner = { run: vi.fn().mockResolvedValue({
-      projectId: "alpha",
-      cwd: "/tmp/alpha",
-      command: "cat .env",
-      riskLevel: "forbidden",
-      exitCode: 0,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      stdoutTruncated: false,
-      stderrTruncated: false,
-      redactions: [],
-    }) };
+    const shellRunner = { run: vi.fn() };
 
     const ctx = {
       registry: {
@@ -70,8 +58,9 @@ describe("handleShellRun", () => {
 
     const result = await handleShellRun(ctx, "chat-a", { command: "cat .env" });
 
-    expect(result.isError).toBeUndefined();
-    expect(shellRunner.run).toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).error.code).toBe("FORBIDDEN_COMMAND");
+    expect(shellRunner.run).not.toHaveBeenCalled();
   });
 
   it("blocks catastrophic commands in catastrophic_only mode", async () => {

@@ -25,7 +25,7 @@ describe("Config Schema", () => {
     expect(config.projectId).toBe("test");
     expect(config.displayName).toBe("Test Project");
     expect(config.sandboxType).toBe("host");
-    expect(config.approvalMode).toBe("catastrophic_only");
+    expect(config.approvalMode).toBe("policy");
   });
 
   it("rejects missing display_name", () => {

@@ -49,6 +49,7 @@ describe("job retention", () => {
     projectRoot = mkdtempSync(join(tmpdir(), "job-manager-test-"));
     project.hostRoot = projectRoot;
     project.sandboxRoot = projectRoot;
+    project.deniedPaths = [];
     clearJobsForTests();
     setJobRetentionTtlForTests(50);
     setPersistedJobRetentionForTests(7 * 24 * 60 * 60 * 1000);
@@ -62,6 +63,15 @@ describe("job retention", () => {
       rmSync(projectRoot, { recursive: true, force: true });
       projectRoot = "";
     }
+  });
+
+  it("blocks forbidden-classified async commands even in catastrophic_only mode", () => {
+    project.deniedPaths = [".env"];
+
+    const result = startJob(project, "cat .env");
+
+    expect("error" in result).toBe(true);
+    expect("error" in result ? result.error : "").toContain("Forbidden command");
   });
 
   it("keeps completed jobs available after the in-memory TTL expires", async () => {
