@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>local-dev-mcp</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0d1117;color:#c9d1d9;padding:16px;font-size:14px;line-height:1.5}
+h2{font-size:14px;font-weight:600;margin-bottom:12px;color:#58a6ff}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:12px}
+.project-name{font-size:16px;font-weight:600;color:#f0f6fc}
+.meta{display:grid;grid-template-columns:100px 1fr;gap:4px 12px;font-size:13px;margin-top:8px}
+.meta dt{color:#8b949e}
+.meta dd{color:#c9d1d9}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:500}
+.badge-ok{background:#1a3a2a;color:#3fb950}
+.badge-warn{background:#3a2a1a;color:#d29922}
+.badge-err{background:#3a1a1a;color:#f85149}
+.empty{color:#8b949e;text-align:center;padding:32px}
+button{background:#21262d;border:1px solid #30363d;color:#c9d1d9;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px}
+button:hover{background:#30363d}
+select{background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:6px 10px;border-radius:6px;font-size:13px}
+.project-list{display:flex;flex-direction:column;gap:8px}
+.project-item{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;cursor:pointer}
+.project-item:hover{border-color:#58a6ff}
+.project-item.current{border-color:#3fb950;background:#1a2a1a}
+.project-item .name{font-weight:500}
+.project-item .path{font-size:12px;color:#8b949e}
+</style>
+</head>
+<body>
+<div id="app">
+  <h2>Projects</h2>
+  <div id="projects" class="project-list"><div class="empty">Loading...</div></div>
+
+  <h2 style="margin-top:16px">Current Project</h2>
+  <div id="current" class="card"><div class="empty">No project selected</div></div>
+
+  <h2 style="margin-top:16px">Last Command</h2>
+  <div id="last-cmd" class="card"><div class="empty">No commands run yet</div></div>
+</div>
+
+<script>
+const API = window.location.origin;
+
+async function api(path, opts) {
+  const token = localStorage.getItem('mcp_token');
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`${API}${path}`, { ...opts, headers });
+  return res.json();
+}
+
+async function loadProjects() {
+  try {
+    const data = await api('/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'ui', version: '0.1.0' } }
+      })
+    });
+    // Simplified: show projects from registry
+    document.getElementById('projects').innerHTML = '<div class="empty">Connect via MCP to see projects</div>';
+  } catch (e) {
+    document.getElementById('projects').innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+  }
+}
+
+loadProjects();
+</script>
+</body>
+</html>

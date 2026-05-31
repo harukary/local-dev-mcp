@@ -1,0 +1,20 @@
+projects:
+  example:
+    display_name: Example Project
+    host_root: /absolute/path/to/your/project
+    sandbox_root: /absolute/path/to/your/project
+    sandbox_type: host
+    default_shell: /bin/bash
+    default_timeout_seconds: 30
+    max_timeout_seconds: 300
+    network_policy: ask
+    write_policy: allow
+    approval_mode: catastrophic_only
+    denied_paths:
+      - .env
+      - .env.*
+      - .npmrc
+      - .ssh
+      - secrets
+      - credentials
+    redaction_profile: default

@@ -1,0 +1,31 @@
+{
+  "name": "local-dev-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "dev:http": "tsx src/index.ts --http 3456",
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "tunnel": "bash scripts/tunnel.sh"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "express-rate-limit": "^7.5.1",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}

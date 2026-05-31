@@ -1,0 +1,10 @@
+node_modules/
+dist/
+logs/audit.jsonl
+.local-dev-mcp/
+.env
+config/projects.local.yaml
+*.log
+generated/
+.codex/
+.opencode/
