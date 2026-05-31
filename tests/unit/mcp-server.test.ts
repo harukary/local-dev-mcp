@@ -3,7 +3,6 @@ import {
   isAllowedRedirectUri,
   isRegisteredRedirectUri,
   isMcpDebugEnabled,
-  isValidTunnelSharedSecret,
   getPublicOrigin,
   resolveChatContextId,
   renderPassphrasePage,
@@ -118,13 +117,6 @@ describe("OAuth helpers", () => {
     expect(sanitizeRequestUrlForLog("/authorize?client_id=x&passphrase=secret&state=y")).toBe(
       "/authorize?client_id=x&passphrase=%5BREDACTED%5D&state=y"
     );
-  });
-
-  it("validates OpenAI tunnel shared secret with exact matching only", () => {
-    expect(isValidTunnelSharedSecret("secret", "secret")).toBe(true);
-    expect(isValidTunnelSharedSecret("secret", "different")).toBe(false);
-    expect(isValidTunnelSharedSecret("secret", "")).toBe(false);
-    expect(isValidTunnelSharedSecret(undefined, "secret")).toBe(false);
   });
 });
 

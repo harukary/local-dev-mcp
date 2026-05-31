@@ -490,29 +490,6 @@ function requireBearerAuth(
     });
 }
 
-export function isValidTunnelSharedSecret(provided: unknown, expected = process.env.LOCAL_DEV_MCP_TUNNEL_SHARED_SECRET): boolean {
-  if (typeof provided !== "string" || !expected) return false;
-  const trimmedExpected = expected.trim();
-  if (!trimmedExpected) return false;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(trimmedExpected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function requireMcpAuth(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-): void {
-  const tunnelSecret = req.headers["x-local-dev-mcp-tunnel-secret"];
-  if (isValidTunnelSharedSecret(Array.isArray(tunnelSecret) ? tunnelSecret[0] : tunnelSecret)) {
-    next();
-    return;
-  }
-
-  requireBearerAuth(req, res, next);
-}
-
 function customAuthorizationHandler(provider: typeof personalOAuthProvider) {
   return async (req: express.Request, res: express.Response) => {
     const q = req.method === "POST" ? req.body : req.query;
@@ -673,11 +650,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
     const method = req.method;
     const sanitizedUrl = sanitizeRequestUrlForLog(req.url);
     const url = sanitizedUrl.length > 80 ? sanitizedUrl.slice(0, 80) + "..." : sanitizedUrl;
-    const auth = req.headers.authorization
-      ? " (has auth)"
-      : req.headers["x-local-dev-mcp-tunnel-secret"]
-        ? " (has tunnel auth)"
-        : "";
+    const auth = req.headers.authorization ? " (has auth)" : "";
     const session = req.headers["mcp-session-id"] ? ` (session=${(req.headers["mcp-session-id"] as string).slice(0, 8)}...)` : "";
     debugMcpLog(`[HTTP] ${method} ${url}${auth}${session}`);
     next();
@@ -779,7 +752,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
     });
   });
 
-  app.post("/mcp", requireMcpAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
+  app.post("/mcp", requireBearerAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
     handleMcpRequest(req, res, ctx, transports).catch((err) => {
       console.error("MCP POST handler error:", err);
       if (!res.headersSent) {
@@ -788,7 +761,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
     });
   });
 
-  app.get("/mcp", requireMcpAuth, (req, res) => {
+  app.get("/mcp", requireBearerAuth, (req, res) => {
     handleMcpGetRequest(req, res, ctx, transports).catch((err) => {
       console.error("MCP GET handler error:", err);
       if (!res.headersSent) {
@@ -801,7 +774,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
     res.type("text/plain").send("local-dev-mcp MCP server running.");
   });
 
-  app.post("/", requireMcpAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
+  app.post("/", requireBearerAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
     handleMcpRequest(req, res, ctx, transports).catch((err) => {
       console.error("MCP POST (root) error:", err);
       if (!res.headersSent) res.status(500).json({ error: "internal_error", message: String(err) });
