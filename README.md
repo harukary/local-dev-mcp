@@ -1,8 +1,16 @@
 # local-dev-mcp
 
-Local MCP server for exposing a small, explicit set of development tools to MCP clients.
+Local MCP server for letting ChatGPT operate selected local development projects through MCP tools.
 
 The server is designed around a project registry. Only registered project roots are accessible, and each project can define denied paths such as `.env`, `.ssh`, `secrets`, and `credentials`.
+
+The intended workflow is:
+
+1. A local developer runs this server on their machine.
+2. ChatGPT connects to the server through MCP, usually through the HTTP transport and a tunnel.
+3. ChatGPT can inspect and operate only the projects listed in the local project registry.
+
+Codex, Claude Code, and similar coding agents are useful for setting up this repository on the user's machine. They are not the primary runtime client this project was built for.
 
 ## Features
 
@@ -15,9 +23,9 @@ The server is designed around a project registry. Only registered project roots 
 
 ## Setup
 
-### Agent Quick Setup
+### Agent Quick Setup For ChatGPT Local Access
 
-If you are Codex, Claude Code, or another coding agent and the user says "set this up", follow this checklist.
+If you are Codex, Claude Code, or another coding agent and the user says "set this up for ChatGPT", follow this checklist. The goal is to prepare this local MCP server so ChatGPT can connect to it and operate the user's selected local project roots.
 
 1. Confirm prerequisites:
 
@@ -48,7 +56,7 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
 
 4. Edit `config/projects.local.yaml` for the user's machine.
 
-   Replace `/absolute/path/to/your/project` with the absolute path of the project the user wants to expose. If the user did not name a project, ask for the project path before editing. Keep secret-bearing paths in `denied_paths`.
+   Replace `/absolute/path/to/your/project` with the absolute path of the project the user wants ChatGPT to operate. If the user did not name a project, ask for the project path before editing. Keep secret-bearing paths in `denied_paths`.
 
    A minimal single-project entry looks like this:
 
@@ -82,7 +90,7 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    pnpm test
    ```
 
-6. Start the server locally:
+6. Start the local HTTP server:
 
    ```bash
    pnpm dev:http -- config/projects.local.yaml
@@ -100,16 +108,37 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    local-dev-mcp MCP server running.
    ```
 
-7. Report back with:
+7. If the user wants ChatGPT to connect from outside the machine, configure a tunnel.
+
+   This repo includes `scripts/tunnel.sh` for Cloudflare Tunnel. It requires these `.env` values:
+
+   ```bash
+   LOCAL_DEV_MCP_PUBLIC_ORIGIN=https://your-tunnel.example.com
+   LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID=your-tunnel-id
+   LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE=/absolute/path/to/credentials.json
+   LOCAL_DEV_MCP_PROJECTS_CONFIG=/absolute/path/to/local-dev-mcp/config/projects.local.yaml
+   ```
+
+   If those values are not already available, stop and ask the user for the tunnel details or ask whether they want only local HTTP setup for now. Do not invent tunnel IDs, hostnames, or credential paths.
+
+8. Give the user the ChatGPT connection target:
+
+   - Local HTTP endpoint: `http://127.0.0.1:3456/mcp`
+   - Public tunnel endpoint: `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`
+
+   ChatGPT should use the HTTP MCP endpoint. Stdio is mainly useful for local MCP clients and debugging.
+
+9. Report back with:
 
    - The absolute path of `config/projects.local.yaml`
    - The selected project IDs
    - Whether `pnpm typecheck` and `pnpm test` passed
-   - The local server URL, usually `http://127.0.0.1:3456/mcp`
+   - Whether only local HTTP is ready or the public tunnel is also ready
+   - The ChatGPT MCP endpoint to use
 
 Do not commit or print the contents of `.env`, `.local-dev-mcp`, `logs`, `generated`, `dist`, `node_modules`, or `config/projects.local.yaml`.
 
-If the user also asks to connect this server to an MCP client, use one of these connection forms:
+For local debugging or non-ChatGPT MCP clients, these connection forms are available:
 
 - Stdio command:
 
