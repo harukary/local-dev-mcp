@@ -1,5 +1,7 @@
 # local-dev-mcp
 
+日本語版: [README_ja.md](README_ja.md)
+
 Local MCP server for letting ChatGPT operate selected local development projects through MCP tools.
 
 The server is designed around a project registry. Only registered project roots are accessible, and each project can define denied paths such as `.env`, `.ssh`, `secrets`, and `credentials`.
@@ -12,7 +14,7 @@ The intended workflow is:
 
 Codex, Claude Code, and similar coding agents are useful for setting up this repository on the user's machine. They are not the primary runtime client this project was built for.
 
-![local-dev-mcp system overview](docs/local-dev-mcp-system-overview.jpg)
+![local-dev-mcp system overview](docs/local-dev-mcp-system-overview-en.png)
 
 ## Intended Uses
 
