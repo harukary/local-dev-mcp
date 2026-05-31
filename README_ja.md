@@ -197,15 +197,85 @@ Codex、Claude Code、その他の coding agent が、ユーザーから「ChatG
 
    ChatGPT では、connector flow から到達できる HTTP MCP endpoint を使います。stdio は主に local MCP client や debug 用です。
 
-10. 報告内容:
+10. ChatGPT Developer Mode で app を追加する手順を user に伝える。
+
+   Codex、Claude Code、その他の local coding agent は、user の ChatGPT account 内で app 作成や承認を完了できません。step 9 の endpoint を user に渡し、[ChatGPT Developer mode](https://developers.openai.com/api/docs/guides/developer-mode) と [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt) に沿って user 自身が操作する必要がある、と明示してください。
+
+   user に伝える手順:
+
+   1. Web 版 ChatGPT を開く。
+   2. Developer Mode を有効化する。plan / workspace 権限により、Settings -> Apps -> Advanced settings -> Developer mode、または Workspace settings -> Apps / Permissions & Roles にあります。
+   3. Apps settings を開き、Create app を選ぶ。
+   4. ChatGPT から到達可能な MCP endpoint を入力する。例: `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`
+   5. OAuth authentication を選ぶ。
+   6. Scan Tools を実行する。
+   7. authorization page が開いたら、`.env` の `LOCAL_DEV_MCP_PASSPHRASE` を入力する。
+   8. tool scan が完了したら Create を押す。
+   9. 新しい chat を開き、tools / plus menu または Developer Mode tool picker から draft app を選ぶ。
+   10. まず read-only prompt で試す。例: 「Use local-dev-mcp to list projects.」
+
+   user への注意:
+
+   - ChatGPT から MCP endpoint に到達できる必要があります。`127.0.0.1` は local test 用です。ChatGPT から使う場合は trusted VPN / tunnel endpoint を使ってください。
+   - Developer Mode と MCP の write / modify support は、user の ChatGPT plan、workspace settings、admin permissions に依存します。
+   - ChatGPT は頻繁に confirmation を出すことがあります。write や command execution を承認する前に tool payload を確認してください。
+
+11. 報告内容:
 
    - `config/projects.local.yaml` の absolute path
    - selected project IDs
    - `pnpm typecheck` / `pnpm test` の結果
    - local HTTP のみ ready か、public tunnel も ready か
    - ChatGPT に設定すべき MCP endpoint
+   - ChatGPT Developer Mode での app 作成は user 側の残作業であること
 
 `.env`、`.local-dev-mcp`、`logs`、`generated`、`dist`、`node_modules`、`config/projects.local.yaml` の中身は commit したり表示したりしないでください。
+
+## ChatGPT Developer Mode で app を追加する
+
+この部分は user が ChatGPT 内で行う必要があります。local coding agent は server の準備と endpoint の提示まではできますが、user の ChatGPT workspace settings を操作したり、app を代理で承認したりすることはできません。
+
+前提:
+
+- account / workspace で Developer Mode が使える ChatGPT web access がある。
+- ChatGPT から到達可能な MCP endpoint がある。通常は `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`。
+- local `.env` に `LOCAL_DEV_MCP_PASSPHRASE` が設定されている。
+
+手順:
+
+1. Web 版 ChatGPT を開く。
+2. Developer Mode を有効化する。
+   - user settings 側: Settings -> Apps -> Advanced settings -> Developer mode
+   - workspace / admin 側: plan と権限により Workspace settings -> Apps、または Workspace settings -> Permissions & Roles
+3. Apps settings を開き、Create app を押す。
+4. MCP endpoint を入力する。例:
+
+   ```text
+   https://your-trusted-endpoint.example.com/mcp
+   ```
+
+5. OAuth authentication を選ぶ。
+6. Scan Tools を押す。
+7. authorization prompt で `LOCAL_DEV_MCP_PASSPHRASE` を入力する。
+8. tool scan が完了したら Create を押す。
+9. app が draft / developer app として表示されることを確認する。
+10. 新しい chat を開き、tools / plus menu または Developer Mode tool picker から app を選ぶ。
+11. まず read-only prompt で試す。
+
+   ```text
+   Use local-dev-mcp to list projects.
+   ```
+
+   ```text
+   Use local-dev-mcp to select my project, then show the current project.
+   ```
+
+write や command execution の prompt では、ChatGPT の confirmation dialog が出ることがあります。承認前に JSON payload を確認してください。ChatGPT が接続できない場合は、endpoint が ChatGPT から到達可能か、OAuth discovery が動いているか、passphrase が正しいか、server log に request が来ているかを確認してください。
+
+公式 reference:
+
+- [ChatGPT Developer mode](https://developers.openai.com/api/docs/guides/developer-mode)
+- [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)
 
 ## 手動セットアップ
 

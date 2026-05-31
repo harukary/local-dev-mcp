@@ -197,13 +197,37 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
 
    ChatGPT should use the HTTP MCP endpoint that is reachable from the ChatGPT connector flow. Stdio is mainly useful for local MCP clients and debugging.
 
-10. Report back with:
+10. Tell the user to add the app in ChatGPT Developer Mode.
+
+   Codex, Claude Code, and other local coding agents cannot complete this step inside the user's ChatGPT account. Give the user the endpoint from step 9 and ask them to follow [ChatGPT Developer mode](https://developers.openai.com/api/docs/guides/developer-mode) and [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt).
+
+   User-facing steps:
+
+   1. Open ChatGPT on the web.
+   2. Enable Developer Mode. Depending on the workspace plan and permissions, this is under Settings -> Apps -> Advanced settings -> Developer mode, or Workspace settings -> Apps / Permissions & Roles.
+   3. Open Apps settings and choose Create app.
+   4. Enter the ChatGPT-reachable MCP endpoint, for example `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`.
+   5. Choose OAuth authentication.
+   6. Click Scan Tools.
+   7. When the authorization page opens, enter the `LOCAL_DEV_MCP_PASSPHRASE` value from `.env`.
+   8. Wait for the tool scan to finish, then click Create.
+   9. Open a new chat and select the draft app from the tools / plus menu or Developer Mode tool picker.
+   10. Test with a read-only prompt first, such as "Use local-dev-mcp to list projects."
+
+   Notes for the user:
+
+   - ChatGPT must be able to reach the MCP endpoint. `127.0.0.1` is only for local testing; use a trusted ChatGPT-reachable VPN / tunnel endpoint for ChatGPT.
+   - Developer Mode and full MCP write/modify support depend on the user's ChatGPT plan, workspace settings, and admin permissions.
+   - ChatGPT may ask for confirmation frequently. Review the tool payload before approving write or command execution.
+
+11. Report back with:
 
    - The absolute path of `config/projects.local.yaml`
    - The selected project IDs
    - Whether `pnpm typecheck` and `pnpm test` passed
    - Whether only local HTTP is ready or the public tunnel is also ready
    - The ChatGPT MCP endpoint to use
+   - That the remaining ChatGPT Developer Mode app creation step must be completed by the user
 
 Do not commit or print the contents of `.env`, `.local-dev-mcp`, `logs`, `generated`, `dist`, `node_modules`, or `config/projects.local.yaml`.
 
@@ -222,6 +246,52 @@ For local debugging or non-ChatGPT MCP clients, these connection forms are avail
   ```
 
 Use the MCP client's native configuration mechanism to register either the stdio command or the HTTP endpoint. Do not hard-code another user's local paths.
+
+## Add The App In ChatGPT Developer Mode
+
+This part must be done by the user in ChatGPT. A local coding agent can prepare the server and provide the endpoint, but it cannot click through the user's ChatGPT workspace settings or approve the app on their behalf.
+
+Prerequisites:
+
+- ChatGPT web access with Developer Mode available for the account/workspace.
+- A ChatGPT-reachable MCP endpoint, usually `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`.
+- `LOCAL_DEV_MCP_PASSPHRASE` set in the local `.env`.
+
+Steps:
+
+1. Open ChatGPT on the web.
+2. Enable Developer Mode:
+   - User settings path: Settings -> Apps -> Advanced settings -> Developer mode.
+   - Workspace/admin path: Workspace settings -> Apps, or Workspace settings -> Permissions & Roles, depending on plan and permissions.
+3. Open Apps settings and click Create app.
+4. Enter the MCP endpoint, for example:
+
+   ```text
+   https://your-trusted-endpoint.example.com/mcp
+   ```
+
+5. Choose OAuth authentication.
+6. Click Scan Tools.
+7. Complete the authorization prompt by entering your `LOCAL_DEV_MCP_PASSPHRASE`.
+8. After the tool scan completes, click Create.
+9. Confirm the app appears as a draft / developer app.
+10. Start a new chat and select the app from the tools / plus menu or Developer Mode tool picker.
+11. Test with read-only prompts first:
+
+   ```text
+   Use local-dev-mcp to list projects.
+   ```
+
+   ```text
+   Use local-dev-mcp to select my project, then show the current project.
+   ```
+
+Write and command execution prompts can trigger ChatGPT confirmation dialogs. Review the JSON payload before approving. If ChatGPT cannot connect, verify the endpoint is reachable from ChatGPT, OAuth discovery works, the passphrase is correct, and the server logs show the request.
+
+Official references:
+
+- [ChatGPT Developer mode](https://developers.openai.com/api/docs/guides/developer-mode)
+- [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)
 
 ### Manual Setup
 
