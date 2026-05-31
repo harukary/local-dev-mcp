@@ -9,7 +9,7 @@ The server is designed around a project registry. Only registered project roots 
 The intended workflow is:
 
 1. A local developer runs this server on their machine.
-2. ChatGPT connects to the server through MCP, usually through the HTTP transport and a tunnel.
+2. ChatGPT connects to the server through MCP, usually through the HTTP transport and a controlled HTTPS tunnel.
 3. ChatGPT can inspect and operate only the projects listed in the local project registry.
 
 Codex, Claude Code, and similar coding agents are useful for setting up this repository on the user's machine. They are not the primary runtime client this project was built for.
@@ -31,11 +31,11 @@ This project exposes local development tools to ChatGPT. Treat it as local-machi
 Recommended deployment:
 
 - Run the MCP server on `127.0.0.1`.
-- Expose it only through a trusted private network path such as Tailscale, another secure VPN, or a tightly controlled tunnel.
+- Expose it only through a tightly controlled HTTPS tunnel when ChatGPT needs remote access.
 - Register only the project directories you actually want ChatGPT to access.
 - Keep `.env`, `.ssh`, credentials, secrets, build outputs, logs, and local-only config out of git and in `denied_paths` where appropriate.
 
-The server provides defense-in-depth, but it is not a hard OS sandbox. The current sandbox type is `host`, so shell commands run on the local machine with the permissions of the user account running this server. Keep the server bound to localhost and use VPN/tunnel access controls.
+The server provides defense-in-depth, but it is not a hard OS sandbox. The current sandbox type is `host`, so shell commands run on the local machine with the permissions of the user account running this server. Keep the server bound to localhost and use tunnel-side access controls.
 
 Safety controls included in this repo:
 
@@ -46,7 +46,7 @@ Safety controls included in this repo:
 - `forbidden` shell commands are blocked, including common secret reads and catastrophic system operations.
 - Shell output is redacted for common token, key, and credential patterns before being returned.
 - HTTP MCP access uses OAuth bearer tokens. The authorization endpoint is protected by a passphrase.
-- The server listens on `127.0.0.1`; external access should be provided by VPN or a controlled tunnel.
+- The server listens on `127.0.0.1`; external access should be provided by a controlled HTTPS tunnel.
 
 Important limitations:
 
@@ -177,9 +177,9 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    local-dev-mcp MCP server running.
    ```
 
-8. If the user wants ChatGPT to connect from outside the machine, configure a trusted VPN or controlled tunnel.
+8. If the user wants ChatGPT to connect from outside the machine, configure a controlled HTTPS tunnel.
 
-   Prefer Tailscale, another secure VPN, or a tightly scoped HTTPS tunnel over direct public exposure. This repo includes `scripts/tunnel.sh` for Cloudflare Tunnel. It requires these `.env` values:
+   Do not expose the HTTP endpoint directly to the public internet. This repo includes `scripts/tunnel.sh` for Cloudflare Tunnel. It requires these `.env` values:
 
    ```bash
    LOCAL_DEV_MCP_PUBLIC_ORIGIN=https://your-tunnel.example.com
@@ -188,12 +188,12 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    LOCAL_DEV_MCP_PROJECTS_CONFIG=/absolute/path/to/local-dev-mcp/config/projects.local.yaml
    ```
 
-   If those values are not already available, stop and ask the user for the VPN/tunnel details or ask whether they want only local HTTP setup for now. Do not invent tunnel IDs, hostnames, or credential paths.
+   If those values are not already available, stop and ask the user for the tunnel details or ask whether they want only local HTTP setup for now. Do not invent tunnel IDs, hostnames, or credential paths.
 
 9. Give the user the ChatGPT connection target:
 
    - Local HTTP endpoint for local testing: `http://127.0.0.1:3456/mcp`
-   - ChatGPT-reachable VPN/tunnel endpoint: `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`
+   - ChatGPT-reachable tunnel endpoint: `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`
 
    ChatGPT should use the HTTP MCP endpoint that is reachable from the ChatGPT connector flow. Stdio is mainly useful for local MCP clients and debugging.
 
@@ -216,7 +216,7 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
 
    Notes for the user:
 
-   - ChatGPT must be able to reach the MCP endpoint. `127.0.0.1` is only for local testing; use a trusted ChatGPT-reachable VPN / tunnel endpoint for ChatGPT.
+   - ChatGPT must be able to reach the MCP endpoint. `127.0.0.1` is only for local testing; use a controlled ChatGPT-reachable tunnel endpoint for ChatGPT.
    - Developer Mode and full MCP write/modify support depend on the user's ChatGPT plan, workspace settings, and admin permissions.
    - ChatGPT may ask for confirmation frequently. Review the tool payload before approving write or command execution.
 
@@ -342,7 +342,7 @@ Each project entry supports:
 
 ## Cloudflare Tunnel
 
-`scripts/tunnel.sh` can start the HTTP server and a Cloudflare Tunnel. Use this only when the tunnel is part of your trusted access path. If you use Tailscale or another VPN, adapt the endpoint and routing to that environment instead of exposing the server directly.
+`scripts/tunnel.sh` can start the HTTP server and a Cloudflare Tunnel. Use this only when the tunnel is part of your controlled access path. Do not expose the local MCP server directly.
 
 Configure these values in `.env` first:
 
