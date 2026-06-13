@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { handleNotesCreateDraft, handleNotesGuidelines, handleNotesValidate } from "../../src/mcp/tools/notes/index.js";
+import { handleNotesCreate, handleNotesGuidelines, handleNotesValidate } from "../../src/mcp/tools/notes/index.js";
 
 let tmpRoot = "";
 
@@ -58,23 +58,22 @@ describe("notes tools", () => {
     const body = payload(result);
 
     expect(body.title).toBe("Notes writing guidelines");
-    expect(body.text).toContain("Notes は、あとで再利用するための情報の圧縮。");
-    expect(body.text).toContain("共有していない文脈を前提にしない");
-    expect(body.text).toContain("対象・事実・差分・条件・制約・参照");
+    expect(body.text).toContain("Notes は、公開される個人メモ置き場。");
+    expect(body.text).toContain("チャット内で本文を確認してから作成する");
+    expect(body.text).toContain("公開してもよい短いメモ");
     expect(body.guidelines).toContain("一文に圧縮:");
   });
 
-  it("creates a draft note under src/content/notes", async () => {
+  it("creates a public note under src/content/notes", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-notes-"));
     const ctx = createContext(createProject(tmpRoot));
 
-    const result = await handleNotesCreateDraft(ctx, "chat-a", {
+    const result = await handleNotesCreate(ctx, "chat-a", {
       title: "Astro Notes CMS",
-      question: "How should notes be stored?",
       description: "A note about storing technical notes in Astro.",
       tags: ["astro", "notes"],
       source_urls: ["https://docs.astro.build/en/guides/content-collections/"],
-      body: "## 結論\n\nContent Collections を使う。",
+      body: "## メモ\n\nContent Collections を使う。",
     });
     const body = payload(result);
 
@@ -85,14 +84,15 @@ describe("notes tools", () => {
     const text = readFileSync(join(tmpRoot, body.path), "utf8");
     expect(text).toContain('title: "Astro Notes CMS"');
     expect(text).toContain('sourceUrls: ["https://docs.astro.build/en/guides/content-collections/"]');
-    expect(text).toContain("draft: true");
+    expect(text).not.toContain("draft:");
+    expect(text).not.toContain("confidence:");
   });
 
   it("generates a stable fallback slug for Japanese titles", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-notes-"));
     const ctx = createContext(createProject(tmpRoot));
 
-    const result = await handleNotesCreateDraft(ctx, "chat-a", { title: "技術ノートの作り方" });
+    const result = await handleNotesCreate(ctx, "chat-a", { title: "技術ノートの作り方", description: "説明", body: "## メモ\n\n本文" });
     const body = payload(result);
 
     expect(body.slug).toMatch(/^note-\d{4}-\d{2}-\d{2}-[0-9a-f]{8}$/);
@@ -102,7 +102,7 @@ describe("notes tools", () => {
   it("validates required note frontmatter", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-notes-"));
     const ctx = createContext(createProject(tmpRoot));
-    await handleNotesCreateDraft(ctx, "chat-a", { title: "Validation Note", slug: "validation-note" });
+    await handleNotesCreate(ctx, "chat-a", { title: "Validation Note", slug: "validation-note", description: "Validation note.", body: "## メモ\n\n本文" });
 
     const result = await handleNotesValidate(ctx, "chat-a", {});
     const body = payload(result);
@@ -112,7 +112,6 @@ describe("notes tools", () => {
     expect(body.notes[0]).toMatchObject({
       path: "src/content/notes/validation-note.md",
       title: "Validation Note",
-      confidence: "draft",
     });
   });
 
@@ -120,7 +119,7 @@ describe("notes tools", () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-notes-"));
     const ctx = createContext(createProject(tmpRoot, "alpha"));
 
-    const result = await handleNotesCreateDraft(ctx, "chat-a", { title: "Nope" });
+    const result = await handleNotesCreate(ctx, "chat-a", { title: "Nope", description: "Nope.", body: "## メモ\n\n本文" });
     const body = payload(result);
 
     expect(result.isError).toBe(true);

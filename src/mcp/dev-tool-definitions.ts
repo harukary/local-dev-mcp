@@ -11,27 +11,25 @@ export function buildDevToolDefinitions() {
 
     {
       name: "notes.guidelines",
-      description: "Return the writing guidelines for compact reusable Notes.",
+      description: "Return the writing guidelines for public compact Notes.",
       inputSchema: { type: "object", properties: {} },
       annotations: RO,
     },
     {
-      name: "notes.create_draft",
-      description: "Create a draft technical note in the selected Astro homepage project under src/content/notes.",
+      name: "notes.create",
+      description: "Create a public note in the selected Astro homepage project under src/content/notes.",
       inputSchema: {
         type: "object",
         properties: {
           title: { type: "string", description: "Note title." },
-          question: { type: "string", description: "Original question or topic that motivated the note." },
-          description: { type: "string", description: "Short description for note index and metadata." },
+          description: { type: "string", description: "Short description for note index and metadata. Must be reviewed in chat before creation." },
           tags: { type: "array", items: { type: "string" }, description: "Topic tags." },
           source_urls: { type: "array", items: { type: "string" }, description: "Reference URLs used for the note." },
-          body: { type: "string", description: "Markdown body. If omitted, a structured starter body is generated." },
+          body: { type: "string", description: "Markdown body reviewed in chat before creation." },
           slug: { type: "string", description: "Optional URL/file slug. Generated from title when omitted." },
-          confidence: { type: "string", enum: ["draft", "checked", "verified"], description: "Review confidence." },
           overwrite: { type: "boolean", description: "Overwrite an existing note file when true." }
         },
-        required: ["title"]
+        required: ["title", "description", "body"]
       },
       annotations: WA,
     },

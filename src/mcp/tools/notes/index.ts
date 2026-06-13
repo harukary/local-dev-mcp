@@ -5,53 +5,30 @@ import type { AppContext } from "../../server.js";
 import { getActiveProject, jsonError, jsonResult, resolveProjectPath, sha256 } from "../dev/common.js";
 
 const NOTES_DIR = "src/content/notes";
-const VALID_CONFIDENCE = new Set(["draft", "checked", "verified"]);
-const NOTES_GUIDELINES = `Notes は、あとで再利用するための情報の圧縮。
+const NOTES_GUIDELINES = `Notes は、公開される個人メモ置き場。記事ではなく、あとで見返せる短いメモとして書く。
 
-- 対象を最初に書く。
-- 目的語を曖昧にしない。
-- 前提は、誤読に関わるものだけ書く。
-- 共有していない文脈を前提にしない。
-- 導入、背景、感想、語りを削る。
-- 作業順ではなく、分かったことを書く。
-- 事実、条件、差分、制約を優先する。
+- 何のメモか最初に書く。
+- 公開されても問題ない情報だけ書く。
+- チャット内で本文を確認してから作成する。
+- 導入、背景、感想、語りは増やさない。
+- 作業ログや関連ファイル一覧は基本的に書かない。
+- ファイル名、URL、設定値、コマンドは必要なときだけ残す。
+- 調べた内容は、分かったことと未確認を分ける。
 - 判断を書くなら、条件付きで短く書く。
-- 一般論の注意喚起は書かない。
-- 固有名詞は役割が分かる範囲で使う。
-- 内部事情は、再利用に必要な場合だけ書く。
-- 比較では、説明より差分を書く。
-- 手順では、理由より再現条件を書く。
-- エラーでは、経緯より原因と回避策を書く。
-- 調査では、網羅感より確認済み範囲を書く。
-- 未確認事項は短く残す。
-- 出典は残す。
-- 文章でつなげず、情報の塊として並べる。
-- 見出しは情報種別で切る。例: 対象、結論、差分、条件、制約、手順、原因、回避策、未確認、参照。
-- 読後に、調べ直す時間が減る状態を目指す。
-
-判断基準:
-
-- これは後で検索・再利用できる情報か。
-- この文は前提なしに意味が取れるか。
-- これは事実か、判断か、感想か。
-- この判断の条件は書いてあるか。
-- この固有名詞は説明なしで通じる必要があるか。
-- この文は作業ログになっていないか。
-- この文を消しても情報量が減らないなら消す。
+- 出典がある場合は参照に残す。
+- 他人に説明しきる必要はないが、共有していない文脈に依存しすぎない。
 
 一文に圧縮:
 
-Notes は、対象・事実・差分・条件・制約・参照を、共有されていない文脈に依存せず、最短で再利用できる形に圧縮する。`;
+Notes は、公開してもよい短いメモを、あとで見返せる粒度で残す場所。`
 
-type CreateDraftArgs = {
+type CreateArgs = {
   title?: string;
-  question?: string;
   description?: string;
   tags?: string[];
   source_urls?: string[];
   body?: string;
   slug?: string;
-  confidence?: string;
   overwrite?: boolean;
 };
 
@@ -99,23 +76,14 @@ function validateUrls(urls: string[]): string[] {
   });
 }
 
-function defaultBody(title: string, question?: string, sourceUrls: string[] = []): string {
-  const q = question?.trim() || title;
-  const refs = sourceUrls.length > 0
-    ? sourceUrls.map((url) => `- ${url}`).join("\n")
-    : "- ここに参照 URL を追加する";
-  return `## 疑問\n\n${q}\n\n## 結論\n\nここに結論を書く。\n\n## メモ\n\n- 重要な前提\n- 判断理由\n- 後で見返すポイント\n\n## 参照\n\n${refs}\n`;
-}
-
 function frontmatter(args: {
   title: string;
   description: string;
   tags: string[];
   sourceUrls: string[];
-  confidence: string;
 }): string {
   const date = todayIsoDate();
-  return `---\ntitle: ${yamlString(args.title)}\ncreatedAt: ${date}\ndescription: ${yamlString(args.description)}\ntags: ${yamlStringArray(args.tags)}\nsourceUrls: ${yamlStringArray(args.sourceUrls)}\ndraft: true\nconfidence: ${yamlString(args.confidence)}\n---\n\n`;
+  return `---\ntitle: ${yamlString(args.title)}\ncreatedAt: ${date}\ndescription: ${yamlString(args.description)}\ntags: ${yamlStringArray(args.tags)}\nsourceUrls: ${yamlStringArray(args.sourceUrls)}\n---\n\n`;
 }
 
 function parseFrontmatter(text: string): Record<string, string> | null {
@@ -150,10 +118,10 @@ export async function handleNotesGuidelines() {
   });
 }
 
-export async function handleNotesCreateDraft(
+export async function handleNotesCreate(
   ctx: AppContext,
   chatContextId: string,
-  args: CreateDraftArgs,
+  args: CreateArgs,
 ) {
   const project = getActiveProject(ctx, chatContextId);
   if ("error" in project) return project.error;
@@ -161,7 +129,11 @@ export async function handleNotesCreateDraft(
   if (projectError) return projectError;
 
   const title = args?.title?.trim();
-  if (!title) return jsonError("MISSING_TITLE", "notes.create_draft requires a title.");
+  if (!title) return jsonError("MISSING_TITLE", "notes.create requires a title.");
+  const description = args.description?.trim();
+  if (!description) return jsonError("MISSING_DESCRIPTION", "notes.create requires a description reviewed in chat before writing.");
+  const bodyText = args.body?.trim();
+  if (!bodyText) return jsonError("MISSING_BODY", "notes.create requires a body reviewed in chat before writing.");
 
   const tags = normalizeStringArray(args.tags, "tags");
   if (!Array.isArray(tags)) return jsonError("INVALID_TAGS", tags.error);
@@ -170,11 +142,6 @@ export async function handleNotesCreateDraft(
   const validSourceUrls = validateUrls(sourceUrls);
   if (validSourceUrls.length !== sourceUrls.length) {
     return jsonError("INVALID_SOURCE_URLS", "source_urls must contain valid http(s) URLs.", { source_urls: sourceUrls });
-  }
-
-  const confidence = args.confidence ?? "draft";
-  if (!VALID_CONFIDENCE.has(confidence)) {
-    return jsonError("INVALID_CONFIDENCE", "confidence must be one of: draft, checked, verified.");
   }
 
   const slugBase = slugify(args.slug?.trim() || title);
@@ -191,9 +158,7 @@ export async function handleNotesCreateDraft(
     });
   }
 
-  const description = args.description?.trim() || `「${title}」についての技術ノート。`;
-  const body = args.body?.trim() || defaultBody(title, args.question, validSourceUrls);
-  const content = `${frontmatter({ title, description, tags, sourceUrls: validSourceUrls, confidence })}${body.trim()}\n`;
+  const content = `${frontmatter({ title, description, tags, sourceUrls: validSourceUrls })}${bodyText}\n`;
 
   await mkdir(dirname(resolved.absolutePath), { recursive: true });
   await writeFile(resolved.absolutePath, content, "utf8");
@@ -212,10 +177,8 @@ export async function handleNotesCreateDraft(
       description,
       tags,
       sourceUrls: validSourceUrls,
-      draft: true,
-      confidence,
     },
-    warnings: validSourceUrls.length === 0 ? ["source_urls is empty. Add references before marking the note checked or verified."] : [],
+    warnings: validSourceUrls.length === 0 ? ["source_urls is empty."] : [],
   });
 }
 
@@ -273,21 +236,13 @@ export async function handleNotesValidate(
       issues.push({ path: relative, code: "MISSING_FRONTMATTER", message: "Note must start with YAML frontmatter." });
       continue;
     }
-    for (const key of ["title", "createdAt", "description", "tags", "sourceUrls", "draft", "confidence"]) {
+    for (const key of ["title", "createdAt", "description", "tags", "sourceUrls"]) {
       if (!(key in fm)) issues.push({ path: relative, code: "MISSING_FIELD", field: key, message: `Missing frontmatter field: ${key}` });
-    }
-    if (fm.confidence && !VALID_CONFIDENCE.has(fm.confidence.replace(/^['\"]|['\"]$/g, ""))) {
-      issues.push({ path: relative, code: "INVALID_CONFIDENCE", message: "confidence must be draft, checked, or verified." });
-    }
-    if (fm.confidence && fm.confidence.replace(/^['\"]|['\"]$/g, "") !== "draft" && fm.sourceUrls === "[]") {
-      issues.push({ path: relative, code: "MISSING_SOURCES", message: "checked/verified notes should include sourceUrls." });
     }
     notes.push({
       path: relative,
       title: fm.title?.replace(/^['\"]|['\"]$/g, "") ?? null,
       createdAt: fm.createdAt ?? null,
-      draft: fm.draft ?? null,
-      confidence: fm.confidence?.replace(/^['\"]|['\"]$/g, "") ?? null,
     });
   }
 
