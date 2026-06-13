@@ -10,6 +10,12 @@ export function buildDevToolDefinitions() {
     { name: "workspace.patch", description: "Apply replacement or diff text patches inside the selected project.", inputSchema: { type: "object", properties: { patches: { type: "array", items: { type: "object", properties: { path: { type: "string" }, expected_sha256: { type: "string" }, replacement: { type: "string" }, unified_diff: { type: "string" } } } }, dry_run: { type: "boolean" } }, required: ["patches"] }, annotations: WA },
 
     {
+      name: "notes.guidelines",
+      description: "Return the writing guidelines for compact reusable Notes.",
+      inputSchema: { type: "object", properties: {} },
+      annotations: RO,
+    },
+    {
       name: "notes.create_draft",
       description: "Create a draft technical note in the selected Astro homepage project under src/content/notes.",
       inputSchema: {

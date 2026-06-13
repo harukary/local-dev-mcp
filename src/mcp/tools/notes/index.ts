@@ -6,6 +6,42 @@ import { getActiveProject, jsonError, jsonResult, resolveProjectPath, sha256 } f
 
 const NOTES_DIR = "src/content/notes";
 const VALID_CONFIDENCE = new Set(["draft", "checked", "verified"]);
+const NOTES_GUIDELINES = `Notes は、あとで再利用するための情報の圧縮。
+
+- 対象を最初に書く。
+- 目的語を曖昧にしない。
+- 前提は、誤読に関わるものだけ書く。
+- 共有していない文脈を前提にしない。
+- 導入、背景、感想、語りを削る。
+- 作業順ではなく、分かったことを書く。
+- 事実、条件、差分、制約を優先する。
+- 判断を書くなら、条件付きで短く書く。
+- 一般論の注意喚起は書かない。
+- 固有名詞は役割が分かる範囲で使う。
+- 内部事情は、再利用に必要な場合だけ書く。
+- 比較では、説明より差分を書く。
+- 手順では、理由より再現条件を書く。
+- エラーでは、経緯より原因と回避策を書く。
+- 調査では、網羅感より確認済み範囲を書く。
+- 未確認事項は短く残す。
+- 出典は残す。
+- 文章でつなげず、情報の塊として並べる。
+- 見出しは情報種別で切る。例: 対象、結論、差分、条件、制約、手順、原因、回避策、未確認、参照。
+- 読後に、調べ直す時間が減る状態を目指す。
+
+判断基準:
+
+- これは後で検索・再利用できる情報か。
+- この文は前提なしに意味が取れるか。
+- これは事実か、判断か、感想か。
+- この判断の条件は書いてあるか。
+- この固有名詞は説明なしで通じる必要があるか。
+- この文は作業ログになっていないか。
+- この文を消しても情報量が減らないなら消す。
+
+一文に圧縮:
+
+Notes は、対象・事実・差分・条件・制約・参照を、共有されていない文脈に依存せず、最短で再利用できる形に圧縮する。`;
 
 type CreateDraftArgs = {
   title?: string;
@@ -104,6 +140,14 @@ function ensureHomepageProject(projectId: string) {
     );
   }
   return null;
+}
+
+export async function handleNotesGuidelines() {
+  return jsonResult({
+    title: "Notes writing guidelines",
+    text: NOTES_GUIDELINES,
+    guidelines: NOTES_GUIDELINES.split("\n").filter((line) => line.trim().length > 0),
+  });
 }
 
 export async function handleNotesCreateDraft(

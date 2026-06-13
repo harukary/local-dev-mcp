@@ -42,7 +42,7 @@ import { handleWorkspaceList } from "./tools/dev/workspace-list.js";
 import { handleWorkspaceSearch } from "./tools/dev/workspace-search.js";
 import { handleWorkspacePatch } from "./tools/dev/workspace-patch.js";
 import { handleGitStatus, handleGitDiff } from "./tools/dev/git.js";
-import { handleNotesCreateDraft, handleNotesValidate } from "./tools/notes/index.js";
+import { handleNotesCreateDraft, handleNotesGuidelines, handleNotesValidate } from "./tools/notes/index.js";
 import { handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileBoot, handleMobileOpenUrl, handleMobileTap, handleMobileType } from "./tools/mobile.js";
 
@@ -160,6 +160,9 @@ function createMcpServer(ctx: AppContext): Server {
         case "workspace.patch":
           return await handleWorkspacePatch(ctx, chatContextId, args as { patches?: Array<{ path?: string; expected_sha256?: string; replacement?: string }>; dry_run?: boolean });
 
+
+        case "notes.guidelines":
+          return await handleNotesGuidelines();
 
         case "notes.create_draft":
           return await handleNotesCreateDraft(ctx, chatContextId, args as { title?: string; question?: string; description?: string; tags?: string[]; source_urls?: string[]; body?: string; slug?: string; confidence?: string; overwrite?: boolean });

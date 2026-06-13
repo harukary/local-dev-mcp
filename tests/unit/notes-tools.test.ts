@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { handleNotesCreateDraft, handleNotesValidate } from "../../src/mcp/tools/notes/index.js";
+import { handleNotesCreateDraft, handleNotesGuidelines, handleNotesValidate } from "../../src/mcp/tools/notes/index.js";
 
 let tmpRoot = "";
 
@@ -53,6 +53,17 @@ function payload(result: { content: Array<{ text?: string }> }) {
 }
 
 describe("notes tools", () => {
+  it("returns compact reusable notes writing guidelines", async () => {
+    const result = await handleNotesGuidelines();
+    const body = payload(result);
+
+    expect(body.title).toBe("Notes writing guidelines");
+    expect(body.text).toContain("Notes は、あとで再利用するための情報の圧縮。");
+    expect(body.text).toContain("共有していない文脈を前提にしない");
+    expect(body.text).toContain("対象・事実・差分・条件・制約・参照");
+    expect(body.guidelines).toContain("一文に圧縮:");
+  });
+
   it("creates a draft note under src/content/notes", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-notes-"));
     const ctx = createContext(createProject(tmpRoot));
