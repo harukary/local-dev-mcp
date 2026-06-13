@@ -3,7 +3,7 @@ import { buildDevToolDefinitions } from "./dev-tool-definitions.js";
 import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-05-26.14";
+export const TOOL_SCHEMA_VERSION = "2026-06-13.1";
 
 export function buildToolDefinitions() {
   return [
