@@ -4,6 +4,10 @@ import {
   isRegisteredRedirectUri,
   isMcpDebugEnabled,
   getPublicOrigin,
+  getAllowedHttpHosts,
+  hasExplicitHttpHostAllowlist,
+  isAllowedHttpHost,
+  normalizeHttpHost,
   resolveChatContextId,
   renderPassphrasePage,
   sanitizeRequestUrlForLog,
@@ -120,14 +124,79 @@ describe("OAuth helpers", () => {
   });
 });
 
+describe("HTTP host allowlist helpers", () => {
+  it("normalizes host headers and origins", () => {
+    expect(normalizeHttpHost("Public.Example.com:443")).toBe("public.example.com");
+    expect(normalizeHttpHost("https://Tunnel.Example.com/path")).toBe("tunnel.example.com");
+    expect(normalizeHttpHost("")).toBeNull();
+  });
+
+  it("allows localhost and configured public hosts", () => {
+    const previousPublicOrigin = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
+    const previousAllowedHosts = process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS;
+    process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = "https://public.example.com/base";
+    process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS = "extra.example.com, https://second.example.com/path";
+
+    expect(getAllowedHttpHosts()).toEqual(expect.arrayContaining([
+      "localhost",
+      "127.0.0.1",
+      "public.example.com",
+      "extra.example.com",
+      "second.example.com",
+    ]));
+    expect(isAllowedHttpHost("public.example.com")).toBe(true);
+    expect(isAllowedHttpHost("extra.example.com:443")).toBe(true);
+    expect(isAllowedHttpHost("evil.example.com")).toBe(false);
+
+    if (previousPublicOrigin === undefined) {
+      delete process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
+    } else {
+      process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = previousPublicOrigin;
+    }
+    if (previousAllowedHosts === undefined) {
+      delete process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS;
+    } else {
+      process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS = previousAllowedHosts;
+    }
+  });
+
+  it("does not enforce an external host allowlist until one is configured", () => {
+    const previousPublicOrigin = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
+    const previousAllowedHosts = process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS;
+    delete process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
+    delete process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS;
+
+    expect(hasExplicitHttpHostAllowlist()).toBe(false);
+    expect(isAllowedHttpHost("ephemeral.example.com")).toBe(true);
+
+    if (previousPublicOrigin === undefined) {
+      delete process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
+    } else {
+      process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = previousPublicOrigin;
+    }
+    if (previousAllowedHosts === undefined) {
+      delete process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS;
+    } else {
+      process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS = previousAllowedHosts;
+    }
+  });
+});
+
 describe("tool schema snapshot", () => {
   it("exposes runtime tool definitions with shell.run annotations", () => {
     const snapshot = buildToolSchemaSnapshot();
     const shellRun = snapshot.tools.find((tool) => tool.name === "shell.run");
     const imageRead = snapshot.tools.find((tool) => tool.name === "image.read");
+    const skillsList = snapshot.tools.find((tool) => tool.name === "skills.list");
+    const skillsRead = snapshot.tools.find((tool) => tool.name === "skills.read");
 
     expect(snapshot.schema_version).toMatch(/^\d{4}-\d{2}-\d{2}\./);
     expect(snapshot.tools.some((tool) => tool.name === "tool.schema")).toBe(true);
+    expect(skillsList?.annotations).toMatchObject({ readOnlyHint: true });
+    expect(skillsRead?.inputSchema).toMatchObject({
+      type: "object",
+      required: ["path"],
+    });
     expect(imageRead?._meta).toMatchObject({
       ui: { resourceUri: imageViewerResourceUri() },
       "openai/outputTemplate": imageViewerResourceUri(),
@@ -148,6 +217,9 @@ describe("image viewer resource", () => {
     expect(resource.uri).toBe("ui://local-dev-mcp/image-viewer.html");
     expect(resource.mimeType).toBe("text/html+skybridge");
     expect(resource.text).toContain('document.createElement("img")');
+    expect(resource.text).toContain("ui/notifications/tool-result");
+    expect(resource.text).toContain('item.type === "image"');
+    expect(resource.text).toContain('"data:" + mimeType + ";base64," + image.data');
     expect(resource._meta).toMatchObject({
       ui: {
         prefersBorder: true,

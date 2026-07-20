@@ -39,6 +39,40 @@ export function buildDevToolDefinitions() {
       inputSchema: { type: "object", properties: { path: { type: "string" } } },
       annotations: RO,
     },
+    {
+      name: "private_notes.guidelines",
+      description: "Return operating instructions for the separate private-notes HTML site. Use this before creating or editing private notes.",
+      inputSchema: { type: "object", properties: {} },
+      annotations: RO,
+    },
+    {
+      name: "private_notes.create",
+      description: "Create a private HTML note under public/notes and regenerate public/index.html. This auto-resolves the private-notes project from registry project_id=private-notes or LOCAL_DEV_MCP_PRIVATE_NOTES_ROOT, independent of the currently selected project.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Private note title." },
+          body_html: { type: "string", description: "HTML fragment for the note body, reviewed in chat before creation." },
+          slug: { type: "string", description: "Optional URL/file slug. Generated from title when omitted." },
+          date: { type: "string", description: "Optional YYYY-MM-DD date. Defaults to today." },
+          project: { type: "string", description: "Optional project slug. When set, the note is written under public/notes/<project>/." },
+          type: { type: "string", description: "Optional database type metadata. Defaults to note." },
+          status: { type: "string", description: "Optional database status metadata. Defaults to draft." },
+          tags: { type: "array", items: { type: "string" }, description: "Optional database tags metadata." },
+          parent: { type: "string", description: "Optional parent note id, meaning filename without .html." },
+          pinned: { type: "boolean", description: "Pin the note to the top of generated views when true." },
+          overwrite: { type: "boolean", description: "Overwrite the generated note path when true." }
+        },
+        required: ["title", "body_html"]
+      },
+      annotations: WA,
+    },
+    {
+      name: "private_notes.validate",
+      description: "Validate the private-notes project and regenerate public/index.html from public/notes/*.html, independent of the currently selected project.",
+      inputSchema: { type: "object", properties: { path: { type: "string" } } },
+      annotations: RO,
+    },
     { name: "git.status", description: "Return structured git status for the selected project.", inputSchema: { type: "object", properties: { include_untracked: { type: "boolean" } } }, annotations: RO },
     { name: "git.diff", description: "Return git diff for the selected project.", inputSchema: { type: "object", properties: { path: { type: "string" }, staged: { type: "boolean" }, stat: { type: "boolean" }, max_bytes: { type: "integer" } } }, annotations: RO },
   ];

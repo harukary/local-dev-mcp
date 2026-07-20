@@ -1,12 +1,17 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { resolve, relative, isAbsolute } from "node:path";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve, relative, isAbsolute } from "node:path";
 import type { AppContext } from "../server.js";
 import type { ProjectConfig } from "../../types.js";
 import { imageViewerMeta } from "../resources/image-viewer.js";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_PREVIEW_MAX_EDGE = 900;
+const PREVIEW_FULL_INLINE_MAX_BYTES = 512 * 1024;
 
 const MIME_BY_EXTENSION: Record<string, string> = {
   ".png": "image/png",
@@ -28,7 +33,7 @@ const imageCache = new Map<string, CachedImage>();
 export async function handleImageRead(
   ctx: AppContext,
   chatContextId: string,
-  args: { path?: string }
+  args: { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }
 ) {
   if (!args?.path) {
     return {
@@ -92,6 +97,9 @@ export async function handleImageRead(
 
   const dimensions = readImageDimensions(bytes, mimeType);
   const cached = cacheImage(bytes, mimeType, resolved.relativePath);
+  const mode = normalizeImageReadMode(args.mode);
+  const maxPreviewEdge = normalizeMaxPreviewEdge(args.max_preview_edge);
+  const inlineImage = await prepareInlineImage(bytes, mimeType, dimensions, mode, maxPreviewEdge);
   const displayUrl = `${getPublicOriginForTool()}/image-cache/${cached.id}`;
   const metadata = {
     project_id: project.projectId,
@@ -101,6 +109,11 @@ export async function handleImageRead(
     size_bytes: fileStat.size,
     width: dimensions?.width,
     height: dimensions?.height,
+    returned_image_mode: inlineImage.mode,
+    returned_image_mime_type: inlineImage.mimeType,
+    returned_image_size_bytes: inlineImage.bytes?.length,
+    returned_image_width: inlineImage.dimensions?.width,
+    returned_image_height: inlineImage.dimensions?.height,
     display_url: displayUrl,
     display_expires_at: new Date(cached.expiresAt).toISOString(),
     markdown: `![${resolved.relativePath}](${displayUrl})`,
@@ -127,11 +140,13 @@ export async function handleImageRead(
         type: "text",
         text: JSON.stringify(metadata, null, 2),
       },
-      {
-        type: "image",
-        data: bytes.toString("base64"),
-        mimeType,
-      },
+      ...(inlineImage.bytes
+        ? [{
+            type: "image" as const,
+            data: inlineImage.bytes.toString("base64"),
+            mimeType: inlineImage.mimeType,
+          }]
+        : []),
     ],
   };
 }
@@ -165,6 +180,88 @@ function getPublicOriginForTool(): string {
     }
   }
   return "http://127.0.0.1:3456";
+}
+
+function normalizeImageReadMode(mode: string | undefined): "preview" | "full" | "metadata" {
+  if (mode === "full" || mode === "metadata") return mode;
+  return "preview";
+}
+
+function normalizeMaxPreviewEdge(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_PREVIEW_MAX_EDGE;
+  return Math.min(2000, Math.max(240, Math.round(value)));
+}
+
+async function prepareInlineImage(
+  bytes: Buffer,
+  mimeType: string,
+  dimensions: { width: number; height: number } | undefined,
+  mode: "preview" | "full" | "metadata",
+  maxPreviewEdge: number
+): Promise<{
+  bytes?: Buffer;
+  mimeType?: string;
+  mode: "full" | "preview" | "preview_unavailable" | "metadata";
+  dimensions?: { width: number; height: number };
+}> {
+  if (mode === "metadata") {
+    return { mode: "metadata" };
+  }
+  if (mode === "full") {
+    return { bytes, mimeType, mode: "full", dimensions };
+  }
+
+  const longestEdge = dimensions ? Math.max(dimensions.width, dimensions.height) : undefined;
+  if (bytes.length <= PREVIEW_FULL_INLINE_MAX_BYTES && (!longestEdge || longestEdge <= maxPreviewEdge)) {
+    return { bytes, mimeType, mode: "full", dimensions };
+  }
+
+  const preview = await createPreviewImageWithSips(bytes, mimeType, maxPreviewEdge);
+  if (!preview) {
+    return { mode: "preview_unavailable" };
+  }
+  return {
+    bytes: preview.bytes,
+    mimeType: preview.mimeType,
+    mode: "preview",
+    dimensions: readImageDimensions(preview.bytes, preview.mimeType),
+  };
+}
+
+async function createPreviewImageWithSips(
+  bytes: Buffer,
+  mimeType: string,
+  maxEdge: number
+): Promise<{ bytes: Buffer; mimeType: string } | undefined> {
+  if (!["image/png", "image/jpeg", "image/webp"].includes(mimeType)) return undefined;
+
+  const dir = await mkdtemp(join(tmpdir(), "local-dev-mcp-image-preview-"));
+  const input = join(dir, `input.${extensionForMime(mimeType)}`);
+  const output = join(dir, "preview.jpg");
+  try {
+    await writeFile(input, bytes);
+    const ok = await runSips(["-s", "format", "jpeg", "-s", "formatOptions", "70", "-Z", String(maxEdge), input, "--out", output]);
+    if (!ok) return undefined;
+    return { bytes: await readFile(output), mimeType: "image/jpeg" };
+  } catch {
+    return undefined;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+function extensionForMime(mimeType: string): string {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/webp") return "webp";
+  return "png";
+}
+
+function runSips(args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn("sips", args, { stdio: "ignore" });
+    child.once("error", () => resolve(false));
+    child.once("close", (code) => resolve(code === 0));
+  });
 }
 
 function resolveImagePath(project: ProjectConfig, inputPath: string):

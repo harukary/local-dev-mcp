@@ -2,8 +2,9 @@ import { imageViewerMeta } from "./resources/image-viewer.js";
 import { buildDevToolDefinitions } from "./dev-tool-definitions.js";
 import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
+import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-06-13.3";
+export const TOOL_SCHEMA_VERSION = "2026-07-20.2";
 
 export function buildToolDefinitions() {
   return [
@@ -41,6 +42,44 @@ export function buildToolDefinitions() {
       inputSchema: { type: "object", properties: {} },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
+    {
+      name: "skills.list",
+      description:
+        "List readable Codex/Haru skill files for ChatGPT. Optional path selects the project cwd whose .agents/skills should be included; common and system skills are always included.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Optional project cwd/path inside a registered project. Defaults to the selected project cwd, or the server cwd.",
+          },
+        },
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    {
+      name: "skills.read",
+      description:
+        "Read a SKILL.md file returned by skills.list so ChatGPT can apply the skill contract before acting.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Exact absolute SKILL.md path returned by skills.list.",
+          },
+          max_bytes: {
+            type: "integer",
+            description: "Maximum bytes to read. Defaults to 524288.",
+            minimum: 1,
+            maximum: 1048576,
+          },
+        },
+        required: ["path"],
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    ...buildTodoToolDefinitions(),
     ...buildDevToolDefinitions(),
     ...buildBrowserToolDefinitions(),
     ...buildMobileToolDefinitions(),
@@ -152,6 +191,17 @@ export function buildToolDefinitions() {
             type: "string",
             description: "Project-relative image path, or an absolute path inside the selected project root.",
           },
+          mode: {
+            type: "string",
+            enum: ["preview", "full", "metadata"],
+            description: "Inline image return mode. preview is the default and downscales large images to avoid oversized tool results.",
+          },
+          max_preview_edge: {
+            type: "number",
+            minimum: 240,
+            maximum: 2000,
+            description: "Maximum width or height for preview mode. Defaults to 900.",
+          },
         },
         required: ["path"],
       },
@@ -165,6 +215,11 @@ export function buildToolDefinitions() {
           size_bytes: { type: "number" },
           width: { type: "number" },
           height: { type: "number" },
+          returned_image_mode: { type: "string" },
+          returned_image_mime_type: { type: "string" },
+          returned_image_size_bytes: { type: "number" },
+          returned_image_width: { type: "number" },
+          returned_image_height: { type: "number" },
           display_url: { type: "string" },
           display_expires_at: { type: "string" },
           markdown: { type: "string" },

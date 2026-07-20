@@ -34,6 +34,7 @@ import { listPendingRequests } from "../shell/approval.js";
 import { getActiveJobs } from "../shell/job-manager.js";
 import { personalOAuthProvider, tokenStore, AUTH_PASSPHRASE } from "./oauth-provider.js";
 import { handleProjectReload } from "./tools/project-reload.js";
+import { handleSkillsList, handleSkillsRead } from "./tools/skills.js";
 import { buildToolDefinitions, buildToolSchemaSnapshot } from "./tool-definitions.js";
 import { imageViewerMeta, imageViewerResource, imageViewerResourceUri } from "./resources/image-viewer.js";
 import { handleProjectInspect } from "./tools/dev/project-inspect.js";
@@ -43,8 +44,10 @@ import { handleWorkspaceSearch } from "./tools/dev/workspace-search.js";
 import { handleWorkspacePatch } from "./tools/dev/workspace-patch.js";
 import { handleGitStatus, handleGitDiff } from "./tools/dev/git.js";
 import { handleNotesCreate, handleNotesGuidelines, handleNotesValidate } from "./tools/notes/index.js";
+import { handlePrivateNotesCreate, handlePrivateNotesGuidelines, handlePrivateNotesValidate } from "./tools/private-notes/index.js";
 import { handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileBoot, handleMobileOpenUrl, handleMobileTap, handleMobileType } from "./tools/mobile.js";
+import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete, handleTodoDiscord } from "./tools/todo.js";
 
 export interface AppContext {
   configPath: string;
@@ -76,6 +79,8 @@ export function resolveChatContextId(meta: CallToolMeta | undefined): string {
 export function isMcpDebugEnabled(): boolean {
   return process.env.LOCAL_DEV_MCP_DEBUG === "1";
 }
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 function isLocalhostRequest(req: express.Request): boolean {
   const host = req.hostname || req.ip;
@@ -145,6 +150,12 @@ function createMcpServer(ctx: AppContext): Server {
         case "project.reload":
           return await handleProjectReload(ctx, reloadProjectRegistry);
 
+        case "skills.list":
+          return await handleSkillsList(ctx, chatContextId, args as { path?: string });
+
+        case "skills.read":
+          return await handleSkillsRead(ctx, args as { path?: string; max_bytes?: number });
+
         case "project.inspect":
           return await handleProjectInspect(ctx, chatContextId);
 
@@ -169,6 +180,15 @@ function createMcpServer(ctx: AppContext): Server {
 
         case "notes.validate":
           return await handleNotesValidate(ctx, chatContextId, args as { path?: string });
+
+        case "private_notes.guidelines":
+          return await handlePrivateNotesGuidelines();
+
+        case "private_notes.create":
+          return await handlePrivateNotesCreate(ctx, chatContextId, args as { title?: string; body_html?: string; slug?: string; date?: string; overwrite?: boolean });
+
+        case "private_notes.validate":
+          return await handlePrivateNotesValidate(ctx, chatContextId, args as { path?: string });
 
         case "git.status":
           return await handleGitStatus(ctx, chatContextId, args as { include_untracked?: boolean });
@@ -248,6 +268,36 @@ function createMcpServer(ctx: AppContext): Server {
 
         case "mobile.type":
           return await handleMobileType(ctx, chatContextId, args as { device?: string; text?: string; observe?: "none" | "after" });
+
+        case "todo.projects":
+          return await handleTodoProjects(ctx, args as { include_archived?: boolean });
+
+        case "todo.list":
+          return await handleTodoList(ctx, args as { project?: string; completed?: boolean });
+
+        case "todo.get":
+          return await handleTodoGet(ctx, args as { todo_id?: string });
+
+        case "todo.create":
+          return await handleTodoCreate(ctx, chatContextId, args as { project?: string; title?: string; note?: string; parent_id?: string });
+
+        case "todo.update":
+          return await handleTodoUpdate(ctx, chatContextId, args as { todo_id?: string; title?: string; note?: string });
+
+        case "todo.decompose":
+          return await handleTodoDecompose(ctx, chatContextId, args as { todo_id?: string; children?: Array<{ title?: string; note?: string }> });
+
+        case "todo.set_completed":
+          return await handleTodoSetCompleted(ctx, chatContextId, args as { todo_id?: string; completed?: boolean });
+
+        case "todo.move":
+          return await handleTodoMove(ctx, chatContextId, args as { todo_id?: string; project?: string; parent_id?: string; index?: number });
+
+        case "todo.delete":
+          return await handleTodoDelete(ctx, chatContextId, args as { todo_id?: string });
+
+        case "todo.discord":
+          return await handleTodoDiscord(ctx, chatContextId, args as { todo_id?: string });
 
         case "shell.run":
           return await handleShellRun(
@@ -435,6 +485,70 @@ export function getPublicOrigin(req: express.Request): string {
   const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "127.0.0.1:3456";
   return `${proto}://${host}`;
+}
+
+export function normalizeHttpHost(value: string | undefined): string | null {
+  if (!value) return null;
+  const first = value.split(",")[0]?.trim();
+  if (!first) return null;
+
+  try {
+    const withScheme = first.includes("://") ? first : `http://${first}`;
+    return new URL(withScheme).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+export function getAllowedHttpHosts(): string[] {
+  const hosts = new Set<string>(LOCAL_HOSTS);
+  const publicOrigin = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN?.trim();
+  if (publicOrigin) {
+    const host = normalizeHttpHost(publicOrigin);
+    if (host) hosts.add(host);
+  }
+
+  const configuredHosts = process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS?.split(",") ?? [];
+  for (const configured of configuredHosts) {
+    const host = normalizeHttpHost(configured.trim());
+    if (host) hosts.add(host);
+  }
+
+  return Array.from(hosts).sort();
+}
+
+export function hasExplicitHttpHostAllowlist(): boolean {
+  return Boolean(
+    process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN?.trim() ||
+    process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS?.trim()
+  );
+}
+
+export function isAllowedHttpHost(hostHeader: string | string[] | undefined): boolean {
+  const hostValue = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
+  const host = normalizeHttpHost(hostValue);
+  if (!host) return false;
+  if (!hasExplicitHttpHostAllowlist()) return true;
+  return getAllowedHttpHosts().includes(host);
+}
+
+function requireAllowedHost(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void {
+  const forwardedHost = req.headers["x-forwarded-host"];
+  const host = forwardedHost || req.headers.host;
+  if (isAllowedHttpHost(host)) {
+    next();
+    return;
+  }
+
+  debugMcpLog(`[HTTP] forbidden_host host=${normalizeHttpHost(Array.isArray(host) ? host[0] : host) || "unknown"} allowed=${getAllowedHttpHosts().join(",")}`);
+  res.status(403).json({
+    error: "forbidden_host",
+    message: "Request host is not allowed by LOCAL_DEV_MCP_PUBLIC_ORIGIN or LOCAL_DEV_MCP_ALLOWED_HOSTS.",
+  });
 }
 
 export function isAllowedRedirectUri(redirectUri: string): boolean {
@@ -657,6 +771,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
 
   const app = express();
   app.set("trust proxy", 1);
+  app.use(requireAllowedHost);
   app.use((req, _res, next) => {
     const method = req.method;
     const sanitizedUrl = sanitizeRequestUrlForLog(req.url);

@@ -11,7 +11,13 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 
 TUNNEL_ID="${LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID:-}"
-TUNNEL_CREDENTIALS_FILE="${LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE:-$HOME/.cloudflared/tunnel-credentials.json}"
+if [ -n "${LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE:-}" ]; then
+  TUNNEL_CREDENTIALS_FILE="$LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE"
+elif [ -f "$HOME/.cloudflared/local-dev-mcp.json" ]; then
+  TUNNEL_CREDENTIALS_FILE="$HOME/.cloudflared/local-dev-mcp.json"
+else
+  TUNNEL_CREDENTIALS_FILE="$HOME/.cloudflared/tunnel-credentials.json"
+fi
 PROJECTS_CONFIG="${LOCAL_DEV_MCP_PROJECTS_CONFIG:-}"
 
 if [ -z "$PROJECTS_CONFIG" ]; then
@@ -22,12 +28,19 @@ if [ -z "$PROJECTS_CONFIG" ]; then
   fi
 fi
 
+if [ -z "$TUNNEL_ID" ] && [ -f "$TUNNEL_CREDENTIALS_FILE" ]; then
+  TUNNEL_ID="$(node -e 'const fs=require("fs"); const p=process.argv[1]; const j=JSON.parse(fs.readFileSync(p,"utf8")); process.stdout.write(j.TunnelID || "")' "$TUNNEL_CREDENTIALS_FILE")"
+fi
+
 if [ -z "$TUNNEL_ID" ]; then
-  echo "[tunnel] LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID is required." >&2
+  echo "[tunnel] LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID is required, or credentials file must contain TunnelID." >&2
   exit 1
 fi
 
-export LOCAL_DEV_MCP_PUBLIC_ORIGIN="${LOCAL_DEV_MCP_PUBLIC_ORIGIN:-http://127.0.0.1:$PORT}"
+if [ ! -f "$TUNNEL_CREDENTIALS_FILE" ]; then
+  echo "[tunnel] Cloudflare tunnel credentials file not found: $TUNNEL_CREDENTIALS_FILE" >&2
+  exit 1
+fi
 
 echo "[tunnel] Starting MCP server on port $PORT..." >&2
 cd "$PROJECT_DIR"

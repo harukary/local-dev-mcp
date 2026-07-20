@@ -126,25 +126,77 @@ function imageViewerHtml(): string {
     <dl id="meta"></dl>
   </main>
   <script>
-    function readOutput() {
-      return window.openai && window.openai.toolOutput ? window.openai.toolOutput : {};
+    let latestToolResult = null;
+
+    function readToolResult() {
+      if (latestToolResult) return latestToolResult;
+
+      const bridge = window.openai || {};
+      const metadata = bridge.toolResponseMetadata || {};
+      const fullResult = metadata.mcp_tool_result || metadata.call_tool_result;
+      if (fullResult && typeof fullResult === "object") return fullResult;
+
+      return {
+        structuredContent: bridge.toolOutput || {},
+        content: [],
+        _meta: metadata,
+      };
     }
+
+    function readOutput(toolResult) {
+      return toolResult.structuredContent || (window.openai && window.openai.toolOutput) || {};
+    }
+
+    function findImageSource(toolResult, output) {
+      const content = Array.isArray(toolResult.content) ? toolResult.content : [];
+      const image = content.find((item) => {
+        return item && item.type === "image" && item.data && (item.mimeType || item.mime_type);
+      });
+      if (image) {
+        const mimeType = image.mimeType || image.mime_type;
+        return {
+          src: "data:" + mimeType + ";base64," + image.data,
+          source: "base64",
+        };
+      }
+
+      const meta = toolResult._meta || {};
+      if (meta.image_data_uri) {
+        return { src: meta.image_data_uri, source: "metadata" };
+      }
+
+      if (output.display_url) {
+        return { src: output.display_url, source: "url" };
+      }
+
+      return null;
+    }
+
     function render() {
-      const output = readOutput();
+      const toolResult = readToolResult();
+      const output = readOutput(toolResult);
       const frame = document.getElementById("frame");
       const meta = document.getElementById("meta");
-      const url = output.display_url;
+      const imageSource = findImageSource(toolResult, output);
       frame.innerHTML = "";
-      if (url) {
+      if (imageSource) {
         const img = document.createElement("img");
-        img.src = url;
+        img.src = imageSource.src;
         img.alt = output.path || "image";
         img.onload = notifyHeight;
+        img.onerror = function () {
+          frame.innerHTML = "";
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "Image could not be displayed.";
+          frame.appendChild(empty);
+          notifyHeight();
+        };
         frame.appendChild(img);
       } else {
         const empty = document.createElement("div");
         empty.className = "empty";
-        empty.textContent = "No image URL was returned.";
+        empty.textContent = "No image data was returned.";
         frame.appendChild(empty);
       }
       const rows = [
@@ -152,6 +204,7 @@ function imageViewerHtml(): string {
         ["Type", output.mime_type],
         ["Size", output.size_bytes ? output.size_bytes + " bytes" : ""],
         ["Dimensions", output.width && output.height ? output.width + " x " + output.height : ""],
+        ["Source", imageSource ? imageSource.source : ""],
         ["Expires", output.display_expires_at],
       ].filter(([, value]) => value);
       meta.innerHTML = "";
@@ -170,6 +223,14 @@ function imageViewerHtml(): string {
         window.openai.notifyIntrinsicHeight(height);
       }
     }
+    window.addEventListener("message", function (event) {
+      if (event.source !== window.parent) return;
+      const message = event.data;
+      if (!message || message.jsonrpc !== "2.0") return;
+      if (message.method !== "ui/notifications/tool-result") return;
+      latestToolResult = message.params || null;
+      render();
+    }, { passive: true });
     window.addEventListener("openai:set_globals", render);
     render();
   </script>

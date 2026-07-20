@@ -42,6 +42,7 @@ Safety controls included in this repo:
 - Project registry allowlist: ChatGPT must select from configured projects.
 - Workspace file tools reject paths outside the selected project root.
 - `denied_paths` blocks configured secret paths for workspace tools and forbidden shell classifications.
+- HTTP Host / `X-Forwarded-Host` allowlist can restrict requests to localhost and configured tunnel hosts when `LOCAL_DEV_MCP_PUBLIC_ORIGIN` or `LOCAL_DEV_MCP_ALLOWED_HOSTS` is set.
 - Shell risk classification separates read-only, local compute, workspace write, network/dependency, destructive/process-control, and forbidden operations.
 - `forbidden` shell commands are blocked, including common secret reads and catastrophic system operations.
 - Shell output is redacted for common token, key, and credential patterns before being returned.
@@ -71,6 +72,7 @@ This means routine reads can stay smooth, while writes and network/dependency op
 
 - Project selection from a YAML registry
 - Workspace read, list, search, and patch tools
+- Skills discovery and read tools for ChatGPT (`skills.list`, then `skills.read`)
 - Shell command execution with risk classification and approval flow
 - Git diff/status helpers
 - Browser, mobile simulator, and image read helpers
@@ -155,6 +157,7 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
 6. Validate the setup:
 
    ```bash
+   pnpm run doctor -- config/projects.local.yaml
    pnpm typecheck
    pnpm test
    ```
@@ -183,6 +186,7 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
 
    ```bash
    LOCAL_DEV_MCP_PUBLIC_ORIGIN=https://your-tunnel.example.com
+   LOCAL_DEV_MCP_ALLOWED_HOSTS=your-tunnel.example.com
    LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID=your-tunnel-id
    LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE=/absolute/path/to/credentials.json
    LOCAL_DEV_MCP_PROJECTS_CONFIG=/absolute/path/to/local-dev-mcp/config/projects.local.yaml
@@ -230,6 +234,15 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    - That the remaining ChatGPT Developer Mode app creation step must be completed by the user
 
 Do not commit or print the contents of `.env`, `.local-dev-mcp`, `logs`, `generated`, `dist`, `node_modules`, or `config/projects.local.yaml`.
+
+## Skills access for ChatGPT
+
+ChatGPT does not automatically load Codex/Haru `SKILL.md` files. Use:
+
+1. `skills.list` with an optional registered project `path`.
+2. `skills.read` with the exact `SKILL.md` path returned by `skills.list`.
+
+`skills.list` includes project-local `<path>/.agents/skills`, common `${HARU_CONTEXT_HOME:-~/.haru}/skills`, and system `${CODEX_HOME:-~/.haru/.codex}/skills/.system`.
 
 For local debugging or non-ChatGPT MCP clients, these connection forms are available:
 
@@ -309,6 +322,12 @@ node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
 
 Edit `config/projects.local.yaml` so every `host_root` and `sandbox_root` points to a local project you want to expose.
 
+Run the setup doctor:
+
+```bash
+pnpm run doctor -- config/projects.local.yaml
+```
+
 Run the HTTP server:
 
 ```bash
@@ -348,10 +367,13 @@ Configure these values in `.env` first:
 
 ```bash
 LOCAL_DEV_MCP_PUBLIC_ORIGIN=https://your-tunnel.example.com
+LOCAL_DEV_MCP_ALLOWED_HOSTS=your-tunnel.example.com
 LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID=your-tunnel-id
 LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE=/absolute/path/to/credentials.json
 LOCAL_DEV_MCP_PROJECTS_CONFIG=/absolute/path/to/config/projects.local.yaml
 ```
+
+`LOCAL_DEV_MCP_PUBLIC_ORIGIN` is automatically added to the HTTP host allowlist. Use `LOCAL_DEV_MCP_ALLOWED_HOSTS` only for additional trusted proxy hostnames.
 
 Then run:
 
@@ -368,6 +390,7 @@ pnpm tunnel
 ## Development
 
 ```bash
+pnpm run doctor -- config/projects.local.yaml
 pnpm typecheck
 pnpm test
 ```

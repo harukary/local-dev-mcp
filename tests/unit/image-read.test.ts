@@ -69,6 +69,11 @@ describe("handleImageRead", () => {
       mime_type: "image/png",
       width: 2,
       height: 3,
+      returned_image_mode: "full",
+      returned_image_mime_type: "image/png",
+      returned_image_size_bytes: createPng(2, 3).length,
+      returned_image_width: 2,
+      returned_image_height: 3,
     });
     expect(metadata.display_url).toMatch(/^https:\/\/public\.example\.test\/image-cache\//);
     expect(metadata.markdown).toBe(`![assets/sample.png](${metadata.display_url})`);
@@ -84,6 +89,42 @@ describe("handleImageRead", () => {
     });
     const cacheId = metadata.display_url.split("/").at(-1);
     expect(getCachedImage(cacheId)?.mimeType).toBe("image/png");
+    expect(result.content[1]).toMatchObject({
+      type: "image",
+      mimeType: "image/png",
+    });
+    expect(result.content[1].data).toBe(createPng(2, 3).toString("base64"));
+  });
+
+  it("can return metadata without inline image bytes", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
+    mkdirSync(join(tmpRoot, "assets"));
+    writeFileSync(join(tmpRoot, "assets", "sample.png"), createPng(2, 3));
+    const project = createProject(tmpRoot);
+    const { ctx } = createContext(project);
+
+    const result = await handleImageRead(ctx, "chat-a", { path: "assets/sample.png", mode: "metadata" });
+    const metadata = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(metadata).toMatchObject({
+      path: "assets/sample.png",
+      returned_image_mode: "metadata",
+    });
+    expect(result.content).toHaveLength(1);
+  });
+
+  it("can explicitly return the full original image", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
+    mkdirSync(join(tmpRoot, "assets"));
+    writeFileSync(join(tmpRoot, "assets", "sample.png"), createPng(2, 3));
+    const project = createProject(tmpRoot);
+    const { ctx } = createContext(project);
+
+    const result = await handleImageRead(ctx, "chat-a", { path: "assets/sample.png", mode: "full" });
+    const metadata = JSON.parse(result.content[0].text);
+
+    expect(metadata.returned_image_mode).toBe("full");
     expect(result.content[1]).toMatchObject({
       type: "image",
       mimeType: "image/png",
