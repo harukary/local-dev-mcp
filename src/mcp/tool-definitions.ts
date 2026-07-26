@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-07-20.2";
+export const TOOL_SCHEMA_VERSION = "2026-07-27.1";
 
 export function buildToolDefinitions() {
   return [
@@ -225,6 +225,47 @@ export function buildToolDefinitions() {
           markdown: { type: "string" },
         },
         required: ["project_id", "path", "absolute_path", "mime_type", "size_bytes", "display_url", "display_expires_at", "markdown"],
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    {
+      name: "download.link",
+      description:
+        "Create a temporary authenticated download URL for a local file inside the selected project root. The URL requires the same Bearer authentication as the MCP connection, expires automatically, and serves the file as an attachment.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Project-relative file path, or an absolute path inside the selected project root.",
+          },
+          ttl_seconds: {
+            type: "integer",
+            description: "Link lifetime in seconds. Defaults to 600 and is capped at 3600.",
+            minimum: 1,
+            maximum: 3600,
+          },
+          filename: {
+            type: "string",
+            description: "Optional download filename. Path separators are ignored.",
+          },
+        },
+        required: ["path"],
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          path: { type: "string" },
+          absolute_path: { type: "string" },
+          size_bytes: { type: "number" },
+          download_url: { type: "string" },
+          expires_at: { type: "string" },
+          ttl_seconds: { type: "number" },
+          filename: { type: "string" },
+          markdown: { type: "string" },
+        },
+        required: ["project_id", "path", "absolute_path", "size_bytes", "download_url", "expires_at", "ttl_seconds", "filename", "markdown"],
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },

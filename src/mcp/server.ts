@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -27,6 +27,7 @@ import { handleProjectSelect } from "./tools/project-select.js";
 import { handleProjectCurrent } from "./tools/project-current.js";
 import { handleShellRun } from "./tools/shell-run.js";
 import { getCachedImage, handleImageRead } from "./tools/image-read.js";
+import { getCachedDownload, handleDownloadLink } from "./tools/download-link.js";
 import { handleShellApprove, handleShellReject } from "./tools/shell-approval.js";
 import { handleShellStatus } from "./tools/shell-status.js";
 import { handleShellCancel } from "./tools/shell-cancel.js";
@@ -334,6 +335,9 @@ function createMcpServer(ctx: AppContext): Server {
 
         case "image.read":
           return await handleImageRead(ctx, chatContextId, args as { path?: string });
+
+        case "download.link":
+          return await handleDownloadLink(ctx, chatContextId, args as { path?: string; ttl_seconds?: number; filename?: string });
 
         case "tool.schema":
           return {
@@ -766,7 +770,6 @@ function parseRawBody(req: express.Request): unknown | undefined {
 
 export async function startHttpServer(configPath: string, port: number): Promise<void> {
   const ctx = await createAppContext(configPath);
-  const transports = new Map<string, StreamableHTTPServerTransport>();
   const rateLimitMap = new Map<string, { count: number; reset: number }>();
 
   const app = express();
@@ -803,6 +806,21 @@ export async function startHttpServer(configPath: string, port: number): Promise
     res.setHeader("Cache-Control", "private, max-age=600");
     res.setHeader("Content-Disposition", `inline; filename="${cached.fileName.replace(/"/g, "")}"`);
     res.type(cached.mimeType).send(cached.bytes);
+  });
+
+  app.get("/download/:id", requireBearerAuth, (req, res) => {
+    const downloadId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const cached = getCachedDownload(downloadId);
+    if (!cached) {
+      res.status(404).json({ error: "not_found", message: "Download link not found or expired." });
+      return;
+    }
+    res.setHeader("Cache-Control", "private, no-store");
+    res.download(cached.absolutePath, cached.fileName, (err) => {
+      if (err && !res.headersSent) {
+        res.status(404).json({ error: "not_found", message: "Download file is no longer available." });
+      }
+    });
   });
 
   app.use(cors({
@@ -879,7 +897,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
   });
 
   app.post("/mcp", requireBearerAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
-    handleMcpRequest(req, res, ctx, transports).catch((err) => {
+    handleMcpRequest(req, res, ctx).catch((err) => {
       console.error("MCP POST handler error:", err);
       if (!res.headersSent) {
         res.status(500).json({ error: "internal_error", message: String(err) });
@@ -888,7 +906,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
   });
 
   app.get("/mcp", requireBearerAuth, (req, res) => {
-    handleMcpGetRequest(req, res, ctx, transports).catch((err) => {
+    handleMcpRequest(req, res, ctx).catch((err) => {
       console.error("MCP GET handler error:", err);
       if (!res.headersSent) {
         res.status(500).json({ error: "internal_error", message: String(err) });
@@ -901,7 +919,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
   });
 
   app.post("/", requireBearerAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
-    handleMcpRequest(req, res, ctx, transports).catch((err) => {
+    handleMcpRequest(req, res, ctx).catch((err) => {
       console.error("MCP POST (root) error:", err);
       if (!res.headersSent) res.status(500).json({ error: "internal_error", message: String(err) });
     });
@@ -939,60 +957,36 @@ export async function startHttpServer(configPath: string, port: number): Promise
 async function handleMcpRequest(
   req: express.Request,
   res: express.Response,
-  ctx: AppContext,
-  transports: Map<string, StreamableHTTPServerTransport>
+  ctx: AppContext
 ): Promise<void> {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  const parsed = parseRawBody(req);
-  const isInit = isInitializeRequest(parsed);
+  const parsed = req.method === "POST" ? parseRawBody(req) : undefined;
+  debugMcpLog(`[MCP] stateless request sessionId=${sessionId ?? "(none)"} isInit=${isInitializeRequest(parsed)}`);
 
-  debugMcpLog(`[MCP] sessionId=${sessionId ?? "(none)"} isInit=${isInit} transports=${transports.size}`);
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+  });
+  const mcpServer = createMcpServer(ctx);
 
-  if (!sessionId && isInit) {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (newSessionId) => {
-        transports.set(newSessionId, transport);
-        debugMcpLog(`[MCP] session created: ${newSessionId.slice(0, 8)}...`);
-      },
-    });
-    transport.onclose = () => {
-      if (transport.sessionId) transports.delete(transport.sessionId);
-    };
-    const mcpServer = createMcpServer(ctx);
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    transport.close().catch(() => {});
+    mcpServer.close().catch(() => {});
+  };
+
+  res.on("close", close);
+  try {
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res, parsed);
-    return;
-  }
-
-  if (sessionId) {
-    const transport = transports.get(sessionId);
-    if (transport) {
-      debugMcpLog(`[MCP] session reused: ${sessionId.slice(0, 8)}...`);
-      await transport.handleRequest(req, res, parsed);
-      return;
-    }
-    debugMcpLog(`[MCP] session NOT FOUND: ${sessionId.slice(0, 8)}...`);
-  }
-
-  res.status(400).json({ error: "No valid session" });
-}
-
-async function handleMcpGetRequest(
-  req: express.Request,
-  res: express.Response,
-  ctx: AppContext,
-  transports: Map<string, StreamableHTTPServerTransport>
-): Promise<void> {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  if (sessionId) {
-    const transport = transports.get(sessionId);
-    if (transport) {
-      await transport.handleRequest(req, res);
-      return;
+  } finally {
+    if (!res.writableEnded) {
+      res.once("finish", close);
+    } else {
+      close();
     }
   }
-  res.status(400).json({ error: "No valid session" });
 }
 
 async function reloadProjectRegistry(ctx: AppContext): Promise<string[]> {

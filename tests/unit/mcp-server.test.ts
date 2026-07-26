@@ -187,11 +187,17 @@ describe("tool schema snapshot", () => {
     const snapshot = buildToolSchemaSnapshot();
     const shellRun = snapshot.tools.find((tool) => tool.name === "shell.run");
     const imageRead = snapshot.tools.find((tool) => tool.name === "image.read");
+    const downloadLink = snapshot.tools.find((tool) => tool.name === "download.link");
     const skillsList = snapshot.tools.find((tool) => tool.name === "skills.list");
     const skillsRead = snapshot.tools.find((tool) => tool.name === "skills.read");
 
     expect(snapshot.schema_version).toMatch(/^\d{4}-\d{2}-\d{2}\./);
     expect(snapshot.tools.some((tool) => tool.name === "tool.schema")).toBe(true);
+    expect(downloadLink?.inputSchema).toMatchObject({
+      type: "object",
+      required: ["path"],
+    });
+    expect(downloadLink?.description).toContain("same Bearer authentication as the MCP connection");
     expect(skillsList?.annotations).toMatchObject({ readOnlyHint: true });
     expect(skillsRead?.inputSchema).toMatchObject({
       type: "object",
