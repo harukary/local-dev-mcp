@@ -231,7 +231,7 @@ export function buildToolDefinitions() {
     {
       name: "download.link",
       description:
-        "Create a temporary authenticated download URL for a local file inside the selected project root. The URL requires the same Bearer authentication as the MCP connection, expires automatically, and serves the file as an attachment.",
+        "Create a temporary authenticated download URL for a local file inside the selected project root. Opening the URL in a browser shows a passphrase authentication screen; MCP clients can use the same Bearer authentication as the MCP connection. The URL expires automatically and serves the file as an attachment.",
       inputSchema: {
         type: "object",
         properties: {

@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -619,6 +619,93 @@ function requireBearerAuth(
     });
 }
 
+interface DownloadAuthAttempt {
+  linkId: string;
+  expiresAt: number;
+}
+
+interface DownloadBrowserSession {
+  linkId: string;
+  expiresAt: number;
+}
+
+const DOWNLOAD_AUTH_COOKIE_PREFIX = "local_dev_mcp_download_";
+const downloadAuthAttempts = new Map<string, DownloadAuthAttempt>();
+const downloadBrowserSessions = new Map<string, DownloadBrowserSession>();
+
+function cleanupDownloadAuthState(): void {
+  const now = Date.now();
+  for (const [challenge, attempt] of downloadAuthAttempts) {
+    if (attempt.expiresAt <= now) downloadAuthAttempts.delete(challenge);
+  }
+  for (const [token, session] of downloadBrowserSessions) {
+    if (session.expiresAt <= now) downloadBrowserSessions.delete(token);
+  }
+}
+
+function downloadAuthCookieName(linkId: string): string {
+  return `${DOWNLOAD_AUTH_COOKIE_PREFIX}${linkId}`;
+}
+
+function getCookie(req: express.Request, name: string): string | undefined {
+  const header = req.headers.cookie;
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    const key = part.slice(0, separator).trim();
+    if (key === name) {
+      try {
+        return decodeURIComponent(part.slice(separator + 1).trim());
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+function requireDownloadAuth(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void {
+  const linkId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  if (!getCachedDownload(linkId)) {
+    res.status(404).json({ error: "not_found", message: "Download link not found or expired." });
+    return;
+  }
+
+  if (req.headers.authorization) {
+    requireBearerAuth(req, res, next);
+    return;
+  }
+
+  cleanupDownloadAuthState();
+  const cookieValue = getCookie(req, downloadAuthCookieName(linkId));
+  const session = cookieValue ? downloadBrowserSessions.get(cookieValue) : undefined;
+  if (session && session.linkId === linkId && session.expiresAt > Date.now()) {
+    next();
+    return;
+  }
+
+  const returnPath = `/download/${encodeURIComponent(linkId)}`;
+  res.redirect(302, `/download-auth?link=${encodeURIComponent(linkId)}&return=${encodeURIComponent(returnPath)}`);
+}
+
+export function renderDownloadAuthPage(linkId: string, challenge: string, error?: string): string {
+  const escapedLinkId = escapeHtmlAttribute(linkId);
+  const escapedChallenge = escapeHtmlAttribute(challenge);
+  const errorHtml = error ? `<p class="error">${escapeHtmlAttribute(error)}</p>` : "";
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>Download authentication</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f5f5f7}.card{background:#fff;border-radius:16px;padding:40px;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;max-width:400px;width:90%}h1{font-size:1.3rem;font-weight:600;margin:0 0 8px;color:#1d1d1f}p{font-size:.9rem;color:#6e6e73;margin:0 0 24px}.error{color:#b42318}input{width:100%;padding:12px 16px;border:1px solid #d2d2d7;border-radius:10px;font-size:1rem;box-sizing:border-box;outline:none}button{margin-top:16px;width:100%;padding:12px;border:none;border-radius:10px;background:#0071e3;color:#fff;font-size:1rem;font-weight:500;cursor:pointer}</style></head>
+<body><div class="card"><h1>ダウンロード認証</h1><p>ファイルをダウンロードするにはパスフレーズを入力してください。</p>${errorHtml}<form method="POST" action="/download-auth"><input type="hidden" name="link" value="${escapedLinkId}"><input type="hidden" name="challenge" value="${escapedChallenge}"><input type="password" name="passphrase" placeholder="パスフレーズ" autofocus><button type="submit">認証してダウンロード</button></form></div></body>
+</html>`;
+}
+
 function customAuthorizationHandler(provider: typeof personalOAuthProvider) {
   return async (req: express.Request, res: express.Response) => {
     const q = req.method === "POST" ? req.body : req.query;
@@ -808,7 +895,55 @@ export async function startHttpServer(configPath: string, port: number): Promise
     res.type(cached.mimeType).send(cached.bytes);
   });
 
-  app.get("/download/:id", requireBearerAuth, (req, res) => {
+  app.get("/download-auth", (req, res) => {
+    const linkId = typeof req.query.link === "string" ? req.query.link : "";
+    const cached = linkId ? getCachedDownload(linkId) : undefined;
+    if (!cached) {
+      res.status(404).json({ error: "not_found", message: "Download link not found or expired." });
+      return;
+    }
+
+    cleanupDownloadAuthState();
+    const challenge = randomUUID();
+    const expiresAt = Math.min(cached.expiresAt, Date.now() + 5 * 60 * 1000);
+    downloadAuthAttempts.set(challenge, { linkId, expiresAt });
+    res.setHeader("Cache-Control", "no-store");
+    res.type("html").send(renderDownloadAuthPage(linkId, challenge));
+  });
+
+  app.post("/download-auth", express.urlencoded({ extended: false, limit: "10kb" }), (req, res) => {
+    const linkId = typeof req.body?.link === "string" ? req.body.link : "";
+    const challenge = typeof req.body?.challenge === "string" ? req.body.challenge : "";
+    const passphrase = typeof req.body?.passphrase === "string" ? req.body.passphrase : "";
+    const attempt = downloadAuthAttempts.get(challenge);
+    const cached = linkId ? getCachedDownload(linkId) : undefined;
+    if (!attempt || attempt.linkId !== linkId || attempt.expiresAt <= Date.now() || !cached) {
+      res.status(404).json({ error: "not_found", message: "Download link not found or expired." });
+      return;
+    }
+
+    const provided = Buffer.from(passphrase);
+    const expected = Buffer.from(AUTH_PASSPHRASE);
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+      res.status(401).setHeader("Cache-Control", "no-store");
+      res.type("html").send(renderDownloadAuthPage(linkId, challenge, "パスフレーズが正しくありません。"));
+      return;
+    }
+
+    downloadAuthAttempts.delete(challenge);
+    const sessionToken = randomUUID();
+    downloadBrowserSessions.set(sessionToken, { linkId, expiresAt: cached.expiresAt });
+    const maxAge = Math.max(1, Math.ceil((cached.expiresAt - Date.now()) / 1000));
+    const secure = req.secure ? "; Secure" : "";
+    res.setHeader(
+      "Set-Cookie",
+      `${downloadAuthCookieName(linkId)}=${encodeURIComponent(sessionToken)}; Max-Age=${maxAge}; Path=/download/${encodeURIComponent(linkId)}; HttpOnly; SameSite=Lax${secure}`
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.redirect(303, `/download/${encodeURIComponent(linkId)}`);
+  });
+
+  app.get("/download/:id", requireDownloadAuth, (req, res) => {
     const downloadId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const cached = getCachedDownload(downloadId);
     if (!cached) {

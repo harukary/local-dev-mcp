@@ -10,6 +10,7 @@ import {
   normalizeHttpHost,
   resolveChatContextId,
   renderPassphrasePage,
+  renderDownloadAuthPage,
   sanitizeRequestUrlForLog,
 } from "../../src/mcp/server.js";
 import { buildToolSchemaSnapshot } from "../../src/mcp/tool-definitions.js";
@@ -117,6 +118,14 @@ describe("OAuth helpers", () => {
     expect(html).not.toContain("<script>alert('x')</script>");
   });
 
+  it("renders a link-bound download authentication form", () => {
+    const html = renderDownloadAuthPage("link-123", "challenge-456");
+    expect(html).toContain('action="/download-auth"');
+    expect(html).toContain('name="link" value="link-123"');
+    expect(html).toContain('name="challenge" value="challenge-456"');
+    expect(html).not.toContain("Bearer");
+  });
+
   it("redacts passphrases from request URLs before logging", () => {
     expect(sanitizeRequestUrlForLog("/authorize?client_id=x&passphrase=secret&state=y")).toBe(
       "/authorize?client_id=x&passphrase=%5BREDACTED%5D&state=y"
@@ -197,7 +206,7 @@ describe("tool schema snapshot", () => {
       type: "object",
       required: ["path"],
     });
-    expect(downloadLink?.description).toContain("same Bearer authentication as the MCP connection");
+    expect(downloadLink?.description).toContain("passphrase authentication screen");
     expect(skillsList?.annotations).toMatchObject({ readOnlyHint: true });
     expect(skillsRead?.inputSchema).toMatchObject({
       type: "object",
