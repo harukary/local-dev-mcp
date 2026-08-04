@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
-import { existsSync } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { AppContext } from "../server.js";
 import type { ProjectConfig } from "../../types.js";
@@ -8,7 +8,8 @@ import { jsonError, jsonResult, sha256 } from "./dev/common.js";
 
 const DEFAULT_MAX_BYTES = 512 * 1024;
 
-type SkillScope = "project" | "common" | "system";
+type SkillScope = "project" | "user" | "system";
+type SkillOrigin = "common" | "private_user" | "project" | "system" | "unmanaged";
 
 interface SkillRoot {
   scope: SkillScope;
@@ -22,6 +23,7 @@ interface SkillEntry {
   path: string;
   relative_path: string;
   scope: SkillScope;
+  origin: SkillOrigin;
   enabled: boolean;
 }
 
@@ -34,13 +36,14 @@ export async function handleSkillsList(
   if (!cwd.ok) return jsonError(cwd.code, cwd.message, cwd.details);
 
   const roots = buildSkillRoots(cwd.cwd);
+  const originManifest = loadOriginManifest();
   const skills: SkillEntry[] = [];
   const errors: Array<{ root: string; message: string }> = [];
 
   for (const root of roots) {
     if (!root.exists) continue;
     try {
-      for (const filePath of await listSkillFiles(root.root)) {
+      for (const filePath of await listSkillFiles(root.root, { excludeTopLevelDotSystem: root.scope === "user" })) {
         const metadata = await readSkillMetadata(filePath);
         skills.push({
           name: metadata.name || inferSkillName(root.root, filePath),
@@ -48,6 +51,7 @@ export async function handleSkillsList(
           path: filePath,
           relative_path: relative(root.root, filePath).replace(/\\/g, "/"),
           scope: root.scope,
+          origin: resolveOrigin(root, filePath, originManifest),
           enabled: true,
         });
       }
@@ -75,15 +79,19 @@ export async function handleSkillsRead(
   const rawPath = args?.path?.trim();
   if (!rawPath) return jsonError("MISSING_PATH", "skills.read requires a SKILL.md path returned by skills.list.");
 
-  const filePath = resolve(rawPath);
-  if (basename(filePath) !== "SKILL.md") {
-    return jsonError("NOT_SKILL_FILE", "skills.read only reads exact SKILL.md files. Pass a path returned by skills.list.");
+  const requestedPath = resolve(rawPath);
+  if (basename(requestedPath) !== "SKILL.md") {
+    return jsonError("NOT_SKILL_FILE", "skills.read only reads exact SKILL.md files.");
   }
 
-  const allowed = resolveAllowedSkillFile(ctx, filePath);
-  if (!allowed.ok) return jsonError(allowed.code, allowed.message, allowed.details);
-
   try {
+    const linkStat = await lstat(requestedPath);
+    if (linkStat.isSymbolicLink()) {
+      return jsonError("SKILL_SYMLINK_NOT_ALLOWED", "skills.read does not follow symbolic links.", { path: requestedPath });
+    }
+    const filePath = await realpath(requestedPath);
+    const allowed = await resolveAllowedSkillFile(ctx, filePath);
+    if (!allowed.ok) return jsonError(allowed.code, allowed.message, allowed.details);
     const fileStat = await stat(filePath);
     if (!fileStat.isFile()) return jsonError("NOT_A_FILE", "Path is not a regular file.");
 
@@ -97,6 +105,7 @@ export async function handleSkillsRead(
     return jsonResult({
       path: filePath,
       scope: allowed.scope,
+      origin: resolveOrigin(allowed, filePath, loadOriginManifest()),
       name: metadata.name || inferSkillName(allowed.root, filePath),
       description: metadata.description,
       sha256: sha256(content),
@@ -141,23 +150,28 @@ function findContainingProject(ctx: AppContext, targetPath: string): ProjectConf
   return ctx.registry.getAll().find((project) => isInside(resolve(project.hostRoot), targetPath));
 }
 
-function resolveAllowedSkillFile(ctx: AppContext, filePath: string) {
+async function resolveAllowedSkillFile(ctx: AppContext, filePath: string) {
   const roots = [
     ...ctx.registry.getAll().map((project) => ({ scope: "project" as const, root: join(resolve(project.hostRoot), ".agents", "skills") })),
-    { scope: "common" as const, root: commonSkillsRoot() },
     { scope: "system" as const, root: codexSystemSkillsRoot() },
+    { scope: "user" as const, root: codexSkillsRoot() },
   ];
 
   for (const root of roots) {
-    if (isInside(root.root, filePath)) {
-      return { ok: true as const, ...root };
+    try {
+      const realRoot = await realpath(root.root);
+      if (isInside(realRoot, filePath)) {
+        return { ok: true as const, ...root, root: realRoot };
+      }
+    } catch {
+      continue;
     }
   }
 
   return {
     ok: false as const,
     code: "PATH_OUTSIDE_SKILLS_ROOTS",
-    message: "skills.read can only read SKILL.md files under registered project .agents/skills, HARU_CONTEXT_HOME/skills, or CODEX_HOME/skills/.system.",
+    message: "skills.read can only read SKILL.md files under registered project .agents/skills or CODEX_HOME/skills.",
     details: { path: filePath, allowed_roots: roots.map((root) => root.root) },
   };
 }
@@ -165,37 +179,73 @@ function resolveAllowedSkillFile(ctx: AppContext, filePath: string) {
 function buildSkillRoots(cwd: string): SkillRoot[] {
   const roots = [
     { scope: "project" as const, root: join(cwd, ".agents", "skills") },
-    { scope: "common" as const, root: commonSkillsRoot() },
+    { scope: "user" as const, root: codexSkillsRoot() },
     { scope: "system" as const, root: codexSystemSkillsRoot() },
   ];
   return roots.map((root) => ({ ...root, exists: existsSync(root.root) }));
 }
 
-function commonSkillsRoot(): string {
-  return resolve(process.env.HARU_CONTEXT_HOME?.trim() || join(homedir(), ".haru"), "skills");
+function codexSkillsRoot(): string {
+  return resolve(process.env.CODEX_HOME?.trim() || join(homedir(), ".haru", ".codex"), "skills");
 }
 
 function codexSystemSkillsRoot(): string {
-  return resolve(process.env.CODEX_HOME?.trim() || join(homedir(), ".haru", ".codex"), "skills", ".system");
+  return join(codexSkillsRoot(), ".system");
 }
 
-async function listSkillFiles(root: string): Promise<string[]> {
+async function listSkillFiles(
+  root: string,
+  options: { excludeTopLevelDotSystem?: boolean } = {}
+): Promise<string[]> {
   const result: string[] = [];
-  await walk(root, result);
+  await walk(root, result, root, options);
   return result;
 }
 
-async function walk(dir: string, result: string[]) {
+async function walk(
+  dir: string,
+  result: string[],
+  root: string,
+  options: { excludeTopLevelDotSystem?: boolean }
+) {
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name === "node_modules" || entry.name === ".git") continue;
+    if (options.excludeTopLevelDotSystem && dir === root && entry.name === ".system") continue;
     const fullPath = join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Skill roots must not contain symbolic links: ${fullPath}`);
+    }
     if (entry.isDirectory()) {
-      await walk(fullPath, result);
+      await walk(fullPath, result, root, options);
     } else if (entry.isFile() && entry.name === "SKILL.md") {
       result.push(fullPath);
     }
   }
+}
+
+type OriginManifest = { version: number; skills?: Record<string, "common" | "private_user"> };
+
+function loadOriginManifest(): OriginManifest | null {
+  const manifestPath = join(resolve(process.env.CODEX_HOME?.trim() || join(homedir(), ".haru", ".codex")), ".haru-context-origins.json");
+  try {
+    const parsed = JSON.parse(requireText(manifestPath)) as OriginManifest;
+    return parsed.version === 1 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function requireText(filePath: string): string {
+  return readFileSync(filePath, "utf8");
+}
+
+function resolveOrigin(root: { scope: SkillScope; root: string }, filePath: string, manifest: OriginManifest | null): SkillOrigin {
+  if (root.scope === "project") return "project";
+  if (root.scope === "system") return "system";
+  const relativePath = relative(root.root, filePath).replace(/\\/g, "/");
+  const skillDir = relativePath.split("/").slice(0, -1).join("/");
+  return manifest?.skills?.[skillDir] ?? "unmanaged";
 }
 
 async function readSkillMetadata(filePath: string): Promise<{ name: string; description: string }> {

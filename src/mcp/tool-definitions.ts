@@ -45,7 +45,7 @@ export function buildToolDefinitions() {
     {
       name: "skills.list",
       description:
-        "List readable Codex/Haru skill files for ChatGPT. Optional path selects the project cwd whose .agents/skills should be included; common and system skills are always included.",
+        "List readable Codex skill files for ChatGPT. Optional path selects the project cwd whose .agents/skills should be included; CODEX_HOME runtime user and system Skills are always included. Results include source origin (common, private_user, project, system, or unmanaged).",
       inputSchema: {
         type: "object",
         properties: {
@@ -60,13 +60,13 @@ export function buildToolDefinitions() {
     {
       name: "skills.read",
       description:
-        "Read a SKILL.md file returned by skills.list so ChatGPT can apply the skill contract before acting.",
+        "Read a real, non-symlink SKILL.md path inside a registered project Skill root or CODEX_HOME/skills. Results include runtime scope and source origin.",
       inputSchema: {
         type: "object",
         properties: {
           path: {
             type: "string",
-            description: "Exact absolute SKILL.md path returned by skills.list.",
+            description: "Absolute real, non-symlink SKILL.md path inside a registered project Skill root or CODEX_HOME/skills. Prefer a path returned by skills.list.",
           },
           max_bytes: {
             type: "integer",

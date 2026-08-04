@@ -240,9 +240,9 @@ Codex、Claude Code、その他の coding agent が、ユーザーから「ChatG
 ChatGPT は Codex/Haru の `SKILL.md` を自動では読み込みません。次の順で使います。
 
 1. `skills.list` に任意で登録済み project 内の `path` を渡す。
-2. `skills.list` が返した exact `SKILL.md` path を `skills.read` に渡す。
+2. 原則として`skills.list`が返したexact `SKILL.md` pathを`skills.read`へ渡す。別pathを指定する場合も、allowed Skill root内のreal pathかつnon-symlinkでなければならない。
 
-`skills.list` は project-local `<path>/.agents/skills`、common `${HARU_CONTEXT_HOME:-~/.haru}/skills`、system `${CODEX_HOME:-~/.haru/.codex}/skills/.system` を列挙します。
+`skills.list`はproject-local `<path>/.agents/skills`、runtime-user `${CODEX_HOME:-~/.haru/.codex}/skills`（`.system`を除く）、system `${CODEX_HOME:-~/.haru/.codex}/skills/.system`を列挙します。各entryはruntime `scope`とsource `origin`（`common`, `private_user`, `project`, `system`, `unmanaged`）を返します。commonとprivate-userはどちらもruntime `scope:user`になり得ます。symlinkは拒否します。
 
 ## ChatGPT Developer Mode で app を追加する
 

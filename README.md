@@ -240,9 +240,9 @@ Do not commit or print the contents of `.env`, `.local-dev-mcp`, `logs`, `genera
 ChatGPT does not automatically load Codex/Haru `SKILL.md` files. Use:
 
 1. `skills.list` with an optional registered project `path`.
-2. `skills.read` with the exact `SKILL.md` path returned by `skills.list`.
+2. Prefer the exact `SKILL.md` path returned by `skills.list`; `skills.read` also accepts another real, non-symlink path inside an allowed Skill root.
 
-`skills.list` includes project-local `<path>/.agents/skills`, common `${HARU_CONTEXT_HOME:-~/.haru}/skills`, and system `${CODEX_HOME:-~/.haru/.codex}/skills/.system`.
+`skills.list` includes project-local `<path>/.agents/skills`, runtime-user `${CODEX_HOME:-~/.haru/.codex}/skills` excluding `.system`, and system `${CODEX_HOME:-~/.haru/.codex}/skills/.system`. Each result includes runtime `scope` and source `origin` (`common`, `private_user`, `project`, `system`, or `unmanaged`). Common and private-user Skills can both have runtime `scope:user`. Symlinks are rejected.
 
 For local debugging or non-ChatGPT MCP clients, these connection forms are available:
 

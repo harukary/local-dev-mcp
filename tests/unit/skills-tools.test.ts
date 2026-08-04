@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,18 +8,12 @@ import type { ProjectConfig } from "../../src/types.js";
 import { handleSkillsList, handleSkillsRead } from "../../src/mcp/tools/skills.js";
 
 let tmpRoot = "";
-const previousHaruContextHome = process.env.HARU_CONTEXT_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
 
 afterEach(() => {
   if (tmpRoot) {
     rmSync(tmpRoot, { recursive: true, force: true });
     tmpRoot = "";
-  }
-  if (previousHaruContextHome === undefined) {
-    delete process.env.HARU_CONTEXT_HOME;
-  } else {
-    process.env.HARU_CONTEXT_HOME = previousHaruContextHome;
   }
   if (previousCodexHome === undefined) {
     delete process.env.CODEX_HOME;
@@ -73,17 +67,20 @@ function writeSkill(path: string, name: string, description: string) {
 }
 
 describe("skills tools", () => {
-  it("lists project-local, common, and system skills with readable paths", async () => {
+  it("lists project-local, CODEX_HOME user, and system skills with readable paths", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-skills-"));
     const projectRoot = join(tmpRoot, "project");
-    const haruContextHome = join(tmpRoot, ".haru");
     const codexHome = join(tmpRoot, ".codex");
-    process.env.HARU_CONTEXT_HOME = haruContextHome;
     process.env.CODEX_HOME = codexHome;
 
     writeSkill(join(projectRoot, ".agents", "skills", "project-skill"), "project-skill", "Project workflow");
-    writeSkill(join(haruContextHome, "skills", "common-skill"), "common-skill", "Common workflow");
+    writeSkill(join(codexHome, "skills", "user-skill"), "user-skill", "User workflow");
     writeSkill(join(codexHome, "skills", ".system", "system-skill"), "system-skill", "System workflow");
+    writeFileSync(
+      join(codexHome, ".haru-context-origins.json"),
+      `${JSON.stringify({ version: 1, skills: { "user-skill": "private_user" } })}\n`,
+      "utf8"
+    );
 
     const ctx = createContext(createProject(projectRoot));
     const result = await handleSkillsList(ctx, "chat-a", { path: projectRoot });
@@ -92,9 +89,9 @@ describe("skills tools", () => {
     expect(body.cwd).toBe(projectRoot);
     expect(body.skills).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: "project-skill", scope: "project", path: join(projectRoot, ".agents", "skills", "project-skill", "SKILL.md") }),
-        expect.objectContaining({ name: "common-skill", scope: "common", path: join(haruContextHome, "skills", "common-skill", "SKILL.md") }),
-        expect.objectContaining({ name: "system-skill", scope: "system", path: join(codexHome, "skills", ".system", "system-skill", "SKILL.md") }),
+        expect.objectContaining({ name: "project-skill", scope: "project", origin: "project", path: join(projectRoot, ".agents", "skills", "project-skill", "SKILL.md") }),
+        expect.objectContaining({ name: "user-skill", scope: "user", origin: "private_user", path: join(codexHome, "skills", "user-skill", "SKILL.md") }),
+        expect.objectContaining({ name: "system-skill", scope: "system", origin: "system", path: join(codexHome, "skills", ".system", "system-skill", "SKILL.md") }),
       ])
     );
     expect(body.read_hint).toContain("skills.read");
@@ -103,7 +100,6 @@ describe("skills tools", () => {
   it("reads only SKILL.md files under allowed skill roots", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-skills-"));
     const projectRoot = join(tmpRoot, "project");
-    process.env.HARU_CONTEXT_HOME = join(tmpRoot, ".haru");
     process.env.CODEX_HOME = join(tmpRoot, ".codex");
     writeSkill(join(projectRoot, ".agents", "skills", "project-skill"), "project-skill", "Project workflow");
     writeFileSync(join(tmpRoot, "outside.md"), "nope\n", "utf8");
@@ -111,11 +107,40 @@ describe("skills tools", () => {
     const ctx = createContext(createProject(projectRoot));
     const skillPath = join(projectRoot, ".agents", "skills", "project-skill", "SKILL.md");
     const read = payload(await handleSkillsRead(ctx, { path: skillPath }));
-    expect(read).toMatchObject({ name: "project-skill", description: "Project workflow", path: skillPath });
+    expect(read).toMatchObject({ name: "project-skill", description: "Project workflow", path: realpathSync(skillPath), scope: "project", origin: "project" });
     expect(read.content).toContain("# project-skill");
+
+    const userSkillPath = join(process.env.CODEX_HOME!, "skills", "user-skill", "SKILL.md");
+    const systemSkillPath = join(process.env.CODEX_HOME!, "skills", ".system", "system-skill", "SKILL.md");
+    writeSkill(join(process.env.CODEX_HOME!, "skills", "user-skill"), "user-skill", "User workflow");
+    writeSkill(join(process.env.CODEX_HOME!, "skills", ".system", "system-skill"), "system-skill", "System workflow");
+    writeFileSync(
+      join(process.env.CODEX_HOME!, ".haru-context-origins.json"),
+      `${JSON.stringify({ version: 1, skills: { "user-skill": "private_user" } })}\n`,
+      "utf8"
+    );
+    expect(payload(await handleSkillsRead(ctx, { path: userSkillPath }))).toMatchObject({ scope: "user", origin: "private_user", name: "user-skill" });
+    expect(payload(await handleSkillsRead(ctx, { path: systemSkillPath }))).toMatchObject({ scope: "system", origin: "system", name: "system-skill" });
 
     const outside = await handleSkillsRead(ctx, { path: join(tmpRoot, "outside.md") });
     expect(outside.isError).toBe(true);
     expect(payload(outside).error.code).toBe("NOT_SKILL_FILE");
+  });
+
+  it("rejects a SKILL.md symlink that points outside an allowed root", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-skills-"));
+    const projectRoot = join(tmpRoot, "project");
+    process.env.CODEX_HOME = join(tmpRoot, ".codex");
+    const outsideDir = join(tmpRoot, "outside-skill");
+    writeSkill(outsideDir, "outside-skill", "Outside workflow");
+    const linkedDir = join(projectRoot, ".agents", "skills", "linked-skill");
+    mkdirSync(linkedDir, { recursive: true });
+    const linkedPath = join(linkedDir, "SKILL.md");
+    symlinkSync(join(outsideDir, "SKILL.md"), linkedPath);
+
+    const ctx = createContext(createProject(projectRoot));
+    const result = await handleSkillsRead(ctx, { path: linkedPath });
+    expect(result.isError).toBe(true);
+    expect(payload(result).error.code).toBe("SKILL_SYMLINK_NOT_ALLOWED");
   });
 });
