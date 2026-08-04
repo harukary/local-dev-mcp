@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-07-27.1";
+export const TOOL_SCHEMA_VERSION = "2026-08-04.1";
 
 export function buildToolDefinitions() {
   return [
@@ -241,9 +241,9 @@ export function buildToolDefinitions() {
           },
           ttl_seconds: {
             type: "integer",
-            description: "Link lifetime in seconds. Defaults to 600 and is capped at 3600.",
+            description: "Link lifetime in seconds. Defaults to 600 and is capped at 86400.",
             minimum: 1,
-            maximum: 3600,
+            maximum: 86400,
           },
           filename: {
             type: "string",

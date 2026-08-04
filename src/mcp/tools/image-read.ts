@@ -9,7 +9,8 @@ import type { ProjectConfig } from "../../types.js";
 import { imageViewerMeta } from "../resources/image-viewer.js";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
+const IMAGE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_IMAGE_CACHE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_PREVIEW_MAX_EDGE = 900;
 const PREVIEW_FULL_INLINE_MAX_BYTES = 512 * 1024;
 
@@ -29,6 +30,7 @@ interface CachedImage {
 }
 
 const imageCache = new Map<string, CachedImage>();
+let imageCacheBytes = 0;
 
 export async function handleImageRead(
   ctx: AppContext,
@@ -155,9 +157,12 @@ export function getCachedImage(id: string): CachedImage | undefined {
   const cached = imageCache.get(id);
   if (!cached) return undefined;
   if (cached.expiresAt <= Date.now()) {
-    imageCache.delete(id);
+    deleteCachedImage(id);
     return undefined;
   }
+  // Map insertion order provides the LRU order: refresh this entry on access.
+  imageCache.delete(id);
+  imageCache.set(id, cached);
   return cached;
 }
 
@@ -166,8 +171,30 @@ function cacheImage(bytes: Buffer, mimeType: string, relativePath: string): { id
   const expiresAt = Date.now() + IMAGE_CACHE_TTL_MS;
   const fileName = relativePath.split("/").at(-1) || "image";
   imageCache.set(id, { bytes, mimeType, fileName, expiresAt });
-  setTimeout(() => imageCache.delete(id), IMAGE_CACHE_TTL_MS).unref();
+  imageCacheBytes += bytes.length;
+  evictOldestImagesIfNeeded();
+  setTimeout(() => deleteCachedImage(id), IMAGE_CACHE_TTL_MS).unref();
   return { id, expiresAt };
+}
+
+function evictOldestImagesIfNeeded(): void {
+  while (imageCacheBytes > MAX_IMAGE_CACHE_BYTES) {
+    const oldestId = imageCache.keys().next().value;
+    if (typeof oldestId !== "string") return;
+    deleteCachedImage(oldestId);
+  }
+}
+
+function deleteCachedImage(id: string): void {
+  const cached = imageCache.get(id);
+  if (!cached) return;
+  imageCache.delete(id);
+  imageCacheBytes -= cached.bytes.length;
+}
+
+export function clearImageCacheForTests(): void {
+  imageCache.clear();
+  imageCacheBytes = 0;
 }
 
 function getPublicOriginForTool(): string {

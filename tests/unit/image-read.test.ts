@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
-import { getCachedImage, handleImageRead } from "../../src/mcp/tools/image-read.js";
+import { clearImageCacheForTests, getCachedImage, handleImageRead } from "../../src/mcp/tools/image-read.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
 
@@ -11,6 +11,7 @@ let tmpRoot = "";
 let previousPublicOrigin: string | undefined;
 
 afterEach(() => {
+  clearImageCacheForTests();
   if (tmpRoot) {
     rmSync(tmpRoot, { recursive: true, force: true });
     tmpRoot = "";
@@ -29,6 +30,12 @@ function createPng(width = 1, height = 1): Buffer {
   );
   bytes.writeUInt32BE(width, 16);
   bytes.writeUInt32BE(height, 20);
+  return bytes;
+}
+
+function createLargePng(sizeBytes = 7 * 1024 * 1024): Buffer {
+  const bytes = Buffer.alloc(sizeBytes);
+  createPng().copy(bytes);
   return bytes;
 }
 
@@ -130,6 +137,34 @@ describe("handleImageRead", () => {
       mimeType: "image/png",
     });
     expect(result.content[1].data).toBe(createPng(2, 3).toString("base64"));
+  });
+
+  it("evicts the least recently used images after the 50 MiB limit", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
+    mkdirSync(join(tmpRoot, "assets"));
+    for (let index = 0; index < 9; index++) {
+      writeFileSync(join(tmpRoot, "assets", `large-${index}.png`), createLargePng());
+    }
+    const project = createProject(tmpRoot);
+    const { ctx } = createContext(project);
+    const cacheIds: string[] = [];
+
+    for (let index = 0; index < 8; index++) {
+      const result = await handleImageRead(ctx, "chat-a", { path: `assets/large-${index}.png`, mode: "metadata" });
+      cacheIds.push(JSON.parse(result.content[0].text).display_url.split("/").at(-1)!);
+    }
+
+    expect(getCachedImage(cacheIds[0])).toBeUndefined();
+    expect(getCachedImage(cacheIds[1])).toBeDefined();
+
+    // Touch the second image so it becomes newer than the third one.
+    expect(getCachedImage(cacheIds[1])).toBeDefined();
+    const result = await handleImageRead(ctx, "chat-a", { path: "assets/large-8.png", mode: "metadata" });
+    const newestId = JSON.parse(result.content[0].text).display_url.split("/").at(-1)!;
+
+    expect(getCachedImage(cacheIds[1])).toBeDefined();
+    expect(getCachedImage(cacheIds[2])).toBeUndefined();
+    expect(getCachedImage(newestId)).toBeDefined();
   });
 
   it("rejects paths outside the selected project", async () => {

@@ -65,6 +65,17 @@ describe("handleDownloadLink", () => {
     expect(payload.error.code).toBe("PATH_OUTSIDE_PROJECT");
   });
 
+  it("allows an explicit 24-hour maximum TTL", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-download-"));
+    writeFileSync(join(tmpRoot, "report.txt"), "hello");
+    const { ctx } = createContext(createProject(tmpRoot));
+
+    const result = await handleDownloadLink(ctx, "chat-a", { path: "report.txt", ttl_seconds: 24 * 60 * 60 });
+    const metadata = JSON.parse(result.content[0].text);
+
+    expect(metadata.ttl_seconds).toBe(24 * 60 * 60);
+  });
+
   it("rejects denied paths", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-download-"));
     writeFileSync(join(tmpRoot, ".env"), "SECRET=1");

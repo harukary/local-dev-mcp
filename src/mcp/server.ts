@@ -890,7 +890,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
       res.status(404).json({ error: "not_found", message: "Image cache entry not found or expired." });
       return;
     }
-    res.setHeader("Cache-Control", "private, max-age=600");
+    res.setHeader("Cache-Control", "private, max-age=86400");
     res.setHeader("Content-Disposition", `inline; filename="${cached.fileName.replace(/"/g, "")}"`);
     res.type(cached.mimeType).send(cached.bytes);
   });

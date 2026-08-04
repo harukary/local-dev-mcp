@@ -6,7 +6,7 @@ import type { ProjectConfig } from "../../types.js";
 import { getActiveProject, jsonError, jsonResult, matchesDeniedPath } from "./dev/common.js";
 
 const DEFAULT_DOWNLOAD_TTL_SECONDS = 10 * 60;
-const MAX_DOWNLOAD_TTL_SECONDS = 60 * 60;
+const MAX_DOWNLOAD_TTL_SECONDS = 24 * 60 * 60;
 
 interface CachedDownload {
   absolutePath: string;
