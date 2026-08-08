@@ -304,14 +304,14 @@ function createMcpServer(ctx: AppContext): Server {
           return await handleShellRun(
             ctx,
             chatContextId,
-            args as { command: string; timeout_seconds?: number; purpose?: string; async?: boolean }
+            args as { command: string; timeout_seconds?: number; purpose?: string; async?: boolean; long_running?: boolean }
           );
 
         case "shell.status":
           return await handleShellStatus(args as { job_id: string });
 
         case "shell.cancel":
-          return await handleShellCancel(args as { job_id: string });
+          return await handleShellCancel(args as { job_id?: string; pid?: number });
 
         case "shell.approve":
           return await handleShellApprove(ctx, chatContextId, args as { approval_request_id: string });

@@ -112,7 +112,7 @@ export async function handleShellApprove(ctx: AppContext, chatContextId: string,
   }
 
   if (request.async) {
-    const result = startJob(project, request.command, request.purpose, request.timeoutSeconds);
+    const result = startJob(project, request.command, request.purpose, request.timeoutSeconds, request.longRunning ?? false);
     if ("error" in result) {
       releaseApprovalRequest(request.id);
       await ctx.auditLogger.log({
@@ -170,6 +170,8 @@ export async function handleShellApprove(ctx: AppContext, chatContextId: string,
             async: true,
             approval_request_id: request.id,
             job_id: result.id,
+            pid: result.pid,
+            long_running: result.longRunning ?? false,
             project_id: project.projectId,
             command: result.command,
             risk_level: result.riskLevel,

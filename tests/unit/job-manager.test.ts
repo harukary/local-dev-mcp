@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleShellStatus } from "../../src/mcp/tools/shell-status.js";
-import { clearJobsForTests, cancelJob, cleanupOldPersistedJobsForTests, getJob, setJobRetentionTtlForTests, setPersistedJobRetentionForTests, startJob } from "../../src/shell/job-manager.js";
+import { clearJobsForTests, cancelJob, cancelJobByPid, cleanupOldPersistedJobsForTests, getJob, setJobRetentionTtlForTests, setPersistedJobRetentionForTests, startJob } from "../../src/shell/job-manager.js";
 import type { ProjectConfig } from "../../src/types.js";
 
 let projectRoot = "";
@@ -133,6 +133,43 @@ describe("job retention", () => {
     expect(payload.job_id).toBe(jobId);
     expect(payload.status).toBe("succeeded");
     expect(payload.stdout).toContain("status-persisted");
+  });
+
+  it("lets long-running jobs exceed the normal timeout", async () => {
+    const result = startJob(
+      project,
+      `node -e "setTimeout(() => { console.log('long-done') }, 120)"`,
+      undefined,
+      0.02,
+      true
+    );
+    if ("error" in result) throw new Error(result.error);
+
+    expect(result.longRunning).toBe(true);
+    expect(result.pid).toBeTypeOf("number");
+    await waitForJobCompletion(result.id);
+
+    const completed = getJob(result.id);
+    expect(completed?.status).toBe("succeeded");
+    expect(completed?.stdout).toContain("long-done");
+  });
+
+  it("cancels a managed background job by pid", async () => {
+    const result = startJob(
+      project,
+      `node -e "setInterval(() => {}, 1000)"`,
+      undefined,
+      undefined,
+      true
+    );
+    if ("error" in result) throw new Error(result.error);
+    if (result.pid === undefined) throw new Error("missing pid");
+
+    const canceled = cancelJobByPid(result.pid);
+    expect(canceled?.id).toBe(result.id);
+
+    await waitForJobCompletion(result.id);
+    expect(getJob(result.id)?.status).toBe("canceled");
   });
 
   it("exposes running stdout through shell.status", async () => {

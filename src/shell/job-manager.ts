@@ -10,6 +10,8 @@ export type JobStatus = "running" | "succeeded" | "failed" | "canceled" | "timeo
 
 export interface Job {
   id: string;
+  pid?: number;
+  longRunning?: boolean;
   projectId: string;
   cwd: string;
   command: string;
@@ -58,7 +60,8 @@ export function startJob(
   project: ProjectConfig,
   command: string,
   purpose?: string,
-  timeoutSeconds?: number
+  timeoutSeconds?: number,
+  longRunning = false
 ): Job | { error: string } {
   if (getActiveJobs().length >= MAX_CONCURRENT_JOBS) {
     return { error: `Too many active jobs (max ${MAX_CONCURRENT_JOBS}). Wait for some to complete.` };
@@ -70,10 +73,12 @@ export function startJob(
     return { error: `Forbidden command: ${risk.reasons.join(", ")}` };
   }
 
-  const timeoutMs = Math.min(
-    (timeoutSeconds ?? project.defaultTimeoutSeconds) * 1000,
-    project.maxTimeoutSeconds * 1000
-  );
+  const timeoutMs = longRunning
+    ? null
+    : Math.min(
+        (timeoutSeconds ?? project.defaultTimeoutSeconds) * 1000,
+        project.maxTimeoutSeconds * 1000
+      );
 
   const child = spawn(project.defaultShell, ["-lc", command], {
     cwd: project.hostRoot,
@@ -83,6 +88,8 @@ export function startJob(
 
   const job: Job = {
     id: jobId,
+    pid: child.pid,
+    longRunning,
     projectId: project.projectId,
     cwd: project.hostRoot,
     command,
@@ -100,6 +107,7 @@ export function startJob(
   };
 
   jobs.set(jobId, job);
+  if (longRunning) persistJob(job, true);
 
   let stdout = "";
   let stderr = "";
@@ -153,7 +161,7 @@ export function startJob(
       isCanceling.delete(jobId);
     }
 
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
     job.exitCode = exitCode;
     job.finishedAt = new Date().toISOString();
     job.durationMs = Date.now() - new Date(job.startedAt).getTime();
@@ -175,7 +183,7 @@ export function startJob(
     scheduleJobCleanup(jobId);
   }
 
-  const timer = setTimeout(() => {
+  const timer = timeoutMs === null ? undefined : setTimeout(() => {
     try { process.kill(-child.pid!, "SIGTERM"); } catch { /* ignore */ }
     setTimeout(() => {
       try { process.kill(-child.pid!, "SIGKILL"); } catch { /* ignore */ }
@@ -186,7 +194,7 @@ export function startJob(
   child.on("close", finalize);
 
   child.on("error", () => {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
     job.status = "failed";
     job.finishedAt = new Date().toISOString();
     job.process = undefined;
@@ -214,7 +222,7 @@ function shouldBlockCommand(project: ProjectConfig, command: string, riskLevel: 
 
 export function cancelJob(jobId: string): boolean {
   const job = jobs.get(jobId);
-  if (!job || job.status !== "running" || !job.process) {
+  if (!job || job.status !== "running" || !job.process?.pid) {
     return false;
   }
   if (job.process.exitCode !== null || job.process.signalCode !== null) {
@@ -222,11 +230,24 @@ export function cancelJob(jobId: string): boolean {
   }
   isCanceling.add(jobId);
   job.status = "canceled";
-  try { process.kill(-job.process.pid!, "SIGTERM"); } catch { /* ignore */ }
-  setTimeout(() => {
-    try { process.kill(-job.process!.pid!, "SIGKILL"); } catch { /* ignore */ }
-  }, 5000);
+  terminateProcessGroup(job.process.pid);
   return true;
+}
+
+export function cancelJobByPid(pid: number): Job | undefined {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
+  const job = Array.from(jobs.values()).find((candidate) => candidate.pid === pid && candidate.status === "running");
+  if (!job) return undefined;
+  if (!cancelJob(job.id)) return undefined;
+  return job;
+}
+
+function terminateProcessGroup(pid: number): void {
+  try { process.kill(-pid, "SIGTERM"); } catch { return; }
+  const forceKill = setTimeout(() => {
+    try { process.kill(-pid, "SIGKILL"); } catch { /* ignore */ }
+  }, 5000);
+  forceKill.unref?.();
 }
 
 function persistedJobPath(jobId: string): string {
@@ -238,8 +259,8 @@ function toPersistedJob(job: Job): Job {
   return persisted;
 }
 
-function persistJob(job: Job): void {
-  if (job.status === "running") {
+function persistJob(job: Job, allowRunning = false): void {
+  if (job.status === "running" && !allowRunning) {
     return;
   }
 

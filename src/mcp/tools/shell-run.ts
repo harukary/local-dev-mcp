@@ -7,11 +7,18 @@ import { startJob } from "../../shell/job-manager.js";
 export async function handleShellRun(
   ctx: AppContext,
   chatContextId: string,
-  args: { command: string; timeout_seconds?: number; purpose?: string; async?: boolean }
+  args: { command: string; timeout_seconds?: number; purpose?: string; async?: boolean; long_running?: boolean }
 ) {
   if (!args?.command) {
     return {
       content: [{ type: "text", text: "Missing required argument: command" }],
+      isError: true,
+    };
+  }
+
+  if (args.long_running && !args.async) {
+    return {
+      content: [{ type: "text", text: JSON.stringify({ error: { code: "INVALID_ARGUMENT", message: "long_running requires async=true" } }, null, 2) }],
       isError: true,
     };
   }
@@ -100,7 +107,7 @@ export async function handleShellRun(
     risk.level,
     risk.reasons,
     args.purpose,
-    { async: args.async, timeoutSeconds: args.timeout_seconds }
+    { async: args.async, timeoutSeconds: args.timeout_seconds, longRunning: args.long_running }
   );
 
   if (approval.required) {
@@ -150,7 +157,7 @@ export async function handleShellRun(
   ctx.contextStore.recordShellRun(chatContextId);
 
   if (args.async) {
-    const result = startJob(project, args.command, args.purpose, args.timeout_seconds);
+    const result = startJob(project, args.command, args.purpose, args.timeout_seconds, args.long_running ?? false);
 
     if ("error" in result) {
       return {
@@ -182,6 +189,8 @@ export async function handleShellRun(
           text: JSON.stringify({
             async: true,
             job_id: result.id,
+            pid: result.pid,
+            long_running: result.longRunning ?? false,
             project_id: project.projectId,
             command: result.command,
             risk_level: result.riskLevel,

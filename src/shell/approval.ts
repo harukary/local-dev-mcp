@@ -10,6 +10,7 @@ export interface ApprovalRequest {
   purpose?: string;
   async?: boolean;
   timeoutSeconds?: number;
+  longRunning?: boolean;
   reasons: string[];
   approvalPolicy: "ask" | "deny";
   status: "pending" | "executing" | "approved" | "rejected";
@@ -59,7 +60,7 @@ export function evaluateApproval(
   riskLevel: RiskLevel,
   reasons: string[],
   purpose?: string,
-  options?: { async?: boolean; timeoutSeconds?: number }
+  options?: { async?: boolean; timeoutSeconds?: number; longRunning?: boolean }
 ): ApprovalDecision {
   if (project.approvalMode === "never" || project.approvalMode === "catastrophic_only") {
     return { required: false };
@@ -118,7 +119,7 @@ function createRequest(
   riskLevel: RiskLevel,
   reasons: string[],
   purpose: string | undefined,
-  options: { async?: boolean; timeoutSeconds?: number } | undefined,
+  options: { async?: boolean; timeoutSeconds?: number; longRunning?: boolean } | undefined,
   approvalPolicy: "ask" | "deny"
 ): ApprovalDecision {
   cleanupExpiredRequests();
@@ -131,6 +132,7 @@ function createRequest(
     purpose,
     async: options?.async,
     timeoutSeconds: options?.timeoutSeconds,
+    longRunning: options?.longRunning,
     reasons,
     approvalPolicy,
     status: "pending",

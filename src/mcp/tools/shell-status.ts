@@ -32,6 +32,8 @@ export async function handleShellStatus(args: { job_id: string }) {
         type: "text",
         text: JSON.stringify({
           job_id: job.id,
+          pid: job.pid,
+          long_running: job.longRunning ?? false,
           project_id: job.projectId,
           command: job.command,
           purpose: job.purpose,

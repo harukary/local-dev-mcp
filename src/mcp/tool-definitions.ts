@@ -105,7 +105,11 @@ export function buildToolDefinitions() {
           },
           async: {
             type: "boolean",
-            description: "If true, run as background job and return job_id immediately. Use shell.status to check progress.",
+            description: "If true, run as background job and return job_id and pid immediately. Use shell.status to check progress.",
+          },
+          long_running: {
+            type: "boolean",
+            description: "For async jobs only. If true, disable the project timeout so the job can run longer than the normal maximum until it exits or is canceled.",
           },
         },
         required: ["command"],
@@ -135,10 +139,15 @@ export function buildToolDefinitions() {
         properties: {
           job_id: {
             type: "string",
-            description: "The job ID to cancel.",
+            description: "The managed job ID to cancel.",
+          },
+          pid: {
+            type: "integer",
+            minimum: 1,
+            description: "PID returned by shell.run. Only PIDs belonging to active managed jobs can be canceled.",
           },
         },
-        required: ["job_id"],
+        anyOf: [{ required: ["job_id"] }, { required: ["pid"] }],
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },

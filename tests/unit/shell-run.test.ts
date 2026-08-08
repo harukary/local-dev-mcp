@@ -99,4 +99,18 @@ describe("handleShellRun", () => {
     expect(JSON.parse(result.content[0].text).error.code).toBe("FORBIDDEN_COMMAND");
     expect(shellRunner.run).not.toHaveBeenCalled();
   });
+  it("requires async mode for long-running jobs", async () => {
+    const contextStore = new ChatContextStore();
+    const ctx = {
+      registry: { has: () => true, get: () => undefined, getAll: () => [] },
+      contextStore,
+      shellRunner: { run: vi.fn() },
+      auditLogger: { log: vi.fn() },
+    } as unknown as AppContext;
+
+    const result = await handleShellRun(ctx, "chat-a", { command: "sleep 10", long_running: true });
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).error.code).toBe("INVALID_ARGUMENT");
+  });
+
 });
