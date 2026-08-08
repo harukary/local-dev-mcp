@@ -107,7 +107,11 @@ export async function handleShellRun(
     risk.level,
     risk.reasons,
     args.purpose,
-    { async: args.async, timeoutSeconds: args.timeout_seconds, longRunning: args.long_running }
+    {
+      async: args.async,
+      timeoutSeconds: args.timeout_seconds,
+      longRunning: args.long_running ?? (args.async === true && args.timeout_seconds === undefined),
+    }
   );
 
   if (approval.required) {
@@ -157,7 +161,8 @@ export async function handleShellRun(
   ctx.contextStore.recordShellRun(chatContextId);
 
   if (args.async) {
-    const result = startJob(project, args.command, args.purpose, args.timeout_seconds, args.long_running ?? false);
+    const longRunning = args.long_running ?? args.timeout_seconds === undefined;
+    const result = startJob(project, args.command, args.purpose, args.timeout_seconds, longRunning);
 
     if ("error" in result) {
       return {

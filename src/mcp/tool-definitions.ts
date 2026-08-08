@@ -105,11 +105,11 @@ export function buildToolDefinitions() {
           },
           async: {
             type: "boolean",
-            description: "If true, run as background job and return job_id and pid immediately. Use shell.status to check progress.",
+            description: "If true, run as a managed background job and return job_id and pid immediately. With no timeout_seconds, async jobs run until completion or cancellation.",
           },
           long_running: {
             type: "boolean",
-            description: "For async jobs only. If true, disable the project timeout so the job can run longer than the normal maximum until it exits or is canceled.",
+            description: "For async jobs only. Explicitly disable the timeout even when timeout_seconds is supplied.",
           },
         },
         required: ["command"],
