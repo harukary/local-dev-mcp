@@ -1,7 +1,30 @@
-import { describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, it, expect } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 
+let tmpRoot = "";
+
+afterEach(() => {
+  if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
+  tmpRoot = "";
+});
+
 describe("ChatContextStore", () => {
+  it("restores the selected project for the same ChatGPT conversation", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-context-"));
+    const persistencePath = join(tmpRoot, "chat-contexts.json");
+    const first = new ChatContextStore(persistencePath);
+    first.setCurrentProject("chatgpt-session:conv_123", "alpha");
+    await first.save();
+
+    const restored = new ChatContextStore(persistencePath);
+    await restored.load();
+
+    expect(restored.getCurrentProject("chatgpt-session:conv_123")).toBe("alpha");
+  });
+
   it("creates a new context on getOrCreate", () => {
     const store = new ChatContextStore();
     const ctx = store.getOrCreate("chat_1");

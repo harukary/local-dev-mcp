@@ -16,8 +16,24 @@ type MobileDevice = {
   state?: string;
 };
 
-function jsonResult(value: unknown) {
-  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+type ImageContent = { type: "image"; data: string; mimeType: string };
+type JsonResult = {
+  structuredContent: unknown;
+  content: [{ type: "text"; text: string }, ...ImageContent[]];
+};
+
+function jsonResult(value: unknown, imageContent: ImageContent[] = []): JsonResult {
+  return {
+    structuredContent: value,
+    content: [{ type: "text", text: JSON.stringify(value, null, 2) }, ...imageContent],
+  };
+}
+
+function extractImageContent(result: { content: Array<{ type: string; data?: string; mimeType?: string }> }): ImageContent[] {
+  const image = result.content.find(
+    (item) => item.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string"
+  );
+  return image ? [{ type: "image", data: image.data!, mimeType: image.mimeType! }] : [];
 }
 
 function jsonError(code: string, message: string, details?: unknown) {
@@ -170,6 +186,7 @@ export async function handleMobileScreenshot(ctx: AppContext, chatContextId: str
     const imageResult = await handleImageRead(ctx, chatContextId, { path: screenshot.relativePath });
     const imageText = imageResult.content[0]?.type === "text" ? imageResult.content[0].text : "{}";
     const screenshotMetadata = JSON.parse(String(imageText || "{}"));
+    const imageContent = extractImageContent(imageResult);
     return jsonResult({
       ok: true,
       project_id: project.projectId,
@@ -177,7 +194,7 @@ export async function handleMobileScreenshot(ctx: AppContext, chatContextId: str
       device,
       screenshot: screenshotMetadata,
       image_read: { path: screenshot.relativePath },
-    });
+    }, imageContent);
   } catch (err) {
     return jsonError("MOBILE_SCREENSHOT_FAILED", err instanceof Error ? err.message : String(err), { device });
   }
@@ -203,6 +220,7 @@ async function screenshotPayload(ctx: AppContext, chatContextId: string, project
   const imageResult = await handleImageRead(ctx, chatContextId, { path: screenshot.relativePath });
   const imageText = imageResult.content[0]?.type === "text" ? imageResult.content[0].text : "{}";
   const screenshotMetadata = JSON.parse(String(imageText || "{}"));
+  const imageContent = extractImageContent(imageResult);
   return jsonResult({
     ok: true,
     project_id: project.projectId,
@@ -211,7 +229,7 @@ async function screenshotPayload(ctx: AppContext, chatContextId: string, project
     ...extra,
     screenshot: screenshotMetadata,
     image_read: { path: screenshot.relativePath },
-  });
+  }, imageContent);
 }
 
 async function observeOrJson(ctx: AppContext, chatContextId: string, project: ProjectConfig, device: MobileDevice, action: string, observe: MobileObserve | undefined, payload: Record<string, unknown>) {

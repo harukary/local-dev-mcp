@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -19,6 +20,7 @@ type BrowserObserve = "none" | "after";
 type BrowserSession = {
   session_id: string;
   project_id: string;
+  chat_context_id?: string;
   port: number;
   profile_dir: string;
   pid?: number;
@@ -35,8 +37,24 @@ type ChromeTarget = {
   webSocketDebuggerUrl?: string;
 };
 
-function jsonResult(value: unknown) {
-  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+type ImageContent = { type: "image"; data: string; mimeType: string };
+type JsonResult = {
+  structuredContent: unknown;
+  content: [{ type: "text"; text: string }, ...ImageContent[]];
+};
+
+function jsonResult(value: unknown, imageContent: ImageContent[] = []): JsonResult {
+  return {
+    structuredContent: value,
+    content: [{ type: "text", text: JSON.stringify(value, null, 2) }, ...imageContent],
+  };
+}
+
+function extractImageContent(result: { content: Array<{ type: string; data?: string; mimeType?: string }> }): ImageContent[] {
+  const image = result.content.find(
+    (item) => item.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string"
+  );
+  return image ? [{ type: "image", data: image.data!, mimeType: image.mimeType! }] : [];
 }
 
 function jsonError(code: string, message: string, details?: unknown) {
@@ -119,13 +137,25 @@ async function removeSession(sessionId: string) {
   await writeSessions((await readSessions()).filter((session) => session.session_id !== sessionId));
 }
 
-async function findFreePort(): Promise<number> {
-  const used = new Set((await readSessions()).map((session) => session.port));
+async function findFreePort(restartingSessionId?: string): Promise<number> {
+  const used = new Set(
+    (await readSessions())
+      .filter((session) => session.session_id !== restartingSessionId)
+      .map((session) => session.port)
+  );
   for (let port = PORT_MIN; port <= PORT_MAX; port += 1) {
     if (used.has(port)) continue;
     if (await canListen(port)) return port;
   }
   throw new Error(`No free browser port in range ${PORT_MIN}-${PORT_MAX}`);
+}
+
+export function browserSessionIdForContext(chatContextId: string, projectId: string): string {
+  const digest = createHash("sha256")
+    .update(`${chatContextId}\0${projectId}`)
+    .digest("hex")
+    .slice(0, 20);
+  return `conversation-${digest}`;
 }
 
 function canListen(port: number): Promise<boolean> {
@@ -134,6 +164,16 @@ function canListen(port: number): Promise<boolean> {
     server.once("error", () => resolve(false));
     server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
   });
+}
+
+function isPidAlive(pid: number | undefined): boolean {
+  if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function sleep(ms: number) {
@@ -180,9 +220,8 @@ async function getSession(ctx: AppContext, chatContextId: string, sessionId?: st
   if ("error" in project) return project;
   const sessions = await readSessions();
   const candidates = sessions.filter((session) => session.project_id === project.projectId);
-  const session = sessionId
-    ? candidates.find((candidate) => candidate.session_id === sessionId)
-    : candidates.at(-1);
+  const resolvedSessionId = sessionId ?? browserSessionIdForContext(chatContextId, project.projectId);
+  const session = candidates.find((candidate) => candidate.session_id === resolvedSessionId);
   if (!session) return { error: jsonError("BROWSER_SESSION_NOT_FOUND", "No browser session found. Call browser.start first.", { session_id: sessionId }) };
   try {
     await waitForCdp(session.port, 1200);
@@ -300,6 +339,7 @@ async function captureCdpScreenshot(ctx: AppContext, chatContextId: string, proj
   const imageResult = await imageRead.handleImageRead(ctx, chatContextId, { path: output.relativePath });
   const imageText = imageResult.content[0]?.type === "text" ? imageResult.content[0].text : "{}";
   const screenshotMetadata = JSON.parse(String(imageText || "{}"));
+  const imageContent = extractImageContent(imageResult);
   return jsonResult({
     ok: true,
     project_id: project.projectId,
@@ -309,7 +349,7 @@ async function captureCdpScreenshot(ctx: AppContext, chatContextId: string, proj
     ...extra,
     screenshot: screenshotMetadata,
     image_read: { path: output.relativePath },
-  });
+  }, imageContent);
 }
 
 async function ensureSession(ctx: AppContext, chatContextId: string, url?: string, sessionId?: string): Promise<BrowserSession | { error: ReturnType<typeof jsonError> }> {
@@ -346,9 +386,38 @@ export async function handleBrowserStart(ctx: AppContext, chatContextId: string,
   if (!chrome.available || !chrome.executable_path) return jsonError("BROWSER_NOT_FOUND", "Chrome/Chromium executable not found.", { candidates: chrome.candidates });
   const url = args.url ? validateHttpUrl(args.url) ?? undefined : undefined;
   if (args.url && !url) return jsonError("INVALID_URL", "browser.start url must be http or https.");
-  const sessionId = args.session_id || `browser-${Date.now()}`;
-  const port = await findFreePort();
-  const profileDir = join(BROWSER_HOME, "profiles", project.projectId, sessionId);
+  const sessionId = args.session_id ?? browserSessionIdForContext(chatContextId, project.projectId);
+  const previous = (await readSessions()).find(
+    (session) => session.project_id === project.projectId && session.session_id === sessionId
+  );
+  if (previous) {
+    try {
+      const version = await waitForCdp(previous.port, 1200);
+      return jsonResult({
+        ok: true,
+        project_id: project.projectId,
+        action: "browser.start",
+        status: "already_running",
+        session_id: previous.session_id,
+        port: previous.port,
+        pid: previous.pid,
+        profile_dir: previous.profile_dir,
+        url: previous.url,
+        browser: version.Browser,
+      });
+    } catch {
+      // The process is gone; restart below with the same session and profile.
+    }
+    if (isPidAlive(previous.pid)) {
+      return jsonError(
+        "BROWSER_SESSION_UNREACHABLE",
+        "The browser process is still alive but its DevTools endpoint is unreachable.",
+        { session_id: previous.session_id, port: previous.port, pid: previous.pid }
+      );
+    }
+  }
+  const port = await findFreePort(previous?.session_id);
+  const profileDir = previous?.profile_dir ?? join(BROWSER_HOME, "profiles", project.projectId, sessionId);
   await mkdir(profileDir, { recursive: true });
   const child = spawn(chrome.executable_path, [
     `--remote-debugging-port=${port}`,
@@ -361,9 +430,30 @@ export async function handleBrowserStart(ctx: AppContext, chatContextId: string,
   child.unref();
   const version = await waitForCdp(port, 10_000);
   const now = new Date().toISOString();
-  const session: BrowserSession = { session_id: sessionId, project_id: project.projectId, port, profile_dir: profileDir, pid: child.pid, created_at: now, updated_at: now, url };
+  const session: BrowserSession = {
+    session_id: sessionId,
+    project_id: project.projectId,
+    chat_context_id: chatContextId,
+    port,
+    profile_dir: profileDir,
+    pid: child.pid,
+    created_at: previous?.created_at ?? now,
+    updated_at: now,
+    url: url ?? previous?.url,
+  };
   await saveSession(session);
-  return jsonResult({ ok: true, project_id: project.projectId, session_id: sessionId, port, pid: child.pid, profile_dir: profileDir, url, browser: version.Browser });
+  return jsonResult({
+    ok: true,
+    project_id: project.projectId,
+    action: "browser.start",
+    status: previous ? "restarted" : "started",
+    session_id: sessionId,
+    port,
+    pid: child.pid,
+    profile_dir: profileDir,
+    url: session.url,
+    browser: version.Browser,
+  });
 }
 
 export async function handleBrowserSessions(ctx: AppContext, chatContextId: string) {

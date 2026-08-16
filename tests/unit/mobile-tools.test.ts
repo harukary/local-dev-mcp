@@ -62,6 +62,7 @@ describe("mobile tools", () => {
     const body = payload(result);
 
     expect(body.project_id).toBe("alpha");
+    expect(result.structuredContent).toEqual(body);
     expect(body.backends).toMatchObject({
       ios_simctl: { available: expect.any(Boolean) },
       android_adb: { available: expect.any(Boolean) },
@@ -78,6 +79,7 @@ describe("mobile tools", () => {
     const body = payload(result);
 
     expect(body.project_id).toBe("alpha");
+    expect(result.structuredContent).toEqual(body);
     expect(Array.isArray(body.devices)).toBe(true);
   });
 

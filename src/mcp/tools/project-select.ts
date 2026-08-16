@@ -30,6 +30,7 @@ export async function handleProjectSelect(
   }
 
   ctx.contextStore.setCurrentProject(chatContextId, projectId);
+  await ctx.contextStore.save();
 
   const entry: AuditLogEntry = {
     timestamp: new Date().toISOString(),

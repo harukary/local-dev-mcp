@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { handleBrowserOpen, handleBrowserStatus } from "../../src/mcp/tools/browser.js";
+import { browserSessionIdForContext, handleBrowserOpen, handleBrowserStatus } from "../../src/mcp/tools/browser.js";
 
 let tmpRoot = "";
 
@@ -53,6 +53,14 @@ function payload(result: { content: Array<{ text?: string }> }) {
 }
 
 describe("browser tools", () => {
+  it("keeps the default browser session stable within one ChatGPT conversation and project", () => {
+    const first = browserSessionIdForContext("chatgpt-session:conv_123", "alpha");
+
+    expect(browserSessionIdForContext("chatgpt-session:conv_123", "alpha")).toBe(first);
+    expect(browserSessionIdForContext("chatgpt-session:conv_456", "alpha")).not.toBe(first);
+    expect(browserSessionIdForContext("chatgpt-session:conv_123", "beta")).not.toBe(first);
+  });
+
   it("reports isolated CDP browser backend status", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-browser-"));
     const ctx = createContext(createProject(tmpRoot));
@@ -61,6 +69,7 @@ describe("browser tools", () => {
     const body = payload(result);
 
     expect(body.project_id).toBe("alpha");
+    expect(result.structuredContent).toEqual(body);
     expect(body.backend).toBe("chrome-devtools-protocol");
     expect(typeof body.chrome_available).toBe("boolean");
     expect(body.port_range).toMatchObject({ min: expect.any(Number), max: expect.any(Number) });

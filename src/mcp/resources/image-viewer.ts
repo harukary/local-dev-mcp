@@ -1,4 +1,5 @@
-const IMAGE_VIEWER_URI = "ui://local-dev-mcp/image-viewer.html";
+const IMAGE_VIEWER_URI = "ui://local-dev-mcp/image-viewer/v2.html";
+export const IMAGE_VIEWER_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 export function imageViewerResourceUri(): string {
   return IMAGE_VIEWER_URI;
@@ -31,7 +32,7 @@ export function imageViewerMeta() {
 export function imageViewerResource() {
   return {
     uri: IMAGE_VIEWER_URI,
-    mimeType: "text/html+skybridge",
+    mimeType: IMAGE_VIEWER_RESOURCE_MIME_TYPE,
     text: imageViewerHtml(),
     _meta: imageViewerMeta(),
   };
@@ -143,8 +144,20 @@ function imageViewerHtml(): string {
       };
     }
 
+    function normalizeOutput(value) {
+      let output = value && typeof value === "object" ? value : {};
+      if (output.structuredContent && typeof output.structuredContent === "object") {
+        output = output.structuredContent;
+      }
+      if (output.screenshot && typeof output.screenshot === "object") {
+        output = { ...output, ...output.screenshot };
+      }
+      return output;
+    }
+
     function readOutput(toolResult) {
-      return toolResult.structuredContent || (window.openai && window.openai.toolOutput) || {};
+      const bridge = window.openai || {};
+      return normalizeOutput(toolResult?.structuredContent || bridge.toolOutput || {});
     }
 
     function findImageSource(toolResult, output) {

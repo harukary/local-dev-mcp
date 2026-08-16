@@ -14,7 +14,7 @@ import {
   sanitizeRequestUrlForLog,
 } from "../../src/mcp/server.js";
 import { buildToolSchemaSnapshot } from "../../src/mcp/tool-definitions.js";
-import { imageViewerMeta, imageViewerResource, imageViewerResourceUri } from "../../src/mcp/resources/image-viewer.js";
+import { imageViewerMeta, imageViewerResource, imageViewerResourceUri, IMAGE_VIEWER_RESOURCE_MIME_TYPE } from "../../src/mcp/resources/image-viewer.js";
 
 describe("resolveChatContextId", () => {
   it("uses openai/session when present", () => {
@@ -229,12 +229,13 @@ describe("image viewer resource", () => {
   it("exposes an Apps SDK HTML component for image.read output", () => {
     const resource = imageViewerResource();
 
-    expect(resource.uri).toBe("ui://local-dev-mcp/image-viewer.html");
-    expect(resource.mimeType).toBe("text/html+skybridge");
+    expect(resource.uri).toBe("ui://local-dev-mcp/image-viewer/v2.html");
+    expect(resource.mimeType).toBe(IMAGE_VIEWER_RESOURCE_MIME_TYPE);
     expect(resource.text).toContain('document.createElement("img")');
     expect(resource.text).toContain("ui/notifications/tool-result");
     expect(resource.text).toContain('item.type === "image"');
     expect(resource.text).toContain('"data:" + mimeType + ";base64," + image.data');
+    expect(resource.text).toContain("output.screenshot");
     expect(resource._meta).toMatchObject({
       ui: {
         prefersBorder: true,

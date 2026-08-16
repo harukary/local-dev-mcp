@@ -1,4 +1,6 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -37,7 +39,7 @@ import { personalOAuthProvider, tokenStore, AUTH_PASSPHRASE } from "./oauth-prov
 import { handleProjectReload } from "./tools/project-reload.js";
 import { handleSkillsList, handleSkillsRead } from "./tools/skills.js";
 import { buildToolDefinitions, buildToolSchemaSnapshot } from "./tool-definitions.js";
-import { imageViewerMeta, imageViewerResource, imageViewerResourceUri } from "./resources/image-viewer.js";
+import { imageViewerMeta, imageViewerResource, imageViewerResourceUri, IMAGE_VIEWER_RESOURCE_MIME_TYPE } from "./resources/image-viewer.js";
 import { handleProjectInspect } from "./tools/dev/project-inspect.js";
 import { handleWorkspaceRead } from "./tools/dev/workspace-read.js";
 import { handleWorkspaceList } from "./tools/dev/workspace-list.js";
@@ -115,7 +117,10 @@ async function createAppContext(configPath: string): Promise<AppContext> {
   const { AuditLogger } = await import("../audit/audit-log.js");
 
   const registry = await ProjectRegistry.load(configPath);
-  const contextStore = new ChatContextStore();
+  const runtimeDir = join(homedir(), ".local-dev-mcp", "runtime");
+  await mkdir(runtimeDir, { recursive: true });
+  const contextStore = new ChatContextStore(join(runtimeDir, "chat-contexts.json"));
+  await contextStore.load();
   const shellRunner = new ShellRunner();
   const auditLogger = new AuditLogger("./logs/audit.jsonl");
 
@@ -334,7 +339,11 @@ function createMcpServer(ctx: AppContext): Server {
           };
 
         case "image.read":
-          return await handleImageRead(ctx, chatContextId, args as { path?: string });
+          return await handleImageRead(
+            ctx,
+            chatContextId,
+            args as { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }
+          );
 
         case "download.link":
           return await handleDownloadLink(ctx, chatContextId, args as { path?: string; ttl_seconds?: number; filename?: string });
@@ -371,7 +380,7 @@ function createMcpServer(ctx: AppContext): Server {
       {
         uri: imageViewerResourceUri(),
         name: "Image Viewer",
-        mimeType: "text/html+skybridge",
+        mimeType: IMAGE_VIEWER_RESOURCE_MIME_TYPE,
       },
     ];
     for (const p of projects) {
@@ -395,7 +404,7 @@ function createMcpServer(ctx: AppContext): Server {
         uriTemplate: imageViewerResourceUri(),
         name: "Image Viewer",
         description: "Image viewer widget markup for image.read results",
-        mimeType: "text/html+skybridge",
+        mimeType: IMAGE_VIEWER_RESOURCE_MIME_TYPE,
         _meta: imageViewerMeta(),
       },
     ],
