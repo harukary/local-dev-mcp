@@ -117,7 +117,7 @@ print(json.dumps(out))
 describe("haruclaw Todo MCP tools", () => {
   it("publishes the dedicated Todo tool surface", () => {
     const names = buildToolDefinitions().map((tool) => tool.name);
-    expect(TOOL_SCHEMA_VERSION).toBe("2026-08-04.1");
+    expect(TOOL_SCHEMA_VERSION).toBe("2026-08-19.1");
     expect(names).toEqual(expect.arrayContaining([
       "todo.projects",
       "todo.list",

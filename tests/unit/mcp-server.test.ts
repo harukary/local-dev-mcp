@@ -196,6 +196,7 @@ describe("tool schema snapshot", () => {
     const snapshot = buildToolSchemaSnapshot();
     const shellRun = snapshot.tools.find((tool) => tool.name === "shell.run");
     const imageRead = snapshot.tools.find((tool) => tool.name === "image.read");
+    const imageShow = snapshot.tools.find((tool) => tool.name === "image.show");
     const downloadLink = snapshot.tools.find((tool) => tool.name === "download.link");
     const skillsList = snapshot.tools.find((tool) => tool.name === "skills.list");
     const skillsRead = snapshot.tools.find((tool) => tool.name === "skills.read");
@@ -212,11 +213,15 @@ describe("tool schema snapshot", () => {
       type: "object",
       required: ["path"],
     });
-    expect(imageRead?._meta).toMatchObject({
+    expect(imageRead?._meta).toBeUndefined();
+    expect(imageShow?._meta).toMatchObject({
       ui: { resourceUri: imageViewerResourceUri() },
       "openai/outputTemplate": imageViewerResourceUri(),
       "openai/widgetAccessible": true,
     });
+    for (const name of ["browser.click", "browser.open", "mobile.screenshot", "mobile.tap"]) {
+      expect(snapshot.tools.find((tool) => tool.name === name)?._meta).toBeUndefined();
+    }
     expect(shellRun?.annotations).toMatchObject({
       readOnlyHint: true,
       destructiveHint: false,
@@ -226,16 +231,16 @@ describe("tool schema snapshot", () => {
 });
 
 describe("image viewer resource", () => {
-  it("exposes an Apps SDK HTML component for image.read output", () => {
+  it("exposes the legacy Skybridge image viewer for image.show output", () => {
     const resource = imageViewerResource();
 
-    expect(resource.uri).toBe("ui://local-dev-mcp/image-viewer/v2.html");
+    expect(resource.uri).toBe("ui://local-dev-mcp/image-viewer.html");
+    expect(resource.mimeType).toBe("text/html+skybridge");
     expect(resource.mimeType).toBe(IMAGE_VIEWER_RESOURCE_MIME_TYPE);
     expect(resource.text).toContain('document.createElement("img")');
     expect(resource.text).toContain("ui/notifications/tool-result");
     expect(resource.text).toContain('item.type === "image"');
     expect(resource.text).toContain('"data:" + mimeType + ";base64," + image.data');
-    expect(resource.text).toContain("output.screenshot");
     expect(resource._meta).toMatchObject({
       ui: {
         prefersBorder: true,
@@ -243,7 +248,7 @@ describe("image viewer resource", () => {
           resourceDomains: expect.arrayContaining([expect.stringMatching(/^https?:\/\//)]),
         },
       },
-      "openai/widgetDescription": expect.stringContaining("image.read"),
+      "openai/widgetDescription": expect.stringContaining("image.show"),
       "openai/widgetPrefersBorder": true,
       "openai/outputTemplate": imageViewerResourceUri(),
       "openai/widgetAccessible": true,

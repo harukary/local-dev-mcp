@@ -1,5 +1,5 @@
-const IMAGE_VIEWER_URI = "ui://local-dev-mcp/image-viewer/v2.html";
-export const IMAGE_VIEWER_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+const IMAGE_VIEWER_URI = "ui://local-dev-mcp/image-viewer.html";
+export const IMAGE_VIEWER_RESOURCE_MIME_TYPE = "text/html+skybridge";
 
 export function imageViewerResourceUri(): string {
   return IMAGE_VIEWER_URI;
@@ -20,7 +20,7 @@ export function imageViewerMeta() {
     "openai/toolInvocation/invoking": "Loading image",
     "openai/toolInvocation/invoked": "Image loaded",
     "openai/widgetAccessible": true,
-    "openai/widgetDescription": "Displays an image returned by image.read with basic file metadata.",
+    "openai/widgetDescription": "Displays an image returned by image.show with basic file metadata.",
     "openai/widgetPrefersBorder": true,
     "openai/widgetCSP": {
       connect_domains: [publicOrigin],
@@ -144,20 +144,8 @@ function imageViewerHtml(): string {
       };
     }
 
-    function normalizeOutput(value) {
-      let output = value && typeof value === "object" ? value : {};
-      if (output.structuredContent && typeof output.structuredContent === "object") {
-        output = output.structuredContent;
-      }
-      if (output.screenshot && typeof output.screenshot === "object") {
-        output = { ...output, ...output.screenshot };
-      }
-      return output;
-    }
-
     function readOutput(toolResult) {
-      const bridge = window.openai || {};
-      return normalizeOutput(toolResult?.structuredContent || bridge.toolOutput || {});
+      return toolResult.structuredContent || (window.openai && window.openai.toolOutput) || {};
     }
 
     function findImageSource(toolResult, output) {

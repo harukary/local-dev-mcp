@@ -28,7 +28,7 @@ import { handleProjectList } from "./tools/project-list.js";
 import { handleProjectSelect } from "./tools/project-select.js";
 import { handleProjectCurrent } from "./tools/project-current.js";
 import { handleShellRun } from "./tools/shell-run.js";
-import { getCachedImage, handleImageRead } from "./tools/image-read.js";
+import { getCachedImage, handleImageRead, handleImageShow } from "./tools/image-read.js";
 import { getCachedDownload, handleDownloadLink } from "./tools/download-link.js";
 import { handleShellApprove, handleShellReject } from "./tools/shell-approval.js";
 import { handleShellStatus } from "./tools/shell-status.js";
@@ -358,6 +358,13 @@ function createMcpServer(ctx: AppContext): Server {
 
         case "image.read":
           return await handleImageRead(
+            ctx,
+            chatContextId,
+            args as { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }
+          );
+
+        case "image.show":
+          return await handleImageShow(
             ctx,
             chatContextId,
             args as { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }

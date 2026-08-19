@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-08-04.1";
+export const TOOL_SCHEMA_VERSION = "2026-08-19.1";
 
 export function buildToolDefinitions() {
   return [
@@ -191,7 +191,55 @@ export function buildToolDefinitions() {
     {
       name: "image.read",
       description:
-        "Read an image file from the selected project and return image content plus metadata. Path must stay inside the project root.",
+        "Read an image file from the selected project for model inspection and return image content plus metadata without rendering the custom image viewer to the user. Path must stay inside the project root.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Project-relative image path, or an absolute path inside the selected project root.",
+          },
+          mode: {
+            type: "string",
+            enum: ["preview", "full", "metadata"],
+            description: "Inline image return mode. preview is the default and downscales large images to avoid oversized tool results.",
+          },
+          max_preview_edge: {
+            type: "number",
+            minimum: 240,
+            maximum: 2000,
+            description: "Maximum width or height for preview mode. Defaults to 900.",
+          },
+        },
+        required: ["path"],
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          path: { type: "string" },
+          absolute_path: { type: "string" },
+          mime_type: { type: "string" },
+          size_bytes: { type: "number" },
+          width: { type: "number" },
+          height: { type: "number" },
+          returned_image_mode: { type: "string" },
+          returned_image_mime_type: { type: "string" },
+          returned_image_size_bytes: { type: "number" },
+          returned_image_width: { type: "number" },
+          returned_image_height: { type: "number" },
+          display_url: { type: "string" },
+          display_expires_at: { type: "string" },
+          markdown: { type: "string" },
+        },
+        required: ["project_id", "path", "absolute_path", "mime_type", "size_bytes", "display_url", "display_expires_at", "markdown"],
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    {
+      name: "image.show",
+      description:
+        "Display an image to the user with the inline image viewer while also returning image content plus metadata to the model. Use this only when the image should be visibly shown in chat; use image.read for model-only inspection.",
       _meta: imageViewerMeta(),
       inputSchema: {
         type: "object",

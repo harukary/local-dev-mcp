@@ -37,6 +37,23 @@ export async function handleImageRead(
   chatContextId: string,
   args: { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }
 ) {
+  return await handleImage(ctx, chatContextId, args, false);
+}
+
+export async function handleImageShow(
+  ctx: AppContext,
+  chatContextId: string,
+  args: { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }
+) {
+  return await handleImage(ctx, chatContextId, args, true);
+}
+
+async function handleImage(
+  ctx: AppContext,
+  chatContextId: string,
+  args: { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number },
+  showViewer: boolean
+) {
   if (!args?.path) {
     return {
       content: [{ type: "text", text: "Missing required argument: path" }],
@@ -123,20 +140,16 @@ export async function handleImageRead(
   await ctx.auditLogger.log({
     timestamp: new Date().toISOString(),
     chatContextId,
-    tool: "image.read",
-    event: "image_read",
+    tool: showViewer ? "image.show" : "image.read",
+    event: showViewer ? "image_show" : "image_read",
     projectId: project.projectId,
     cwd: project.hostRoot,
     command: args.path,
     enforcement: "audit_only",
   });
 
-  return {
+  const result = {
     structuredContent: metadata,
-    _meta: {
-      ...imageViewerMeta(),
-      ...metadata,
-    },
     content: [
       {
         type: "text",
@@ -150,6 +163,15 @@ export async function handleImageRead(
           }]
         : []),
     ],
+  };
+
+  if (!showViewer) return result;
+  return {
+    ...result,
+    _meta: {
+      ...imageViewerMeta(),
+      ...metadata,
+    },
   };
 }
 

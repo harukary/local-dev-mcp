@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
-import { clearImageCacheForTests, getCachedImage, handleImageRead } from "../../src/mcp/tools/image-read.js";
+import { clearImageCacheForTests, getCachedImage, handleImageRead, handleImageShow } from "../../src/mcp/tools/image-read.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
 
@@ -88,12 +88,7 @@ describe("handleImageRead", () => {
       display_url: metadata.display_url,
       path: "assets/sample.png",
     });
-    expect(result._meta).toMatchObject({
-      "openai/outputTemplate": "ui://local-dev-mcp/image-viewer/v2.html",
-      "openai/widgetAccessible": true,
-      display_url: metadata.display_url,
-      path: "assets/sample.png",
-    });
+    expect(result._meta).toBeUndefined();
     const cacheId = metadata.display_url.split("/").at(-1);
     expect(getCachedImage(cacheId)?.mimeType).toBe("image/png");
     expect(result.content[1]).toMatchObject({
@@ -101,6 +96,30 @@ describe("handleImageRead", () => {
       mimeType: "image/png",
     });
     expect(result.content[1].data).toBe(createPng(2, 3).toString("base64"));
+  });
+
+  it("only attaches the user-facing viewer for image.show", async () => {
+    previousPublicOrigin = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
+    process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = "https://public.example.test/base";
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
+    mkdirSync(join(tmpRoot, "assets"));
+    writeFileSync(join(tmpRoot, "assets", "sample.png"), createPng(2, 3));
+    const project = createProject(tmpRoot);
+    const { ctx } = createContext(project);
+
+    const result = await handleImageShow(ctx, "chat-a", { path: "assets/sample.png" });
+    const metadata = JSON.parse(result.content[0].text);
+
+    expect(result._meta).toMatchObject({
+      "openai/outputTemplate": "ui://local-dev-mcp/image-viewer.html",
+      "openai/widgetAccessible": true,
+      display_url: metadata.display_url,
+      path: "assets/sample.png",
+    });
+    expect(result.content[1]).toMatchObject({
+      type: "image",
+      mimeType: "image/png",
+    });
   });
 
   it("can return metadata without inline image bytes", async () => {
