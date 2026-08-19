@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { handleMobileListDevices, handleMobileOpenUrl, handleMobileScreenshot, handleMobileStatus, handleMobileTap, handleMobileType } from "../../src/mcp/tools/mobile.js";
+import { handleMobileLaunchApp, handleMobileListDevices, handleMobileOpenUrl, handleMobilePress, handleMobileScreenshot, handleMobileStatus, handleMobileSwipe, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileWait } from "../../src/mcp/tools/mobile.js";
 
 let tmpRoot = "";
 
@@ -65,7 +65,9 @@ describe("mobile tools", () => {
     expect(result.structuredContent).toEqual(body);
     expect(body.backends).toMatchObject({
       ios_simctl: { available: expect.any(Boolean) },
+      ios_physical_agent_device: { available: expect.any(Boolean) },
       android_adb: { available: expect.any(Boolean) },
+      android_agent_device: { available: expect.any(Boolean) },
     });
     expect(Array.isArray(body.devices)).toBe(true);
     expect(body.artifact_dir).toBe("generated/local-dev-mcp/mobile");
@@ -106,6 +108,20 @@ describe("mobile tools", () => {
 
     const missingText = await handleMobileType(ctx, "chat-a", {});
     expect(payload(missingText).error.code).toBe("MISSING_TEXT");
-  });
 
+    const missingElement = await handleMobileTapElement(ctx, "chat-a", {});
+    expect(payload(missingElement).error.code).toBe("MISSING_TARGET");
+
+    const missingApp = await handleMobileLaunchApp(ctx, "chat-a", {});
+    expect(payload(missingApp).error.code).toBe("MISSING_APP");
+
+    const invalidSwipe = await handleMobileSwipe(ctx, "chat-a", { x1: 1, y1: 2, x2: undefined, y2: 4 });
+    expect(payload(invalidSwipe).error.code).toBe("INVALID_COORDINATES");
+
+    const invalidPress = await handleMobilePress(ctx, "chat-a", { key: undefined });
+    expect(payload(invalidPress).error.code).toBe("INVALID_KEY");
+
+    const missingWaitTarget = await handleMobileWait(ctx, "chat-a", {});
+    expect(payload(missingWaitTarget).error.code).toBe("MISSING_TARGET");
+  });
 });

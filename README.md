@@ -75,8 +75,16 @@ This means routine reads can stay smooth, while writes and network/dependency op
 - Skills discovery and read tools for ChatGPT (`skills.list`, then `skills.read`)
 - Shell command execution with risk classification and approval flow
 - Git diff/status helpers
-- Browser, mobile simulator, and image read helpers
+- Browser, mobile simulator/physical-device, and image read helpers
 - OAuth-protected HTTP transport for ChatGPT Apps style clients
+
+## Physical mobile automation
+
+Physical iOS devices are discovered and operated through `agent-device` with Appium/XCUITest. `mobile.status` reports whether that backend is available. The device must be paired with the Mac and have Developer Mode enabled. UI-reading operations such as `mobile.snapshot`, `mobile.screenshot`, element taps, typing, and swipes also require the installed Xcode to contain device support compatible with the iOS version running on the device. App launch and device discovery may still work when that XCTest runner prerequisite is not met.
+
+Android devices are discovered through ADB. local-dev-mcp resolves `adb` from PATH, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or the standard macOS Android SDK location. Accessibility snapshots, element taps, and waits use a dedicated `agent-device` Android session whose PATH is seeded with the resolved platform-tools directory, while screenshots and basic coordinate/input/navigation operations use ADB directly. Physical Android devices require USB debugging authorization.
+
+The mobile tool set includes device discovery, screenshots, accessibility snapshots, app launch, URL opening, coordinate and element taps, typing, swipes, Home/Back navigation, and waits. Prefer accessibility refs from `mobile.snapshot` over coordinate taps when possible.
 
 ## Setup
 

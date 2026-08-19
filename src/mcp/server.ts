@@ -49,7 +49,7 @@ import { handleGitStatus, handleGitDiff } from "./tools/dev/git.js";
 import { handleNotesCreate, handleNotesGuidelines, handleNotesValidate } from "./tools/notes/index.js";
 import { handlePrivateNotesCreate, handlePrivateNotesGuidelines, handlePrivateNotesValidate } from "./tools/private-notes/index.js";
 import { handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
-import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileBoot, handleMobileOpenUrl, handleMobileTap, handleMobileType } from "./tools/mobile.js";
+import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete, handleTodoDiscord } from "./tools/todo.js";
 
 export interface AppContext {
@@ -263,8 +263,14 @@ function createMcpServer(ctx: AppContext): Server {
         case "mobile.screenshot":
           return await handleMobileScreenshot(ctx, chatContextId, args as { device?: string });
 
+        case "mobile.snapshot":
+          return await handleMobileSnapshot(ctx, chatContextId, args as { device?: string; query?: string; limit?: number });
+
         case "mobile.boot":
           return await handleMobileBoot(ctx, chatContextId, args as { device?: string });
+
+        case "mobile.launch_app":
+          return await handleMobileLaunchApp(ctx, chatContextId, args as { device?: string; app?: string; observe?: "none" | "after" });
 
         case "mobile.open_url":
           return await handleMobileOpenUrl(ctx, chatContextId, args as { device?: string; url?: string; observe?: "none" | "after" });
@@ -272,8 +278,20 @@ function createMcpServer(ctx: AppContext): Server {
         case "mobile.tap":
           return await handleMobileTap(ctx, chatContextId, args as { device?: string; x?: number; y?: number; observe?: "none" | "after" });
 
+        case "mobile.tap_element":
+          return await handleMobileTapElement(ctx, chatContextId, args as { device?: string; target?: string; observe?: "none" | "after" });
+
         case "mobile.type":
           return await handleMobileType(ctx, chatContextId, args as { device?: string; text?: string; observe?: "none" | "after" });
+
+        case "mobile.swipe":
+          return await handleMobileSwipe(ctx, chatContextId, args as { device?: string; x1?: number; y1?: number; x2?: number; y2?: number; duration_ms?: number; observe?: "none" | "after" });
+
+        case "mobile.press":
+          return await handleMobilePress(ctx, chatContextId, args as { device?: string; key?: "home" | "back"; observe?: "none" | "after" });
+
+        case "mobile.wait":
+          return await handleMobileWait(ctx, chatContextId, args as { device?: string; target?: string; timeout_ms?: number });
 
         case "todo.projects":
           return await handleTodoProjects(ctx, args as { include_archived?: boolean });

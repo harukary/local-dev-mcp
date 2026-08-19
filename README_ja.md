@@ -75,8 +75,16 @@ ChatGPT は MCP tools の利用時に頻繁に確認・承認を求めること�
 - ChatGPT が使う Skills discovery / read tools（`skills.list` → `skills.read`）
 - Risk classification と approval flow 付き shell command execution
 - Git diff/status helpers
-- Browser、mobile simulator、image read helpers
+- Browser、mobile simulator / physical device、image read helpers
 - ChatGPT Apps style client 向け OAuth-protected HTTP transport
+
+## 物理モバイル端末の自動操作
+
+物理iOS端末は `agent-device` と Appium/XCUITest を使って検出・操作する。`mobile.status` でbackendの利用可否を確認できる。端末はMacとpairing済みで、Developer Modeが有効である必要がある。さらに `mobile.snapshot`、`mobile.screenshot`、要素tap、文字入力、swipeなどUI runnerを使う操作では、端末のiOSバージョンに対応するDeviceSupportを含むXcodeが必要になる。XCTest runnerの前提を満たさない場合でも、端末検出やアプリ起動までは利用できることがある。
+
+Android端末はADBで検出する。local-dev-mcpはPATH、`ANDROID_HOME`、`ANDROID_SDK_ROOT`、macOS標準のAndroid SDK配置から `adb` を解決する。accessibility snapshot、要素tap、waitは解決したplatform-toolsをPATHへ渡したAndroid専用 `agent-device` sessionを使い、screenshotや座標tap・入力・navigationはADBを直接使う。物理Android端末ではUSBデバッグの許可が必要。
+
+mobile toolsでは端末検出、screenshot、accessibility snapshot、アプリ起動、URL open、座標/要素tap、文字入力、swipe、Home/Back、waitを扱う。可能な場合は座標tapより `mobile.snapshot` が返すaccessibility refを優先する。
 
 ## セットアップ
 
