@@ -13,8 +13,10 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { TokenStore } from "./token-store.js";
+import { resolveAuthorizationScopes } from "./oauth-scopes.js";
+import { RefreshTokenRotator } from "./refresh-token-rotation.js";
 
-const authCodes = new Map<string, { challenge: string; clientId: string }>();
+const authCodes = new Map<string, { challenge: string; clientId: string; scopes: string[] }>();
 
 function issueToken(): string {
   return randomUUID();
@@ -34,6 +36,7 @@ export const AUTH_PASSPHRASE: string =
   process.env[LOCAL_DEV_MCP_PASSPHRASE_ENV] || randomUUID();
 
 export const tokenStore = new TokenStore();
+const refreshTokenRotator = new RefreshTokenRotator(tokenStore);
 
 export function getAccessTokenTtlSeconds(): number {
   const raw = process.env[LOCAL_DEV_MCP_ACCESS_TOKEN_TTL_SECONDS_ENV]?.trim();
@@ -95,9 +98,11 @@ export const personalOAuthProvider: OAuthServerProvider = {
     res: Response
   ): Promise<void> {
     const code = issueToken();
+    const scopes = resolveAuthorizationScopes(params.scopes);
     authCodes.set(code, {
       challenge: params.codeChallenge,
       clientId: client.client_id,
+      scopes,
     });
 
     const redirectUrl = new URL(params.redirectUri);
@@ -136,11 +141,12 @@ export const personalOAuthProvider: OAuthServerProvider = {
     const refreshToken = issueToken();
     const expiresIn = getAccessTokenTtlSeconds();
     const expiresAt = nowSeconds() + expiresIn;
+    const scopes = stored.scopes;
 
     tokenStore.setAccessToken(accessToken, {
       token: accessToken,
       clientId: client.client_id,
-      scopes: ["all"],
+      scopes,
       expiresAt,
     });
     tokenStore.setRefreshToken(refreshToken, accessToken);
@@ -150,42 +156,18 @@ export const personalOAuthProvider: OAuthServerProvider = {
       token_type: "Bearer",
       expires_in: expiresIn,
       refresh_token: refreshToken,
-      scope: "all",
+      scope: scopes.join(" "),
     };
   },
 
   async exchangeRefreshToken(
     client: OAuthClientInformationFull,
     refreshToken: string,
-    _scopes?: string[],
+    requestedScopes?: string[],
     _resource?: URL
   ): Promise<OAuthTokens> {
-    const accessTokenId = tokenStore.getRefreshToken(refreshToken);
-    if (!accessTokenId) {
-      throw new InvalidGrantError("Invalid refresh token");
-    }
-
-    const existing = tokenStore.getAccessToken(accessTokenId);
-    if (!existing || existing.clientId !== client.client_id) {
-      tokenStore.deleteRefreshToken(refreshToken);
-      throw new InvalidGrantError("Invalid refresh token");
-    }
-
-    tokenStore.deleteRefreshToken(refreshToken);
-    const newRefreshToken = issueToken();
-    tokenStore.setRefreshToken(newRefreshToken, accessTokenId);
-
     const expiresIn = getAccessTokenTtlSeconds();
-    const expiresAt = nowSeconds() + expiresIn;
-    tokenStore.setAccessToken(accessTokenId, { ...existing, expiresAt });
-
-    return {
-      access_token: accessTokenId,
-      token_type: "Bearer",
-      expires_in: expiresIn,
-      refresh_token: newRefreshToken,
-      scope: "all",
-    };
+    return refreshTokenRotator.exchange(client.client_id, refreshToken, requestedScopes, expiresIn);
   },
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
@@ -203,12 +185,10 @@ export const personalOAuthProvider: OAuthServerProvider = {
   },
 
   async revokeToken(
-    _client: OAuthClientInformationFull,
+    client: OAuthClientInformationFull,
     request: OAuthTokenRevocationRequest
   ): Promise<void> {
-    tokenStore.deleteAccessToken(request.token);
-    const rt = tokenStore.findRefreshTokenByAccessToken(request.token);
-    if (rt) tokenStore.deleteRefreshToken(rt);
+    refreshTokenRotator.revoke(client.client_id, request.token);
   },
 };
 

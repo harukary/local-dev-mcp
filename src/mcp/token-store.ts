@@ -39,12 +39,18 @@ export class TokenStore {
           this.accessTokens.set(k, v);
         }
       }
+      let removedOrphanRefreshToken = false;
       for (const [k, v] of Object.entries(data.refreshTokens)) {
-        this.refreshTokens.set(k, v);
+        if (this.accessTokens.has(v)) {
+          this.refreshTokens.set(k, v);
+        } else {
+          removedOrphanRefreshToken = true;
+        }
       }
       for (const [k, v] of Object.entries(data.clients)) {
         this.clients.set(k, v);
       }
+      if (removedOrphanRefreshToken) this.scheduleFlush();
     } catch {
       // corrupt file, start fresh
     }
@@ -112,6 +118,17 @@ export class TokenStore {
       if (at === accessTokenId) return rt;
     }
     return undefined;
+  }
+
+  deleteRefreshTokensByAccessToken(accessTokenId: string): number {
+    let deleted = 0;
+    for (const [refreshToken, target] of this.refreshTokens) {
+      if (target !== accessTokenId) continue;
+      this.refreshTokens.delete(refreshToken);
+      deleted++;
+    }
+    if (deleted > 0) this.scheduleFlush();
+    return deleted;
   }
 
   // Clients

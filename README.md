@@ -238,6 +238,7 @@ If you are Codex, Claude Code, or another coding agent and the user says "set th
    Notes for the user:
 
    - ChatGPT must be able to reach the MCP endpoint. `127.0.0.1` is only for local testing; use a controlled ChatGPT-reachable tunnel endpoint for ChatGPT.
+   - App selection applies to one message, not the entire chat. Mention `@local-dev-mcp` again when a later message needs another tool call.
    - Developer Mode and full MCP write/modify support depend on the user's ChatGPT plan, workspace settings, and admin permissions.
    - ChatGPT may ask for confirmation frequently. Review the tool payload before approving write or command execution.
 
@@ -315,6 +316,12 @@ Steps:
    ```text
    Use local-dev-mcp to select my project, then show the current project.
    ```
+
+App selection applies per message. Mention `@local-dev-mcp` again when a later message needs another local-dev-mcp action.
+
+The server advertises `offline_access` in OAuth discovery and issues refresh tokens. Apps created before this support was added retain older metadata; after upgrading the server, refresh the app metadata/actions in ChatGPT or recreate and reauthorize the app.
+
+Refresh tokens rotate when used. Concurrent refreshes with the same old token replay the same replacement token for 30 seconds, so simultaneous chats do not invalidate one another's connection.
 
 Write and command execution prompts can trigger ChatGPT confirmation dialogs. Review the JSON payload before approving. If ChatGPT cannot connect, verify the endpoint is reachable from ChatGPT, OAuth discovery works, the passphrase is correct, and the server logs show the request.
 

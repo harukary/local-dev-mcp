@@ -36,6 +36,7 @@ import { handleShellCancel } from "./tools/shell-cancel.js";
 import { listPendingRequests } from "../shell/approval.js";
 import { getActiveJobs } from "../shell/job-manager.js";
 import { personalOAuthProvider, tokenStore, AUTH_PASSPHRASE } from "./oauth-provider.js";
+import { OAUTH_SCOPES_SUPPORTED, resolveAuthorizationScopes } from "./oauth-scopes.js";
 import { handleProjectReload } from "./tools/project-reload.js";
 import { handleSkillsList, handleSkillsRead } from "./tools/skills.js";
 import { buildToolDefinitions, buildToolSchemaSnapshot } from "./tool-definitions.js";
@@ -791,6 +792,13 @@ function customAuthorizationHandler(provider: typeof personalOAuthProvider) {
     }
 
     const requestedScopes = scope ? scope.split(" ") : [];
+    try {
+      resolveAuthorizationScopes(requestedScopes);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Invalid OAuth scope";
+      res.status(400).json({ error: "invalid_scope", error_description: message });
+      return;
+    }
 
     await provider.authorize(client, {
       state,
@@ -1036,7 +1044,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
-      scopes_supported: ["all"],
+      scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
     });
   });
 
@@ -1051,7 +1059,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
-      scopes_supported: ["all"],
+      scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
     });
   });
 
@@ -1060,7 +1068,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
     res.json({
       resource: `${baseUrl}/mcp`,
       authorization_servers: [baseUrl],
-      scopes_supported: ["all"],
+      scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
       bearer_methods_supported: ["header"],
     });
   });

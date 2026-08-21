@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -69,5 +69,37 @@ describe("TokenStore", () => {
     await loaded.load();
 
     expect(loaded.getAccessToken("expired-access-token")).toBeUndefined();
+  });
+
+  it("drops and persists orphan refresh tokens during load", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-token-store-"));
+    const filePath = join(tmpRoot, "tokens.json");
+    writeFileSync(filePath, JSON.stringify({
+      accessTokens: {},
+      refreshTokens: { "orphan-refresh-token": "missing-access-token" },
+      clients: {},
+    }));
+    const store = new TokenStore(filePath);
+
+    await store.load();
+    expect(store.getRefreshToken("orphan-refresh-token")).toBeUndefined();
+    await store.shutdown();
+
+    const persisted = JSON.parse(readFileSync(filePath, "utf-8"));
+    expect(persisted.refreshTokens).toEqual({});
+  });
+
+  it("deletes every refresh token that targets a revoked access token", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-token-store-"));
+    const store = new TokenStore(join(tmpRoot, "tokens.json"));
+    store.setRefreshToken("refresh-a", "access-token");
+    store.setRefreshToken("refresh-b", "access-token");
+    store.setRefreshToken("refresh-c", "other-access-token");
+
+    expect(store.deleteRefreshTokensByAccessToken("access-token")).toBe(2);
+    expect(store.getRefreshToken("refresh-a")).toBeUndefined();
+    expect(store.getRefreshToken("refresh-b")).toBeUndefined();
+    expect(store.getRefreshToken("refresh-c")).toBe("other-access-token");
+    await store.shutdown();
   });
 });

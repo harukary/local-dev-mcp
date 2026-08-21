@@ -239,6 +239,7 @@ Codex、Claude Code、その他の coding agent が、ユーザーから「ChatG
    user への注意:
 
    - ChatGPT から MCP endpoint に到達できる必要があります。`127.0.0.1` は local test 用です。ChatGPT から使う場合は controlled tunnel endpoint を使ってください。
+   - app の選択は chat 全体ではなく message 単位です。後続 message で新しい tool call が必要なら、`@local-dev-mcp` で再指定してください。
    - Developer Mode と MCP の write / modify support は、user の ChatGPT plan、workspace settings、admin permissions に依存します。
    - ChatGPT は頻繁に confirmation を出すことがあります。write や command execution を承認する前に tool payload を確認してください。
 
@@ -300,6 +301,12 @@ ChatGPT は Codex/Haru の `SKILL.md` を自動では読み込みません。次
    ```text
    Use local-dev-mcp to select my project, then show the current project.
    ```
+
+app の選択は message 単位です。後続 message で local-dev-mcp の操作が必要な場合は、`@local-dev-mcp` でappを再指定してください。
+
+このserverはOAuth discoveryで`offline_access`を公開し、refresh tokenを発行します。`offline_access`対応前に作成したappは古いmetadataを保持しているため、server更新後にChatGPTのapp設定でmetadata/actionsをrefreshするか、appを再作成して再認証してください。
+
+refresh tokenは使用時にrotationします。同じ旧tokenによる並列refreshは30秒間だけ同じ新tokenを返すため、複数chatから同時に更新されても一方の接続を無効化しません。
 
 write や command execution の prompt では、ChatGPT の confirmation dialog が出ることがあります。承認前に JSON payload を確認してください。ChatGPT が接続できない場合は、endpoint が ChatGPT から到達可能か、OAuth discovery が動いているか、passphrase が正しいか、server log に request が来ているかを確認してください。
 
