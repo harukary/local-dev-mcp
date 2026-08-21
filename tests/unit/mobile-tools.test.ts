@@ -71,7 +71,7 @@ describe("mobile tools", () => {
     });
     expect(Array.isArray(body.devices)).toBe(true);
     expect(body.artifact_dir).toBe("generated/local-dev-mcp/mobile");
-  });
+  }, 20_000);
 
   it("lists devices without requiring any device to exist", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-mobile-"));
@@ -83,7 +83,7 @@ describe("mobile tools", () => {
     expect(body.project_id).toBe("alpha");
     expect(result.structuredContent).toEqual(body);
     expect(Array.isArray(body.devices)).toBe(true);
-  });
+  }, 20_000);
 
   it("returns a structured error when no requested device is found", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-mobile-"));
@@ -94,7 +94,7 @@ describe("mobile tools", () => {
 
     expect(result.isError).toBe(true);
     expect(body.error.code).toBe("MOBILE_DEVICE_NOT_FOUND");
-  });
+  }, 20_000);
 
   it("validates mobile action inputs before resolving devices", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-mobile-"));

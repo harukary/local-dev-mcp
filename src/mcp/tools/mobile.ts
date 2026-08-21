@@ -397,10 +397,8 @@ export async function handleMobileTap(ctx: AppContext, chatContextId: string, ar
   const device = await resolveDevice(args.device);
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   try {
-    if (isPhysicalIos(device)) {
+    if (device.platform === "ios") {
       await agentIosTap(device.id, args.x, args.y);
-    } else if (device.platform === "ios") {
-      await execFileAsync("xcrun", ["simctl", "io", device.id, "tap", String(Math.round(args.x)), String(Math.round(args.y))], { maxBuffer: 2 * 1024 * 1024 });
     } else {
       const adb = await resolveAdbPath();
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
@@ -424,10 +422,8 @@ export async function handleMobileType(ctx: AppContext, chatContextId: string, a
   const device = await resolveDevice(args.device);
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   try {
-    if (isPhysicalIos(device)) {
+    if (device.platform === "ios") {
       await agentIosType(device.id, args.text);
-    } else if (device.platform === "ios") {
-      await execFileAsync("xcrun", ["simctl", "io", device.id, "keyboard", "type", args.text], { maxBuffer: 2 * 1024 * 1024 });
     } else {
       const adb = await resolveAdbPath();
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");

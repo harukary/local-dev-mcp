@@ -125,21 +125,66 @@ function iosSessionName(udid: string): string {
   return `local-dev-mcp-ios-${safe}`;
 }
 
-async function bindIosSession(udid: string): Promise<string> {
+function iosAgentStateDir(): string {
+  return join(homedir(), ".local-dev-mcp", "runtime", "agent-device-ios");
+}
+
+function iosRunOptions(): RunJsonOptions {
+  return { stateDir: iosAgentStateDir() };
+}
+
+function sessionMatches(
+  item: unknown,
+  expected: { name: string; platform: "ios" | "android"; id: string },
+): boolean {
+  if (!item || typeof item !== "object") return false;
+  const value = item as Record<string, unknown>;
+  return value.name === expected.name && value.platform === expected.platform && value.id === expected.id;
+}
+
+async function listIosSessions(): Promise<unknown[]> {
+  const payload = await runJson(["session", "list", "--json"], 30_000, iosRunOptions());
+  return Array.isArray(payload.data?.sessions) ? payload.data.sessions : [];
+}
+
+async function closeIosSessionIfPresent(udid: string): Promise<void> {
+  const session = iosSessionName(udid);
+  const sessions = await listIosSessions();
+  if (!sessions.some((item) => sessionMatches(item, { name: session, platform: "ios", id: udid }))) return;
+  await runJson(["close", "--session", session, "--json"], 30_000, iosRunOptions());
+}
+
+async function openIosSession(udid: string, target?: string): Promise<string> {
   const session = iosSessionName(udid);
   await runJson([
     "open",
+    ...(target ? [target] : []),
     "--platform", "ios",
     "--udid", udid,
     "--session", session,
     "--json",
-  ], 30_000);
+  ], 60_000, iosRunOptions());
   return session;
 }
 
+async function ensureIosSession(udid: string): Promise<string> {
+  const session = iosSessionName(udid);
+  const sessions = await listIosSessions();
+  if (sessions.some((item) => sessionMatches(item, { name: session, platform: "ios", id: udid }))) return session;
+
+  // A same-name stale session bound to another device must not block recovery.
+  if (sessions.some((item) => {
+    if (!item || typeof item !== "object") return false;
+    return (item as Record<string, unknown>).name === session;
+  })) {
+    await runJson(["close", "--session", session, "--json"], 30_000, iosRunOptions());
+  }
+  return await openIosSession(udid);
+}
+
 async function runBoundIos(udid: string, commandArgs: string[], timeoutMs = 120_000): Promise<AgentDevicePayload> {
-  const session = await bindIosSession(udid);
-  return await runJson([...commandArgs, "--session", session, "--json"], timeoutMs);
+  const session = await ensureIosSession(udid);
+  return await runJson([...commandArgs, "--session", session, "--json"], timeoutMs, iosRunOptions());
 }
 
 export async function agentIosScreenshot(udid: string, outputPath: string): Promise<void> {
@@ -164,25 +209,13 @@ export async function agentIosType(udid: string, text: string): Promise<void> {
 }
 
 export async function agentIosOpenUrl(udid: string, url: string): Promise<void> {
-  const session = iosSessionName(udid);
-  await runJson([
-    "open", url,
-    "--platform", "ios",
-    "--udid", udid,
-    "--session", session,
-    "--json",
-  ], 60_000);
+  await closeIosSessionIfPresent(udid);
+  await openIosSession(udid, url);
 }
 
 export async function agentIosLaunchApp(udid: string, app: string): Promise<void> {
-  const session = iosSessionName(udid);
-  await runJson([
-    "open", app,
-    "--platform", "ios",
-    "--udid", udid,
-    "--session", session,
-    "--json",
-  ], 60_000);
+  await closeIosSessionIfPresent(udid);
+  await openIosSession(udid, app);
 }
 
 export async function agentIosSwipe(
@@ -246,11 +279,7 @@ async function ensureAndroidSession(serial: string, adbPath: string): Promise<st
   const options = androidRunOptions(adbPath);
   const payload = await runJson(["session", "list", "--json"], 30_000, options);
   const sessions = Array.isArray(payload.data?.sessions) ? payload.data.sessions : [];
-  const exists = sessions.some((item) => {
-    if (!item || typeof item !== "object") return false;
-    const value = item as Record<string, unknown>;
-    return value.name === session && value.platform === "android" && value.id === serial;
-  });
+  const exists = sessions.some((item) => sessionMatches(item, { name: session, platform: "android", id: serial }));
   if (!exists) {
     await runJson([
       "open",
