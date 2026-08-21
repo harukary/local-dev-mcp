@@ -323,6 +323,8 @@ The server advertises `offline_access` in OAuth discovery and issues refresh tok
 
 Refresh tokens rotate when used. Concurrent refreshes with the same old token replay the same replacement token for 30 seconds, so simultaneous chats do not invalidate one another's connection.
 
+The MCP HTTP transport is stateless. It handles requests through `POST /mcp` and returns `405 Method Not Allowed` with `Allow: POST` for `GET /mcp` because it does not provide a standalone SSE stream.
+
 Write and command execution prompts can trigger ChatGPT confirmation dialogs. Review the JSON payload before approving. If ChatGPT cannot connect, verify the endpoint is reachable from ChatGPT, OAuth discovery works, the passphrase is correct, and the server logs show the request.
 
 Official references:

@@ -308,6 +308,8 @@ app の選択は message 単位です。後続 message で local-dev-mcp の操�
 
 refresh tokenは使用時にrotationします。同じ旧tokenによる並列refreshは30秒間だけ同じ新tokenを返すため、複数chatから同時に更新されても一方の接続を無効化しません。
 
+MCP HTTP transportはstatelessです。`POST /mcp`でrequestを処理し、standalone SSEを提供しない`GET /mcp`には`405 Method Not Allowed`と`Allow: POST`を返します。
+
 write や command execution の prompt では、ChatGPT の confirmation dialog が出ることがあります。承認前に JSON payload を確認してください。ChatGPT が接続できない場合は、endpoint が ChatGPT から到達可能か、OAuth discovery が動いているか、passphrase が正しいか、server log に request が来ているかを確認してください。
 
 公式 reference:

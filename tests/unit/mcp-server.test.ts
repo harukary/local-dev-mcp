@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   isAllowedRedirectUri,
   isRegisteredRedirectUri,
@@ -12,6 +12,7 @@ import {
   renderPassphrasePage,
   renderDownloadAuthPage,
   sanitizeRequestUrlForLog,
+  sendStatelessMcpMethodNotAllowed,
 } from "../../src/mcp/server.js";
 import { buildToolSchemaSnapshot } from "../../src/mcp/tool-definitions.js";
 import { imageViewerMeta, imageViewerResource, imageViewerResourceUri, IMAGE_VIEWER_RESOURCE_MIME_TYPE } from "../../src/mcp/resources/image-viewer.js";
@@ -130,6 +131,27 @@ describe("OAuth helpers", () => {
     expect(sanitizeRequestUrlForLog("/authorize?client_id=x&passphrase=secret&state=y")).toBe(
       "/authorize?client_id=x&passphrase=%5BREDACTED%5D&state=y"
     );
+  });
+});
+
+describe("stateless MCP transport", () => {
+  it("rejects standalone GET streams with 405 and advertises POST", () => {
+    const json = vi.fn();
+    const status = vi.fn(() => ({ json }));
+    const set = vi.fn();
+
+    sendStatelessMcpMethodNotAllowed({ set, status } as never);
+
+    expect(set).toHaveBeenCalledWith("Allow", "POST");
+    expect(status).toHaveBeenCalledWith(405);
+    expect(json).toHaveBeenCalledWith({
+      jsonrpc: "2.0",
+      error: {
+        code: -32000,
+        message: "Method not allowed. This stateless MCP endpoint accepts POST requests only.",
+      },
+      id: null,
+    });
   });
 });
 

@@ -84,6 +84,18 @@ export function isMcpDebugEnabled(): boolean {
   return process.env.LOCAL_DEV_MCP_DEBUG === "1";
 }
 
+export function sendStatelessMcpMethodNotAllowed(res: express.Response): void {
+  res.set("Allow", "POST");
+  res.status(405).json({
+    jsonrpc: "2.0",
+    error: {
+      code: -32000,
+      message: "Method not allowed. This stateless MCP endpoint accepts POST requests only.",
+    },
+    id: null,
+  });
+}
+
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 function isLocalhostRequest(req: express.Request): boolean {
@@ -1082,13 +1094,8 @@ export async function startHttpServer(configPath: string, port: number): Promise
     });
   });
 
-  app.get("/mcp", requireBearerAuth, (req, res) => {
-    handleMcpRequest(req, res, ctx).catch((err) => {
-      console.error("MCP GET handler error:", err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: "internal_error", message: String(err) });
-      }
-    });
+  app.get("/mcp", requireBearerAuth, (_req, res) => {
+    sendStatelessMcpMethodNotAllowed(res);
   });
 
   app.get("/", (_req, res) => {
