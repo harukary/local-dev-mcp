@@ -20,6 +20,8 @@ let previousFakeState: string | undefined;
 let previousFakeLog: string | undefined;
 let previousAgentDeviceBin: string | undefined;
 let previousFakeAdbLog: string | undefined;
+let previousIosTeamId: string | undefined;
+let previousIosBundleId: string | undefined;
 
 afterEach(() => {
   if (previousPath === undefined) delete process.env.PATH;
@@ -32,6 +34,10 @@ afterEach(() => {
   else process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN = previousAgentDeviceBin;
   if (previousFakeAdbLog === undefined) delete process.env.FAKE_ADB_LOG;
   else process.env.FAKE_ADB_LOG = previousFakeAdbLog;
+  if (previousIosTeamId === undefined) delete process.env.AGENT_DEVICE_IOS_TEAM_ID;
+  else process.env.AGENT_DEVICE_IOS_TEAM_ID = previousIosTeamId;
+  if (previousIosBundleId === undefined) delete process.env.AGENT_DEVICE_IOS_BUNDLE_ID;
+  else process.env.AGENT_DEVICE_IOS_BUNDLE_ID = previousIosBundleId;
   if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
   tmpRoot = "";
 });
@@ -100,11 +106,15 @@ fs.appendFileSync(process.env.FAKE_ADB_LOG, JSON.stringify(process.argv.slice(2)
   previousFakeLog = process.env.FAKE_AGENT_LOG;
   previousAgentDeviceBin = process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN;
   previousFakeAdbLog = process.env.FAKE_ADB_LOG;
+  previousIosTeamId = process.env.AGENT_DEVICE_IOS_TEAM_ID;
+  previousIosBundleId = process.env.AGENT_DEVICE_IOS_BUNDLE_ID;
   process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
   process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN = cliPath;
   process.env.FAKE_AGENT_STATE = statePath;
   process.env.FAKE_AGENT_LOG = logPath;
   process.env.FAKE_ADB_LOG = adbLogPath;
+  process.env.AGENT_DEVICE_IOS_TEAM_ID = "TESTTEAM123";
+  process.env.AGENT_DEVICE_IOS_BUNDLE_ID = "com.example.localdevmcp.runner";
   return { logPath, adbPath, adbLogPath };
 }
 

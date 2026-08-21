@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { X509Certificate } from "node:crypto";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -136,14 +137,66 @@ function iosAgentStateDir(): string {
   return join(homedir(), ".local-dev-mcp", "runtime", "agent-device-ios");
 }
 
-function iosRunOptions(): RunJsonOptions {
-  return { stateDir: iosAgentStateDir() };
+let detectedIosDevelopmentTeamPromise: Promise<string | null> | null = null;
+
+function certificateTeamId(certificate: X509Certificate): string | null {
+  const line = certificate.subject.split(/\r?\n/).find((entry) => entry.startsWith("OU="));
+  const value = line?.slice(3).trim();
+  return value || null;
+}
+
+async function detectIosDevelopmentTeam(): Promise<string | null> {
+  if (process.platform !== "darwin") return null;
+  try {
+    const [{ stdout: identitiesOutput }, { stdout: certificatesOutput }] = await Promise.all([
+      execFileAsync("security", ["find-identity", "-v", "-p", "codesigning"], { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 }),
+      execFileAsync("security", ["find-certificate", "-a", "-c", "Apple Development", "-p"], { timeout: 10_000, maxBuffer: 16 * 1024 * 1024 }),
+    ]);
+    const validFingerprints = new Set(
+      identitiesOutput
+        .split(/\r?\n/)
+        .filter((line) => line.includes("Apple Development:"))
+        .flatMap((line) => line.match(/\b[0-9A-F]{40}\b/i) ?? [])
+        .map((fingerprint) => fingerprint.toUpperCase()),
+    );
+    if (validFingerprints.size === 0) return null;
+
+    const teams = new Set<string>();
+    for (const match of certificatesOutput.matchAll(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g)) {
+      try {
+        const certificate = new X509Certificate(match[0]);
+        const fingerprint = certificate.fingerprint.replaceAll(":", "").toUpperCase();
+        if (!validFingerprints.has(fingerprint)) continue;
+        const team = certificateTeamId(certificate);
+        if (team) teams.add(team);
+      } catch {
+        // Ignore malformed or unrelated keychain entries.
+      }
+    }
+    return teams.size === 1 ? [...teams][0] : null;
+  } catch {
+    return null;
+  }
+}
+
+async function iosRunOptions(): Promise<RunJsonOptions> {
+  const explicitTeam = process.env.AGENT_DEVICE_IOS_TEAM_ID?.trim();
+  const team = explicitTeam || await (detectedIosDevelopmentTeamPromise ??= detectIosDevelopmentTeam());
+  if (!team) return { stateDir: iosAgentStateDir() };
+  const bundleId = process.env.AGENT_DEVICE_IOS_BUNDLE_ID?.trim() || "com.localdevmcp.agentdevice.runner";
+  return {
+    stateDir: iosAgentStateDir(),
+    env: {
+      AGENT_DEVICE_IOS_TEAM_ID: team,
+      AGENT_DEVICE_IOS_BUNDLE_ID: bundleId,
+    },
+  };
 }
 
 async function closeIosSessionIfPresent(udid: string): Promise<void> {
   const session = iosSessionName(udid);
   try {
-    await runJson(["close", "--session", session, "--json"], 30_000, iosRunOptions());
+    await runJson(["close", "--session", session, "--json"], 30_000, await iosRunOptions());
   } catch (err) {
     if (err instanceof AgentDeviceCommandError && err.code === "SESSION_NOT_FOUND") return;
     throw err;
@@ -159,13 +212,13 @@ async function openIosSession(udid: string, target: string): Promise<string> {
     "--udid", udid,
     "--session", session,
     "--json",
-  ], 60_000, iosRunOptions());
+  ], 60_000, await iosRunOptions());
   return session;
 }
 
 async function runBoundIos(udid: string, commandArgs: string[], timeoutMs = 120_000): Promise<AgentDevicePayload> {
   const session = iosSessionName(udid);
-  return await runJson([...commandArgs, "--session", session, "--json"], timeoutMs, iosRunOptions());
+  return await runJson([...commandArgs, "--session", session, "--json"], timeoutMs, await iosRunOptions());
 }
 
 export async function agentIosScreenshot(udid: string, outputPath: string): Promise<void> {
