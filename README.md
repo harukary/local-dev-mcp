@@ -389,6 +389,8 @@ Each project entry supports:
 
 `scripts/tunnel.sh` can start the HTTP server and a Cloudflare Tunnel. Use this only when the tunnel is part of your controlled access path. Do not expose the local MCP server directly.
 
+Run only one launcher instance. The script holds a PID lock at `~/.local-dev-mcp/runtime/tunnel-launcher.lock` and exits with status 75 when another live launcher already owns it. This prevents a manual invocation from competing with a launchd-managed instance and repeatedly reconnecting the Cloudflare Tunnel.
+
 Configure these values in `.env` first:
 
 ```bash

@@ -6,6 +6,8 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 AGENT_DEVICE_BIN="$PROJECT_DIR/node_modules/.bin/agent-device"
 IOS_AGENT_STATE_DIR="${LOCAL_DEV_MCP_IOS_AGENT_STATE_DIR:-$HOME/.local-dev-mcp/runtime/agent-device-ios}"
 ANDROID_AGENT_STATE_DIR="${LOCAL_DEV_MCP_ANDROID_AGENT_STATE_DIR:-$HOME/.local-dev-mcp/runtime/agent-device-android}"
+LAUNCHER_LOCK_DIR="${LOCAL_DEV_MCP_LAUNCHER_LOCK_DIR:-$HOME/.local-dev-mcp/runtime/tunnel-launcher.lock}"
+LAUNCHER_LOCK_OWNED=0
 
 if [ -f "$PROJECT_DIR/.env" ]; then
   set -a
@@ -45,6 +47,52 @@ if [ ! -f "$TUNNEL_CREDENTIALS_FILE" ]; then
   exit 1
 fi
 
+release_launcher_lock() {
+  if [ "$LAUNCHER_LOCK_OWNED" -ne 1 ]; then
+    return
+  fi
+
+  local owner_pid
+  owner_pid="$(cat "$LAUNCHER_LOCK_DIR/pid" 2>/dev/null || true)"
+  if [ "$owner_pid" = "$$" ]; then
+    rm -f "$LAUNCHER_LOCK_DIR/pid"
+    rmdir "$LAUNCHER_LOCK_DIR" 2>/dev/null || true
+  fi
+  LAUNCHER_LOCK_OWNED=0
+}
+
+acquire_launcher_lock() {
+  local attempt owner_pid stale_lock_dir
+  mkdir -p "$(dirname "$LAUNCHER_LOCK_DIR")"
+
+  for attempt in 1 2; do
+    if mkdir "$LAUNCHER_LOCK_DIR" 2>/dev/null; then
+      printf '%s\n' "$$" > "$LAUNCHER_LOCK_DIR/pid"
+      LAUNCHER_LOCK_OWNED=1
+      trap release_launcher_lock EXIT
+      return
+    fi
+
+    owner_pid="$(cat "$LAUNCHER_LOCK_DIR/pid" 2>/dev/null || true)"
+    if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
+      echo "[tunnel] Another launcher is already running (pid: $owner_pid)." >&2
+      exit 75
+    fi
+
+    stale_lock_dir="${LAUNCHER_LOCK_DIR}.stale.$$"
+    if mv "$LAUNCHER_LOCK_DIR" "$stale_lock_dir" 2>/dev/null; then
+      rm -f "$stale_lock_dir/pid"
+      rmdir "$stale_lock_dir" 2>/dev/null || {
+        echo "[tunnel] Stale launcher lock is not empty: $stale_lock_dir" >&2
+        exit 1
+      }
+    fi
+  done
+
+  echo "[tunnel] Could not acquire launcher lock: $LAUNCHER_LOCK_DIR" >&2
+  exit 75
+}
+
 cleanup_agent_device_daemons() {
   if [ ! -x "$AGENT_DEVICE_BIN" ]; then
     return
@@ -56,6 +104,7 @@ cleanup_agent_device_daemons() {
 # local-dev-mcp exclusively owns these state directories. Clear retained
 # runners/leases before the server starts so a prior restart cannot leave a
 # device claim bound to an orphaned daemon.
+acquire_launcher_lock
 cleanup_agent_device_daemons
 
 echo "[tunnel] Starting MCP server on port $PORT..." >&2

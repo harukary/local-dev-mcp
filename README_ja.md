@@ -374,6 +374,8 @@ pnpm dev -- config/projects.local.yaml
 
 `scripts/tunnel.sh` は HTTP server と Cloudflare Tunnel を起動できます。controlled access path の一部として使う場合だけ利用してください。local MCP server を直接 public exposure しないでください。
 
+launcherは1つだけ起動します。scriptは`~/.local-dev-mcp/runtime/tunnel-launcher.lock`でPID lockを保持し、別の生存中launcherが所有している場合はstatus 75で終了します。これにより、手動起動がlaunchd管理instanceと競合してCloudflare Tunnelを繰り返し再接続する状態を防ぎます。
+
 `.env` に以下を設定します。
 
 ```bash
