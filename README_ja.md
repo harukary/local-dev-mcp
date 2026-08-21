@@ -66,6 +66,16 @@ ChatGPT は MCP tools の利用時に頻繁に確認・承認を求めること�
 - `write_policy: confirm`
 - `network_policy: ask`
 
+### コマンド単位の Bitwarden access
+
+Bitwarden Secrets Manager CLI を使う command では、`shell.run` に
+`credential_scope: "bitwarden"` を指定できます。server は
+`${HARUCLAW_HOME:-~/.haru}/.bitwarden.env` の mapping に従って macOS
+Keychain から access token を読み、その command だけへ注入します。取得した
+token と同じ値は command output から redact されます。この scope は project の
+通常の approval policy に従い、scope の指定だけでは approval を強制しません。
+通常の shell command には token を渡しません。
+
 これにより、通常の read は比較的スムーズにしつつ、write や network/dependency operation では確認が入りやすくなります。
 
 ## 機能

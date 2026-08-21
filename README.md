@@ -66,6 +66,15 @@ For this project, the recommended default is:
 - `write_policy: confirm`
 - `network_policy: ask`
 
+### Command-scoped Bitwarden access
+
+`shell.run` can set `credential_scope: "bitwarden"` when a command must use the
+Bitwarden Secrets Manager CLI. The server reads the access token from the macOS
+Keychain mapping in `${HARUCLAW_HOME:-~/.haru}/.bitwarden.env`, injects it into
+that command only, and redacts the exact token from captured output. Credential
+access follows the selected project's normal approval policy; requesting the scope
+does not by itself force approval. Ordinary shell commands never receive the token.
+
 This means routine reads can stay smooth, while writes and network/dependency operations usually ask for confirmation.
 
 ## Features
