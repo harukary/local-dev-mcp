@@ -3,6 +3,9 @@ set -euo pipefail
 
 PORT="${PORT:-3456}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+AGENT_DEVICE_BIN="$PROJECT_DIR/node_modules/.bin/agent-device"
+IOS_AGENT_STATE_DIR="${LOCAL_DEV_MCP_IOS_AGENT_STATE_DIR:-$HOME/.local-dev-mcp/runtime/agent-device-ios}"
+ANDROID_AGENT_STATE_DIR="${LOCAL_DEV_MCP_ANDROID_AGENT_STATE_DIR:-$HOME/.local-dev-mcp/runtime/agent-device-android}"
 
 if [ -f "$PROJECT_DIR/.env" ]; then
   set -a
@@ -42,6 +45,19 @@ if [ ! -f "$TUNNEL_CREDENTIALS_FILE" ]; then
   exit 1
 fi
 
+cleanup_agent_device_daemons() {
+  if [ ! -x "$AGENT_DEVICE_BIN" ]; then
+    return
+  fi
+  "$AGENT_DEVICE_BIN" daemon stop --state-dir "$IOS_AGENT_STATE_DIR" --clean >/dev/null 2>&1 || true
+  "$AGENT_DEVICE_BIN" daemon stop --state-dir "$ANDROID_AGENT_STATE_DIR" --clean >/dev/null 2>&1 || true
+}
+
+# local-dev-mcp exclusively owns these state directories. Clear retained
+# runners/leases before the server starts so a prior restart cannot leave a
+# device claim bound to an orphaned daemon.
+cleanup_agent_device_daemons
+
 echo "[tunnel] Starting MCP server on port $PORT..." >&2
 cd "$PROJECT_DIR"
 node --import tsx src/index.ts "$PROJECTS_CONFIG" --http "$PORT" &
@@ -62,6 +78,7 @@ cleanup_children() {
   kill "$MCP_PID" "$CLOUDFLARE_PID" 2>/dev/null || true
   wait "$MCP_PID" 2>/dev/null || true
   wait "$CLOUDFLARE_PID" 2>/dev/null || true
+  cleanup_agent_device_daemons
 }
 
 is_process_running() {
