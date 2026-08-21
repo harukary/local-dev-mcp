@@ -201,7 +201,7 @@ export async function agentIosTap(udid: string, x: number, y: number): Promise<v
 }
 
 export async function agentIosTapTarget(udid: string, target: string): Promise<void> {
-  await runBoundIos(udid, ["click", normalizeAgentTarget(target)]);
+  await runBoundIos(udid, agentTapTargetArgs(target));
 }
 
 export async function agentIosType(udid: string, text: string): Promise<void> {
@@ -241,11 +241,42 @@ export async function agentIosPress(udid: string, key: "home" | "back"): Promise
 }
 
 export async function agentIosWait(udid: string, target: string, timeoutMs = 10_000): Promise<void> {
-  await runBoundIos(udid, ["wait", normalizeAgentTarget(target), String(Math.max(1, Math.round(timeoutMs)))], Math.max(15_000, timeoutMs + 5_000));
+  await runBoundIos(
+    udid,
+    agentWaitTargetArgs(target, timeoutMs),
+    Math.max(15_000, timeoutMs + 5_000),
+  );
 }
 
-function normalizeAgentTarget(target: string): string {
-  return /^e\d+$/.test(target) ? `@${target}` : target;
+function normalizeAgentRef(target: string): string | null {
+  const trimmed = target.trim();
+  if (/^@e\d+$/.test(trimmed)) return trimmed;
+  if (/^e\d+$/.test(trimmed)) return `@${trimmed}`;
+  return null;
+}
+
+function looksLikeAgentSelector(target: string): boolean {
+  const trimmed = target.trim();
+  return /^(?:(?:id|role|text|label|value)\s*=|(?:visible|hidden|editable|selected|enabled|hittable)(?:\s*=|\s*(?:$|\|\|)))/.test(trimmed);
+}
+
+function agentTapTargetArgs(target: string): string[] {
+  const trimmed = target.trim();
+  if (!trimmed) throw new AgentDeviceCommandError({ error: { code: "INVALID_ARGS", message: "Mobile target cannot be empty" } }, "Invalid mobile target");
+  const ref = normalizeAgentRef(trimmed);
+  if (ref) return ["click", ref];
+  if (looksLikeAgentSelector(trimmed)) return ["click", trimmed];
+  return ["find", trimmed, "click", "--first"];
+}
+
+function agentWaitTargetArgs(target: string, timeoutMs: number): string[] {
+  const trimmed = target.trim();
+  if (!trimmed) throw new AgentDeviceCommandError({ error: { code: "INVALID_ARGS", message: "Mobile wait target cannot be empty" } }, "Invalid mobile wait target");
+  const timeout = String(Math.max(1, Math.round(timeoutMs)));
+  const ref = normalizeAgentRef(trimmed);
+  if (ref) return ["wait", ref, timeout];
+  if (looksLikeAgentSelector(trimmed)) return ["wait", trimmed, timeout];
+  return ["wait", "text", trimmed, timeout];
 }
 
 function payloadNodes(payload: AgentDevicePayload): AgentDeviceNode[] {
@@ -312,14 +343,14 @@ export async function agentAndroidSnapshot(serial: string, adbPath: string): Pro
 }
 
 export async function agentAndroidTapTarget(serial: string, adbPath: string, target: string): Promise<void> {
-  await runBoundAndroid(serial, adbPath, ["click", normalizeAgentTarget(target)]);
+  await runBoundAndroid(serial, adbPath, agentTapTargetArgs(target));
 }
 
 export async function agentAndroidWait(serial: string, adbPath: string, target: string, timeoutMs = 10_000): Promise<void> {
   await runBoundAndroid(
     serial,
     adbPath,
-    ["wait", normalizeAgentTarget(target), String(Math.max(1, Math.round(timeoutMs)))],
+    agentWaitTargetArgs(target, timeoutMs),
     Math.max(15_000, timeoutMs + 5_000),
   );
 }

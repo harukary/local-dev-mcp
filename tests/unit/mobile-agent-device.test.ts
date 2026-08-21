@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { agentIosLaunchApp, agentIosSnapshot, agentIosTap } from "../../src/mcp/tools/mobile-agent-device.js";
+import {
+  agentIosLaunchApp,
+  agentIosSnapshot,
+  agentIosTap,
+  agentIosTapTarget,
+  agentIosWait,
+} from "../../src/mcp/tools/mobile-agent-device.js";
 
 let tmpRoot = "";
 let previousPath: string | undefined;
@@ -52,8 +58,8 @@ if (command === "session" && args[1] === "list") {
   out({ session: args[args.indexOf("--session") + 1] });
 } else if (command === "snapshot") {
   out({ nodes: [{ ref: "e1", label: "tomoca" }] });
-} else if (command === "click") {
-  out({ message: "clicked" });
+} else if (command === "click" || command === "find" || command === "wait") {
+  out({ message: command });
 } else {
   out({});
 }
@@ -96,5 +102,25 @@ describe("mobile agent-device iOS session lifecycle", () => {
     expect(opens).toHaveLength(2);
     expect(opens.at(-1)).toContain("com.example.tomoca");
     expect(afterLaunch.filter((args) => args.includes("open"))).toHaveLength(2);
+  }, 15_000);
+
+  it("maps refs, selectors, visible text, and wait targets to agent-device syntax", async () => {
+    const { logPath } = installFakeAgentDevice();
+    const udid = "SIM-456";
+
+    await agentIosTapTarget(udid, "e19");
+    await agentIosTapTarget(udid, 'label="tomoca Plus"');
+    await agentIosTapTarget(udid, "プラン、無料、Plusを見る");
+    await agentIosWait(udid, "tomoca Plus", 4321);
+    await agentIosWait(udid, "@e20", 9876);
+    await agentIosWait(udid, 'id="settings-destination"', 1234);
+
+    const logged = calls(logPath);
+    expect(logged.some((args) => args.includes("click") && args.includes("@e19"))).toBe(true);
+    expect(logged.some((args) => args.includes("click") && args.includes('label="tomoca Plus"'))).toBe(true);
+    expect(logged.some((args) => args.includes("find") && args.includes("プラン、無料、Plusを見る") && args.includes("click") && args.includes("--first"))).toBe(true);
+    expect(logged.some((args) => args.includes("wait") && args.includes("text") && args.includes("tomoca Plus") && args.includes("4321"))).toBe(true);
+    expect(logged.some((args) => args.includes("wait") && args.includes("@e20") && args.includes("9876"))).toBe(true);
+    expect(logged.some((args) => args.includes("wait") && args.includes('id="settings-destination"') && args.includes("1234"))).toBe(true);
   }, 15_000);
 });
