@@ -7,6 +7,7 @@ import {
 import { startJob } from "../../shell/job-manager.js";
 import { classifyRisk, isCatastrophicCommand } from "../../shell/risk-classifier.js";
 import type { AppContext } from "../server.js";
+import { resolveCredentialEnv } from "../../shell/credential-env.js";
 
 export async function handleShellApprove(ctx: AppContext, chatContextId: string, args: { approval_request_id: string }) {
   if (!args?.approval_request_id) {
@@ -111,8 +112,55 @@ export async function handleShellApprove(ctx: AppContext, chatContextId: string,
     };
   }
 
+  let credentialEnv: Record<string, string> | undefined;
+  if (request.credentialScope) {
+    try {
+      credentialEnv = await resolveCredentialEnv(request.credentialScope);
+    } catch (error) {
+      releaseApprovalRequest(request.id);
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.auditLogger.log({
+        timestamp: new Date().toISOString(),
+        chatContextId,
+        tool: "shell.run",
+        event: "credential_resolution_failed",
+        projectId: project.projectId,
+        command: request.command,
+        purpose: request.purpose,
+        credentialScope: request.credentialScope,
+        riskLevel: currentRisk.level,
+        enforcement: "approval_required",
+        approvalRequestId: request.id,
+        approvalPolicy: request.approvalPolicy,
+        error: message,
+      });
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            error: {
+              code: "CREDENTIAL_UNAVAILABLE",
+              message,
+              credential_scope: request.credentialScope,
+              approval_request_id: request.id,
+            },
+          }, null, 2),
+        }],
+        isError: true,
+      };
+    }
+  }
+
   if (request.async) {
-    const result = startJob(project, request.command, request.purpose, request.timeoutSeconds, request.longRunning ?? false);
+    const result = startJob(
+      project,
+      request.command,
+      request.purpose,
+      request.timeoutSeconds,
+      request.longRunning ?? false,
+      request.credentialScope,
+      credentialEnv
+    );
     if ("error" in result) {
       releaseApprovalRequest(request.id);
       await ctx.auditLogger.log({
@@ -150,6 +198,7 @@ export async function handleShellApprove(ctx: AppContext, chatContextId: string,
       projectId: project.projectId,
       command: request.command,
       purpose: request.purpose,
+      credentialScope: request.credentialScope,
       riskLevel: result.riskLevel,
       enforcement: "approval_required",
       approvalRequestId: request.id,
@@ -174,6 +223,7 @@ export async function handleShellApprove(ctx: AppContext, chatContextId: string,
             long_running: result.longRunning ?? false,
             project_id: project.projectId,
             command: result.command,
+            credential_scope: result.credentialScope,
             risk_level: result.riskLevel,
             status: "running",
             message: "Approved job started. Use shell.status to check progress.",
@@ -190,6 +240,9 @@ export async function handleShellApprove(ctx: AppContext, chatContextId: string,
       command: request.command,
       timeoutSeconds: request.timeoutSeconds,
       purpose: request.purpose,
+      ...(request.credentialScope
+        ? { credentialScope: request.credentialScope, env: credentialEnv }
+        : {}),
     },
     chatContextId
   );
@@ -205,6 +258,7 @@ export async function handleShellApprove(ctx: AppContext, chatContextId: string,
     cwd: result.cwd,
     command: result.command,
     purpose: result.purpose,
+    credentialScope: result.credentialScope,
     riskLevel: result.riskLevel,
     enforcement: "approval_required",
     approvalRequestId: request.id,
@@ -229,6 +283,7 @@ export async function handleShellApprove(ctx: AppContext, chatContextId: string,
           project_id: result.projectId,
           cwd: result.cwd,
           command: request.command,
+          credential_scope: request.credentialScope,
           risk_level: request.riskLevel,
           exit_code: result.exitCode,
           duration_ms: result.durationMs,
@@ -251,6 +306,7 @@ async function logApprovalApproved(
     projectId: string;
     command: string;
     purpose?: string;
+    credentialScope?: import("../../types.js").CredentialScope;
     riskLevel: ReturnType<typeof classifyRisk>["level"];
     approvalPolicy: "ask" | "deny";
   }
@@ -263,6 +319,7 @@ async function logApprovalApproved(
     projectId: request.projectId,
     command: request.command,
     purpose: request.purpose,
+    credentialScope: request.credentialScope,
     riskLevel: request.riskLevel,
     approvalRequestId: request.id,
     approvalPolicy: request.approvalPolicy,

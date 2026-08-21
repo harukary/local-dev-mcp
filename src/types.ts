@@ -10,6 +10,8 @@ export type ApprovalMode = "policy" | "catastrophic_only" | "never";
 
 export type RedactionProfile = "default" | "strict";
 
+export type CredentialScope = "bitwarden";
+
 export interface ProjectConfig {
   projectId: ProjectId;
   displayName: string;
@@ -39,6 +41,8 @@ export interface ShellRunInput {
   command: string;
   timeoutSeconds?: number;
   purpose?: string;
+  credentialScope?: CredentialScope;
+  env?: Record<string, string>;
 }
 
 export type RiskLevel =
@@ -54,6 +58,7 @@ export interface ShellRunResult {
   cwd: string;
   command: string;
   purpose?: string;
+  credentialScope?: CredentialScope;
   riskLevel: RiskLevel;
   exitCode: number | null;
   durationMs: number;
@@ -78,6 +83,7 @@ export interface AuditLogEntry {
   cwd?: string;
   command?: string;
   purpose?: string;
+  credentialScope?: CredentialScope;
   riskLevel?: RiskLevel;
   enforcement?: "audit_only" | "blocked" | "approval_required";
   approvalRequestId?: string;

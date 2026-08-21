@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ProjectConfig, RiskLevel } from "../types.js";
+import type { CredentialScope, ProjectConfig, RiskLevel } from "../types.js";
 import { classifyRisk, isCatastrophicCommand } from "./risk-classifier.js";
 import { redactOutput } from "./redactor.js";
 
@@ -16,6 +16,7 @@ export interface Job {
   cwd: string;
   command: string;
   purpose?: string;
+  credentialScope?: CredentialScope;
   riskLevel: RiskLevel;
   status: JobStatus;
   exitCode: number | null;
@@ -61,7 +62,9 @@ export function startJob(
   command: string,
   purpose?: string,
   timeoutSeconds?: number,
-  longRunning = false
+  longRunning = false,
+  credentialScope?: CredentialScope,
+  env?: Record<string, string>
 ): Job | { error: string } {
   if (getActiveJobs().length >= MAX_CONCURRENT_JOBS) {
     return { error: `Too many active jobs (max ${MAX_CONCURRENT_JOBS}). Wait for some to complete.` };
@@ -84,6 +87,7 @@ export function startJob(
     cwd: project.hostRoot,
     stdio: ["pipe", "pipe", "pipe"],
     detached: true,
+    env: env ? { ...process.env, ...env } : process.env,
   });
 
   const job: Job = {
@@ -94,6 +98,7 @@ export function startJob(
     cwd: project.hostRoot,
     command,
     purpose,
+    credentialScope,
     riskLevel: risk.level,
     status: "running",
     exitCode: null,
@@ -136,8 +141,9 @@ export function startJob(
   }
 
   function refreshJobView(): void {
-    const redactedStdout = redactOutput(stdout, project.redactionProfile);
-    const redactedStderr = redactOutput(stderr, project.redactionProfile);
+    const sensitiveValues = Object.values(env ?? {});
+    const redactedStdout = redactOutput(stdout, project.redactionProfile, sensitiveValues);
+    const redactedStderr = redactOutput(stderr, project.redactionProfile, sensitiveValues);
     const allRedactions = [...redactedStdout.redactions, ...redactedStderr.redactions];
 
     job.stdout = redactedStdout.text;

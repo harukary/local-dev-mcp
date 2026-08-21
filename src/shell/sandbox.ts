@@ -63,6 +63,7 @@ export class HostSandbox implements Sandbox {
         cwd: workdir,
         stdio: ["pipe", "pipe", "pipe"],
         detached: true,
+        env: options.env ? { ...process.env, ...options.env } : process.env,
       });
 
       const timer = setTimeout(() => {

@@ -57,4 +57,15 @@ describe("Redactor", () => {
     const result = redactOutput("DATABASE_URL=postgres://user:pass@localhost/db", "default");
     expect(result.text).toContain("postgres://user:pass@localhost/db");
   });
+
+  it("redacts exact runtime credentials with the default profile", () => {
+    const result = redactOutput(
+      "before keychain-token after keychain-token",
+      "default",
+      ["keychain-token"]
+    );
+
+    expect(result.text).toBe("before [REDACTED] after [REDACTED]");
+    expect(result.redactions).toContainEqual({ type: "runtime_credential", count: 2 });
+  });
 });

@@ -4,6 +4,11 @@ import { clearApprovalRequestsForTests, evaluateApproval, listPendingRequests } 
 import { handleShellApprove, handleShellReject } from "../../src/mcp/tools/shell-approval.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
+import { resolveCredentialEnv } from "../../src/shell/credential-env.js";
+
+vi.mock("../../src/shell/credential-env.js", () => ({
+  resolveCredentialEnv: vi.fn(),
+}));
 
 const project: ProjectConfig = {
   projectId: "alpha",
@@ -59,6 +64,7 @@ function createContext(activeProject: ProjectConfig = project) {
 describe("shell approval tools", () => {
   beforeEach(() => {
     clearApprovalRequestsForTests();
+    vi.mocked(resolveCredentialEnv).mockResolvedValue({ BWS_ACCESS_TOKEN: "test-token" });
   });
 
   it("approves and executes the original pending command", async () => {
@@ -135,6 +141,37 @@ describe("shell approval tools", () => {
         approved: false,
       },
     }));
+  });
+
+  it("injects Bitwarden credentials only after approval", async () => {
+    const { ctx, shellRunner } = createContext();
+    const approval = evaluateApproval(
+      project,
+      "chat-a",
+      "bws secret list project-id",
+      "read_only",
+      ["credential scope requested: bitwarden"],
+      "List Bitwarden secret metadata",
+      { force: true, credentialScope: "bitwarden" }
+    );
+
+    const result = await handleShellApprove(ctx, "chat-a", {
+      approval_request_id: approval.request!.id,
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(resolveCredentialEnv).toHaveBeenCalledWith("bitwarden");
+    expect(shellRunner.run).toHaveBeenCalledWith(
+      project,
+      {
+        command: "bws secret list project-id",
+        timeoutSeconds: undefined,
+        purpose: "List Bitwarden secret metadata",
+        credentialScope: "bitwarden",
+        env: { BWS_ACCESS_TOKEN: "test-token" },
+      },
+      "chat-a"
+    );
   });
 
   it("does not consume approval when the command becomes forbidden before execution", async () => {

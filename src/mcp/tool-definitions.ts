@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-08-19.1";
+export const TOOL_SCHEMA_VERSION = "2026-08-21.1";
 
 export function buildToolDefinitions() {
   return [
@@ -85,7 +85,8 @@ export function buildToolDefinitions() {
     ...buildMobileToolDefinitions(),
     {
       name: "shell.run",
-      description: "Run a shell command in the currently selected project's sandbox cwd.",
+      description:
+        "Run a shell command in the currently selected project's sandbox cwd. For builds, deploys, installs, uploads, full test suites, Gradle/Xcode/Docker/EAS work, or any command that may take more than about 30 seconds or has uncertain duration, MUST use async=true and omit timeout_seconds. Do not wait synchronously near the plugin request deadline; poll shell.status instead.",
       inputSchema: {
         type: "object",
         properties: {
@@ -95,7 +96,8 @@ export function buildToolDefinitions() {
           },
           timeout_seconds: {
             type: "integer",
-            description: "Timeout in seconds (default: project default, max: project max).",
+            description:
+              "Command timeout in seconds (default: project default, max: project max). Synchronous runs above 240 seconds are rejected to leave margin below the plugin request deadline; use async=true instead. For long async jobs, omit this field so the job runs until completion or cancellation.",
             minimum: 1,
             maximum: 300,
           },
@@ -103,9 +105,16 @@ export function buildToolDefinitions() {
             type: "string",
             description: "Short explanation of why this command is being run.",
           },
+          credential_scope: {
+            type: "string",
+            enum: ["bitwarden"],
+            description:
+              "Inject the Bitwarden Secrets Manager access token from macOS Keychain into this command only. Approval follows the project normal risk policy; the scope alone does not force approval. The token is redacted from command output.",
+          },
           async: {
             type: "boolean",
-            description: "If true, run as a managed background job and return job_id and pid immediately. With no timeout_seconds, async jobs run until completion or cancellation.",
+            description:
+              "Run as a managed background job and return job_id and pid immediately. MUST be true for commands that may exceed about 30 seconds or whose duration is uncertain. Omit timeout_seconds for long-running work, then poll shell.status with the returned job_id.",
           },
           long_running: {
             type: "boolean",
@@ -118,7 +127,7 @@ export function buildToolDefinitions() {
     },
     {
       name: "shell.status",
-      description: "Return the status and output of a running or completed background job.",
+      description: "Return the status and output of a background job. Poll this after shell.run(async=true) until the job is no longer running.",
       inputSchema: {
         type: "object",
         properties: {

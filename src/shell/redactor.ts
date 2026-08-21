@@ -31,10 +31,21 @@ export interface RedactResult {
   redactions: Redaction[];
 }
 
-export function redactOutput(text: string, profile: "default" | "strict" = "default"): RedactResult {
+export function redactOutput(
+  text: string,
+  profile: "default" | "strict" = "default",
+  sensitiveValues: string[] = []
+): RedactResult {
   const patterns = profile === "strict" ? STRICT_PATTERNS : DEFAULT_PATTERNS;
   const redactions: Redaction[] = [];
   let result = text;
+
+  for (const value of sensitiveValues.filter((item) => item.length > 0)) {
+    const count = result.split(value).length - 1;
+    if (count === 0) continue;
+    redactions.push({ type: "runtime_credential", count });
+    result = result.split(value).join("[REDACTED]");
+  }
 
   for (const rp of patterns) {
     const matches = result.match(rp.pattern);

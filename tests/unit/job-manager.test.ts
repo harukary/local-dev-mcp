@@ -95,6 +95,26 @@ describe("job retention", () => {
     expect(persisted!.process).toBeUndefined();
   });
 
+  it("injects and redacts a command-scoped runtime credential", async () => {
+    const result = startJob(
+      project,
+      `printf '%s' "$BWS_ACCESS_TOKEN"`,
+      "Verify scoped credential",
+      30,
+      false,
+      "bitwarden",
+      { BWS_ACCESS_TOKEN: "keychain-token" }
+    );
+    if ("error" in result) throw new Error(result.error);
+
+    await waitForJobCompletion(result.id);
+    const completed = getJob(result.id)!;
+    expect(completed.stdout).toBe("[REDACTED]");
+    expect(completed.stdout).not.toContain("keychain-token");
+    expect(completed.redactions).toContainEqual({ type: "runtime_credential", count: 1 });
+    expect(completed.credentialScope).toBe("bitwarden");
+  });
+
   it("cleans up persisted jobs older than seven days", () => {
     const jobsDir = join(process.cwd(), ".local-dev-mcp", "jobs");
     const oldPath = join(jobsDir, "old.json");

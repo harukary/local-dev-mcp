@@ -36,10 +36,12 @@ export class ShellRunner {
     const execResult = await sandbox.exec({
       command: input.command,
       timeoutMs,
+      env: input.env,
     });
 
-    const redactedStdout = redactOutput(execResult.stdout, project.redactionProfile);
-    const redactedStderr = redactOutput(execResult.stderr, project.redactionProfile);
+    const sensitiveValues = Object.values(input.env ?? {});
+    const redactedStdout = redactOutput(execResult.stdout, project.redactionProfile, sensitiveValues);
+    const redactedStderr = redactOutput(execResult.stderr, project.redactionProfile, sensitiveValues);
 
     const allRedactions = [...redactedStdout.redactions, ...redactedStderr.redactions];
     const mergedRedactions = mergeRedactions(allRedactions);
@@ -49,6 +51,7 @@ export class ShellRunner {
       cwd: sandbox.getCwd(),
       command: input.command,
       purpose: input.purpose,
+      credentialScope: input.credentialScope,
       riskLevel: risk.level,
       exitCode: execResult.exitCode,
       durationMs: execResult.durationMs,

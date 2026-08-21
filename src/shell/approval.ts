@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { RiskLevel, ProjectConfig } from "../types.js";
+import type { CredentialScope, RiskLevel, ProjectConfig } from "../types.js";
 
 export interface ApprovalRequest {
   id: string;
@@ -8,6 +8,7 @@ export interface ApprovalRequest {
   command: string;
   riskLevel: RiskLevel;
   purpose?: string;
+  credentialScope?: CredentialScope;
   async?: boolean;
   timeoutSeconds?: number;
   longRunning?: boolean;
@@ -60,8 +61,11 @@ export function evaluateApproval(
   riskLevel: RiskLevel,
   reasons: string[],
   purpose?: string,
-  options?: { async?: boolean; timeoutSeconds?: number; longRunning?: boolean }
+  options?: { async?: boolean; timeoutSeconds?: number; longRunning?: boolean; force?: boolean; credentialScope?: CredentialScope }
 ): ApprovalDecision {
+  if (options?.force) {
+    return createRequest(project, chatContextId, command, riskLevel, reasons, purpose, options, "ask");
+  }
   if (project.approvalMode === "never" || project.approvalMode === "catastrophic_only") {
     return { required: false };
   }
@@ -119,7 +123,7 @@ function createRequest(
   riskLevel: RiskLevel,
   reasons: string[],
   purpose: string | undefined,
-  options: { async?: boolean; timeoutSeconds?: number; longRunning?: boolean } | undefined,
+  options: { async?: boolean; timeoutSeconds?: number; longRunning?: boolean; credentialScope?: CredentialScope } | undefined,
   approvalPolicy: "ask" | "deny"
 ): ApprovalDecision {
   cleanupExpiredRequests();
@@ -130,6 +134,7 @@ function createRequest(
     command,
     riskLevel,
     purpose,
+    credentialScope: options?.credentialScope,
     async: options?.async,
     timeoutSeconds: options?.timeoutSeconds,
     longRunning: options?.longRunning,
