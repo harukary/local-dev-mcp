@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -71,10 +72,16 @@ function parseJson(value: unknown): AgentDevicePayload | null {
   }
 }
 
+function agentDeviceBin(): string {
+  const override = process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN?.trim();
+  if (override) return override;
+  return fileURLToPath(new URL("../../../node_modules/.bin/agent-device", import.meta.url));
+}
+
 async function runJson(args: string[], timeoutMs = 120_000, options: RunJsonOptions = {}): Promise<AgentDevicePayload> {
   const cliArgs = options.stateDir ? ["--state-dir", options.stateDir, ...args] : args;
   try {
-    const { stdout } = await execFileAsync("agent-device", cliArgs, {
+    const { stdout } = await execFileAsync(agentDeviceBin(), cliArgs, {
       maxBuffer: 64 * 1024 * 1024,
       timeout: timeoutMs,
       env: options.env ? { ...process.env, ...options.env } : process.env,
@@ -94,7 +101,7 @@ async function runJson(args: string[], timeoutMs = 120_000, options: RunJsonOpti
 
 export async function isAgentDeviceAvailable(): Promise<boolean> {
   try {
-    await execFileAsync("bash", ["-lc", "command -v agent-device >/dev/null 2>&1"], { maxBuffer: 1024 * 1024 });
+    await execFileAsync(agentDeviceBin(), ["--version"], { maxBuffer: 1024 * 1024, timeout: 10_000 });
     return true;
   } catch {
     return false;
@@ -133,32 +140,21 @@ function iosRunOptions(): RunJsonOptions {
   return { stateDir: iosAgentStateDir() };
 }
 
-function sessionMatches(
-  item: unknown,
-  expected: { name: string; platform: "ios" | "android"; id: string },
-): boolean {
-  if (!item || typeof item !== "object") return false;
-  const value = item as Record<string, unknown>;
-  return value.name === expected.name && value.platform === expected.platform && value.id === expected.id;
-}
-
-async function listIosSessions(): Promise<unknown[]> {
-  const payload = await runJson(["session", "list", "--json"], 30_000, iosRunOptions());
-  return Array.isArray(payload.data?.sessions) ? payload.data.sessions : [];
-}
-
 async function closeIosSessionIfPresent(udid: string): Promise<void> {
   const session = iosSessionName(udid);
-  const sessions = await listIosSessions();
-  if (!sessions.some((item) => sessionMatches(item, { name: session, platform: "ios", id: udid }))) return;
-  await runJson(["close", "--session", session, "--json"], 30_000, iosRunOptions());
+  try {
+    await runJson(["close", "--session", session, "--json"], 30_000, iosRunOptions());
+  } catch (err) {
+    if (err instanceof AgentDeviceCommandError && err.code === "SESSION_NOT_FOUND") return;
+    throw err;
+  }
 }
 
-async function openIosSession(udid: string, target?: string): Promise<string> {
+async function openIosSession(udid: string, target: string): Promise<string> {
   const session = iosSessionName(udid);
   await runJson([
     "open",
-    ...(target ? [target] : []),
+    target,
     "--platform", "ios",
     "--udid", udid,
     "--session", session,
@@ -167,23 +163,8 @@ async function openIosSession(udid: string, target?: string): Promise<string> {
   return session;
 }
 
-async function ensureIosSession(udid: string): Promise<string> {
-  const session = iosSessionName(udid);
-  const sessions = await listIosSessions();
-  if (sessions.some((item) => sessionMatches(item, { name: session, platform: "ios", id: udid }))) return session;
-
-  // A same-name stale session bound to another device must not block recovery.
-  if (sessions.some((item) => {
-    if (!item || typeof item !== "object") return false;
-    return (item as Record<string, unknown>).name === session;
-  })) {
-    await runJson(["close", "--session", session, "--json"], 30_000, iosRunOptions());
-  }
-  return await openIosSession(udid);
-}
-
 async function runBoundIos(udid: string, commandArgs: string[], timeoutMs = 120_000): Promise<AgentDevicePayload> {
-  const session = await ensureIosSession(udid);
+  const session = iosSessionName(udid);
   return await runJson([...commandArgs, "--session", session, "--json"], timeoutMs, iosRunOptions());
 }
 
@@ -305,21 +286,15 @@ function androidRunOptions(adbPath: string): RunJsonOptions {
   };
 }
 
-async function ensureAndroidSession(serial: string, adbPath: string): Promise<string> {
+async function openAndroidSession(serial: string, adbPath: string): Promise<string> {
   const session = androidSessionName(serial);
-  const options = androidRunOptions(adbPath);
-  const payload = await runJson(["session", "list", "--json"], 30_000, options);
-  const sessions = Array.isArray(payload.data?.sessions) ? payload.data.sessions : [];
-  const exists = sessions.some((item) => sessionMatches(item, { name: session, platform: "android", id: serial }));
-  if (!exists) {
-    await runJson([
-      "open",
-      "--platform", "android",
-      "--serial", serial,
-      "--session", session,
-      "--json",
-    ], 60_000, options);
-  }
+  await runJson([
+    "open",
+    "--platform", "android",
+    "--serial", serial,
+    "--session", session,
+    "--json",
+  ], 60_000, androidRunOptions(adbPath));
   return session;
 }
 
@@ -329,12 +304,15 @@ async function runBoundAndroid(
   commandArgs: string[],
   timeoutMs = 120_000,
 ): Promise<AgentDevicePayload> {
-  const session = await ensureAndroidSession(serial, adbPath);
-  return await runJson(
-    [...commandArgs, "--session", session, "--json"],
-    timeoutMs,
-    androidRunOptions(adbPath),
-  );
+  const session = androidSessionName(serial);
+  const options = androidRunOptions(adbPath);
+  try {
+    return await runJson([...commandArgs, "--session", session, "--json"], timeoutMs, options);
+  } catch (err) {
+    if (!(err instanceof AgentDeviceCommandError) || err.code !== "SESSION_NOT_FOUND") throw err;
+    await openAndroidSession(serial, adbPath);
+    return await runJson([...commandArgs, "--session", session, "--json"], timeoutMs, options);
+  }
 }
 
 export async function agentAndroidSnapshot(serial: string, adbPath: string): Promise<AgentDeviceNode[]> {

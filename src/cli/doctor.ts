@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { promisify } from "node:util";
 import { ProjectRegistry } from "../project/registry.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface DoctorOptions {
   configPath: string;
@@ -22,6 +26,8 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   results.push(checkNodeVersion());
   results.push(checkFile("package.json", "package.json"));
   results.push(checkFile("pnpm-lock.yaml", "pnpm lockfile"));
+  results.push(await checkAgentDevice());
+  if (process.platform === "darwin") results.push(await checkDeveloperToolsSecurity());
   results.push(checkEnv(options.envPath));
   results.push(checkPublicOrigin());
   results.push(...await checkProjectConfig(options.configPath));
@@ -54,6 +60,56 @@ function checkFile(path: string, label: string): CheckResult {
   return existsSync(path)
     ? { status: "ok", label, detail: resolve(path) }
     : { status: "fail", label, detail: `missing at ${resolve(path)}` };
+}
+
+async function checkAgentDevice(): Promise<CheckResult> {
+  const binary = resolve("node_modules/.bin/agent-device");
+  if (!existsSync(binary)) {
+    return {
+      status: "fail",
+      label: "agent-device",
+      detail: `project-local binary missing at ${binary}; run pnpm install`,
+    };
+  }
+  try {
+    const { stdout } = await execFileAsync(binary, ["--version"], { timeout: 10_000, maxBuffer: 1024 * 1024 });
+    const version = stdout.trim();
+    return {
+      status: version ? "ok" : "fail",
+      label: "agent-device",
+      detail: version ? `${version} (project-local)` : "project-local binary returned an empty version",
+    };
+  } catch (err) {
+    return {
+      status: "fail",
+      label: "agent-device",
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function checkDeveloperToolsSecurity(): Promise<CheckResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync("DevToolsSecurity", ["-status"], { timeout: 10_000, maxBuffer: 1024 * 1024 });
+    const detail = `${stdout}\n${stderr}`.trim();
+    if (/currently enabled/i.test(detail)) {
+      return { status: "ok", label: "physical iOS DevToolsSecurity", detail: "enabled" };
+    }
+    if (/currently disabled/i.test(detail)) {
+      return {
+        status: "warn",
+        label: "physical iOS DevToolsSecurity",
+        detail: "disabled; physical iOS XCTest requires: sudo DevToolsSecurity -enable",
+      };
+    }
+    return { status: "warn", label: "physical iOS DevToolsSecurity", detail: detail || "status unknown" };
+  } catch (err) {
+    return {
+      status: "warn",
+      label: "physical iOS DevToolsSecurity",
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 function checkEnv(path: string): CheckResult {
