@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   agentAndroidSnapshot,
   agentAndroidTapTarget,
+  agentAndroidWait,
   agentIosLaunchApp,
   agentIosSnapshot,
   agentIosTap,
@@ -18,6 +19,7 @@ let previousPath: string | undefined;
 let previousFakeState: string | undefined;
 let previousFakeLog: string | undefined;
 let previousAgentDeviceBin: string | undefined;
+let previousFakeAdbLog: string | undefined;
 
 afterEach(() => {
   if (previousPath === undefined) delete process.env.PATH;
@@ -28,6 +30,8 @@ afterEach(() => {
   else process.env.FAKE_AGENT_LOG = previousFakeLog;
   if (previousAgentDeviceBin === undefined) delete process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN;
   else process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN = previousAgentDeviceBin;
+  if (previousFakeAdbLog === undefined) delete process.env.FAKE_ADB_LOG;
+  else process.env.FAKE_ADB_LOG = previousFakeAdbLog;
   if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
   tmpRoot = "";
 });
@@ -37,6 +41,7 @@ function installFakeAgentDevice() {
   const binDir = join(tmpRoot, "bin");
   const statePath = join(tmpRoot, "state.json");
   const logPath = join(tmpRoot, "calls.ndjson");
+  const adbLogPath = join(tmpRoot, "adb-calls.ndjson");
   require("node:fs").mkdirSync(binDir, { recursive: true });
   const cliPath = join(binDir, "agent-device");
   writeFileSync(cliPath, `#!/usr/bin/env node
@@ -53,6 +58,7 @@ const command = args[0];
 const requestedSession = args.includes("--session") ? args[args.indexOf("--session") + 1] : null;
 const state = readState();
 const hasRequestedSession = requestedSession !== null && state.active?.name === requestedSession;
+const isExplicitAndroid = args.includes("--platform") && args[args.indexOf("--platform") + 1] === "android" && args.includes("--serial");
 if (command === "session" && args[1] === "list") {
   out({ sessions: [] });
 } else if (command === "open") {
@@ -66,7 +72,12 @@ if (command === "session" && args[1] === "list") {
   if (!hasRequestedSession) fail("SESSION_NOT_FOUND", "No active session");
   else { writeState({}); out({ session: requestedSession }); }
 } else if (command === "snapshot") {
-  if (!hasRequestedSession) fail("SESSION_NOT_FOUND", "Run open first");
+  if (isExplicitAndroid) {
+    out({ nodes: [
+      { ref: "e1", type: "android.widget.TextView", label: "tomoca", value: "tomoca", rect: { x: 10, y: 20, width: 100, height: 40 } },
+      { ref: "e2", type: "android.widget.Button", label: "設定を開く", rect: { x: 200, y: 300, width: 80, height: 60 }, enabled: true, hittable: true, visibleToUser: true },
+    ] });
+  } else if (!hasRequestedSession) fail("SESSION_NOT_FOUND", "Run open first");
   else out({ nodes: [{ ref: "e1", label: "tomoca" }] });
 } else if (command === "click" || command === "find" || command === "wait") {
   if (!hasRequestedSession) fail("SESSION_NOT_FOUND", "Run open first");
@@ -77,15 +88,24 @@ if (command === "session" && args[1] === "list") {
 `);
   chmodSync(cliPath, 0o755);
 
+  const adbPath = join(binDir, "adb");
+  writeFileSync(adbPath, `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.appendFileSync(process.env.FAKE_ADB_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+`);
+  chmodSync(adbPath, 0o755);
+
   previousPath = process.env.PATH;
   previousFakeState = process.env.FAKE_AGENT_STATE;
   previousFakeLog = process.env.FAKE_AGENT_LOG;
   previousAgentDeviceBin = process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN;
+  previousFakeAdbLog = process.env.FAKE_ADB_LOG;
   process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
   process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN = cliPath;
   process.env.FAKE_AGENT_STATE = statePath;
   process.env.FAKE_AGENT_LOG = logPath;
-  return { logPath };
+  process.env.FAKE_ADB_LOG = adbLogPath;
+  return { logPath, adbPath, adbLogPath };
 }
 
 function calls(logPath: string): string[][] {
@@ -118,19 +138,29 @@ describe("mobile agent-device iOS session lifecycle", () => {
     expect(opens.at(-1)).toContain("com.example.tomoca.next");
   }, 15_000);
 
-  it("binds Android lazily on SESSION_NOT_FOUND without relying on session list", async () => {
-    const { logPath } = installFakeAgentDevice();
+  it("uses stateless Android snapshots and ADB taps without named agent-device sessions", async () => {
+    const { logPath, adbPath, adbLogPath } = installFakeAgentDevice();
     const serial = "ANDROID-123";
-    const adbPath = "/tmp/fake-sdk/platform-tools/adb";
 
-    expect(await agentAndroidSnapshot(serial, adbPath)).toEqual([{ ref: "e1", label: "tomoca" }]);
-    await agentAndroidTapTarget(serial, adbPath, "tomoca");
+    const first = await agentAndroidSnapshot(serial, adbPath);
+    expect(first).toHaveLength(2);
+    await agentAndroidTapTarget(serial, adbPath, "e1");
+    const afterRef = calls(logPath);
+    expect(afterRef.filter((args) => args.includes("snapshot"))).toHaveLength(1);
+
+    await agentAndroidTapTarget(serial, adbPath, 'role=button label="設定を開く"');
+    await agentAndroidWait(serial, adbPath, "tomoca", 1000);
 
     const logged = calls(logPath);
-    expect(logged.filter((args) => args.includes("session") && args.includes("list"))).toHaveLength(0);
-    expect(logged.filter((args) => args.includes("open"))).toHaveLength(1);
-    expect(logged.some((args) => args.includes("--platform") && args.includes("android") && args.includes("--serial") && args.includes(serial))).toBe(true);
-    expect(logged.filter((args) => args.includes("snapshot"))).toHaveLength(2);
+    const androidCalls = logged.filter((args) => args.includes("--platform") && args.includes("android"));
+    expect(androidCalls.length).toBeGreaterThanOrEqual(3);
+    expect(androidCalls.every((args) => args.includes("--serial") && args.includes(serial))).toBe(true);
+    expect(androidCalls.every((args) => !args.includes("--session"))).toBe(true);
+    expect(logged.some((args) => args.includes("open"))).toBe(false);
+
+    const adbCalls = calls(adbLogPath);
+    expect(adbCalls).toContainEqual(["-s", serial, "shell", "input", "tap", "60", "40"]);
+    expect(adbCalls).toContainEqual(["-s", serial, "shell", "input", "tap", "240", "330"]);
   }, 15_000);
 
   it("maps refs, selectors, visible text, and wait targets to agent-device syntax", async () => {

@@ -267,10 +267,7 @@ function payloadNodes(payload: AgentDevicePayload): AgentDeviceNode[] {
     : [];
 }
 
-function androidSessionName(serial: string): string {
-  const safe = serial.replace(/[^A-Za-z0-9_-]/g, "-");
-  return `local-dev-mcp-android-${safe}`;
-}
+const androidSnapshotCache = new Map<string, AgentDeviceNode[]>();
 
 function androidAgentStateDir(): string {
   return join(homedir(), ".local-dev-mcp", "runtime", "agent-device-android");
@@ -286,49 +283,147 @@ function androidRunOptions(adbPath: string): RunJsonOptions {
   };
 }
 
-async function openAndroidSession(serial: string, adbPath: string): Promise<string> {
-  const session = androidSessionName(serial);
-  await runJson([
-    "open",
-    "--platform", "android",
-    "--serial", serial,
-    "--session", session,
-    "--json",
-  ], 60_000, androidRunOptions(adbPath));
-  return session;
-}
-
-async function runBoundAndroid(
+async function runOnAndroid(
   serial: string,
   adbPath: string,
   commandArgs: string[],
   timeoutMs = 120_000,
 ): Promise<AgentDevicePayload> {
-  const session = androidSessionName(serial);
-  const options = androidRunOptions(adbPath);
-  try {
-    return await runJson([...commandArgs, "--session", session, "--json"], timeoutMs, options);
-  } catch (err) {
-    if (!(err instanceof AgentDeviceCommandError) || err.code !== "SESSION_NOT_FOUND") throw err;
-    await openAndroidSession(serial, adbPath);
-    return await runJson([...commandArgs, "--session", session, "--json"], timeoutMs, options);
-  }
+  return await runJson(
+    [...commandArgs, "--platform", "android", "--serial", serial, "--json"],
+    timeoutMs,
+    androidRunOptions(adbPath),
+  );
 }
 
 export async function agentAndroidSnapshot(serial: string, adbPath: string): Promise<AgentDeviceNode[]> {
-  const payload = await runBoundAndroid(serial, adbPath, ["snapshot"], 120_000);
-  return payloadNodes(payload);
+  const payload = await runOnAndroid(serial, adbPath, ["snapshot"], 120_000);
+  const nodes = payloadNodes(payload);
+  androidSnapshotCache.set(serial, nodes);
+  return nodes;
+}
+
+type AndroidSelectorCondition = Readonly<{ key: string; value: string }>;
+
+function parseAndroidSelectorGroup(value: string): AndroidSelectorCondition[] | null {
+  const conditions: AndroidSelectorCondition[] = [];
+  const token = /([A-Za-z][A-Za-z0-9_-]*)\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&|]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = token.exec(value)) !== null) {
+    const raw = match[2];
+    const unquoted = (raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))
+      ? raw.slice(1, -1).replace(/\\([\\"'])/g, "$1")
+      : raw;
+    conditions.push({ key: match[1].toLowerCase(), value: unquoted });
+  }
+  if (conditions.length === 0) return null;
+  const remainder = value
+    .replace(token, "")
+    .replace(/&&/g, "")
+    .trim();
+  return remainder.length === 0 ? conditions : null;
+}
+
+function androidNodeRole(node: AgentDeviceNode): string {
+  const type = (node.type ?? "").split(".").at(-1)?.toLowerCase() ?? "";
+  if (type === "radiobutton") return "radio";
+  if (type === "checkbox") return "checkbox";
+  if (type === "edittext") return "textbox";
+  if (type === "textview") return "text";
+  if (type === "imageview") return "image";
+  if (type === "switch") return "switch";
+  if (type.endsWith("button")) return "button";
+  return type;
+}
+
+function booleanNodeValue(node: AgentDeviceNode, key: string): boolean | undefined {
+  const value = node[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function matchesAndroidCondition(node: AgentDeviceNode, condition: AndroidSelectorCondition): boolean {
+  switch (condition.key) {
+    case "id": return node.identifier === condition.value;
+    case "label": return node.label === condition.value;
+    case "text": return node.label === condition.value || node.value === condition.value;
+    case "value": return node.value === condition.value;
+    case "role": return androidNodeRole(node) === condition.value.toLowerCase();
+    case "enabled":
+    case "hittable":
+    case "visible": {
+      const key = condition.key === "visible" ? "visibleToUser" : condition.key;
+      const expected = condition.value.toLowerCase() === "true";
+      return booleanNodeValue(node, key) === expected;
+    }
+    default: return false;
+  }
+}
+
+function resolveAndroidTarget(nodes: AgentDeviceNode[], target: string): AgentDeviceNode | null {
+  const trimmed = target.trim();
+  const ref = normalizeAgentRef(trimmed);
+  if (ref) {
+    const value = ref.slice(1);
+    return nodes.find((node) => node.ref === value || node.ref === ref) ?? null;
+  }
+
+  if (looksLikeAgentSelector(trimmed)) {
+    const groups = trimmed.split(/\s*\|\|\s*/).map(parseAndroidSelectorGroup);
+    if (groups.some((group) => group === null)) return null;
+    return nodes.find((node) => groups.some((group) => group!.every((condition) => matchesAndroidCondition(node, condition)))) ?? null;
+  }
+
+  const exact = nodes.find((node) => node.label === trimmed || node.value === trimmed);
+  if (exact) return exact;
+  const partial = nodes.filter((node) => node.label?.includes(trimmed) || node.value?.includes(trimmed));
+  return partial.length === 1 ? partial[0] : null;
+}
+
+function tappableCenter(node: AgentDeviceNode): { x: number; y: number } | null {
+  const rect = node.rect;
+  if (!rect) return null;
+  const { x, y, width, height } = rect;
+  if (![x, y, width, height].every((value) => typeof value === "number" && Number.isFinite(value))) return null;
+  if ((width ?? 0) <= 0 || (height ?? 0) <= 0) return null;
+  return { x: Math.round(x! + width! / 2), y: Math.round(y! + height! / 2) };
 }
 
 export async function agentAndroidTapTarget(serial: string, adbPath: string, target: string): Promise<void> {
-  await runBoundAndroid(serial, adbPath, agentTapTargetArgs(target));
+  const ref = normalizeAgentRef(target);
+  const nodes = ref && androidSnapshotCache.has(serial)
+    ? androidSnapshotCache.get(serial)!
+    : await agentAndroidSnapshot(serial, adbPath);
+  const node = resolveAndroidTarget(nodes, target);
+  if (!node) {
+    throw new AgentDeviceCommandError(
+      { error: { code: "TARGET_NOT_FOUND", message: `Android target was not found: ${target}` } },
+      "Android target was not found",
+    );
+  }
+  const center = tappableCenter(node);
+  if (!center) {
+    throw new AgentDeviceCommandError(
+      { error: { code: "TARGET_NOT_TAPPABLE", message: `Android target has no tappable bounds: ${target}` } },
+      "Android target has no tappable bounds",
+    );
+  }
+  await execFileAsync(adbPath, [
+    "-s", serial, "shell", "input", "tap", String(center.x), String(center.y),
+  ], { maxBuffer: 2 * 1024 * 1024, timeout: 20_000 });
 }
 
 export async function agentAndroidWait(serial: string, adbPath: string, target: string, timeoutMs = 10_000): Promise<void> {
-  await runBoundAndroid(
-    serial,
-    adbPath,
-    agentWaitTargetArgs(target, timeoutMs),
-    Math.max(15_000, timeoutMs + 5_000),
-  );
+  const timeout = Math.max(1, Math.round(timeoutMs));
+  const deadline = Date.now() + timeout;
+  while (true) {
+    const nodes = await agentAndroidSnapshot(serial, adbPath);
+    if (resolveAndroidTarget(nodes, target)) return;
+    if (Date.now() >= deadline) {
+      throw new AgentDeviceCommandError(
+        { error: { code: "WAIT_TIMEOUT", message: `Timed out waiting for Android target: ${target}` } },
+        "Timed out waiting for Android target",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(1, deadline - Date.now()))));
+  }
 }
