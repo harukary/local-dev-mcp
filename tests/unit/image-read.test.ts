@@ -111,7 +111,7 @@ describe("handleImageRead", () => {
     const metadata = JSON.parse(result.content[0].text);
 
     expect(result._meta).toMatchObject({
-      "openai/outputTemplate": "ui://local-dev-mcp/image-viewer.html",
+      "openai/outputTemplate": "ui://local-dev-mcp/image-viewer-v2.html",
       "openai/widgetAccessible": true,
       display_url: metadata.display_url,
       path: "assets/sample.png",

@@ -227,15 +227,22 @@ describe("tool schema snapshot", () => {
       destructiveHint: false,
       openWorldHint: false,
     });
+    expect(shellRun?.inputSchema).toMatchObject({
+      properties: {
+        credential_scope: {
+          enum: ["bitwarden"],
+        },
+      },
+    });
   });
 });
 
 describe("image viewer resource", () => {
-  it("exposes the legacy Skybridge image viewer for image.show output", () => {
+  it("exposes the MCP Apps image viewer for image.show output", () => {
     const resource = imageViewerResource();
 
-    expect(resource.uri).toBe("ui://local-dev-mcp/image-viewer.html");
-    expect(resource.mimeType).toBe("text/html+skybridge");
+    expect(resource.uri).toBe("ui://local-dev-mcp/image-viewer-v2.html");
+    expect(resource.mimeType).toBe("text/html;profile=mcp-app");
     expect(resource.mimeType).toBe(IMAGE_VIEWER_RESOURCE_MIME_TYPE);
     expect(resource.text).toContain('document.createElement("img")');
     expect(resource.text).toContain("ui/notifications/tool-result");
@@ -243,6 +250,7 @@ describe("image viewer resource", () => {
     expect(resource.text).toContain('"data:" + mimeType + ";base64," + image.data');
     expect(resource._meta).toMatchObject({
       ui: {
+        visibility: ["model", "app"],
         prefersBorder: true,
         csp: {
           resourceDomains: expect.arrayContaining([expect.stringMatching(/^https?:\/\//)]),
