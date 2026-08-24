@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-08-21.1";
+export const TOOL_SCHEMA_VERSION = "2026-08-25.1";
 
 export function buildToolDefinitions() {
   return [
@@ -17,7 +17,7 @@ export function buildToolDefinitions() {
     {
       name: "project.select",
       description:
-        "Select the current project for this chat context. Subsequent shell.run calls will use this project's sandbox.",
+        "Select the current project for all project-scoped tools in this chat context. The selection persists; call this again only when switching projects.",
       inputSchema: {
         type: "object",
         properties: {
@@ -86,7 +86,7 @@ export function buildToolDefinitions() {
     {
       name: "shell.run",
       description:
-        "Run a shell command in the currently selected project's sandbox cwd. For builds, deploys, installs, uploads, full test suites, Gradle/Xcode/Docker/EAS work, or any command that may take more than about 30 seconds or has uncertain duration, MUST use async=true and omit timeout_seconds. Do not wait synchronously near the plugin request deadline; poll shell.status instead.",
+        "Fallback escape hatch for operations not covered by typed tools. Prefer workspace.*, git.*, browser.*, mobile.*, and todo.* when they support the task. Use shell.run for builds, tests, deploys, installs, custom scripts, or unsupported operations. For work that may exceed about 30 seconds, use async=true and poll shell.status.",
       inputSchema: {
         type: "object",
         properties: {
@@ -123,7 +123,7 @@ export function buildToolDefinitions() {
         },
         required: ["command"],
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     {
       name: "shell.status",

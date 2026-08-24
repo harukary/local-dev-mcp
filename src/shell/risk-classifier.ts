@@ -25,6 +25,7 @@ const FORBIDDEN_PATTERNS: RiskRule[] = [
   { pattern: /base64\s+-d\s*\|/, level: "forbidden", reason: "base64 decode pipe bypasses classifier" },
   { pattern: /\|\s*bash\b/, level: "forbidden", reason: "pipe to bash bypasses classifier" },
   { pattern: /\|\s*sh\b/, level: "forbidden", reason: "pipe to sh bypasses classifier" },
+  { pattern: /\b(?:bash|sh|zsh)\s+-c\b/, level: "forbidden", reason: "nested shell command bypasses classifier" },
   { pattern: /\bdeclare\s+-[a-z]/i, level: "forbidden", reason: "declare variable injection" },
   { pattern: /\balias\b/, level: "forbidden", reason: "alias can override commands" },
 ];
@@ -70,15 +71,15 @@ const WRITE_PATTERNS: RiskRule[] = [
   { pattern: /\bginit\s+revert\b|\bgit\s+revert\b/, level: "workspace_write", reason: "git revert modifies history" },
   { pattern: /\bginit\s+reset\b|\bgit\s+reset\b/, level: "workspace_write", reason: "git reset can lose changes" },
   { pattern: /\bnpm\s+run\s+\w*format\w*/, level: "workspace_write", reason: "formatter modifies files" },
-  { pattern: /\bpython\b/, level: "workspace_write", reason: "arbitrary Python script execution" },
+  { pattern: /\bpython(?:\d+(?:\.\d+)*)?\b/, level: "workspace_write", reason: "arbitrary Python script execution" },
   { pattern: /\bnode\b/, level: "workspace_write", reason: "arbitrary Node.js script execution" },
   { pattern: /\btsx\b/, level: "workspace_write", reason: "arbitrary TypeScript execution" },
   { pattern: /\bmv\b/, level: "workspace_write", reason: "move/rename files" },
   { pattern: /\bcp\b/, level: "workspace_write", reason: "copy files" },
   { pattern: /\bmkdir\b/, level: "workspace_write", reason: "create directories" },
   { pattern: /\btouch\b/, level: "workspace_write", reason: "create files" },
-  { pattern: /\b>>\b/, level: "workspace_write", reason: "shell append redirect" },
-  { pattern: /\b>\s+\S/, level: "workspace_write", reason: "shell output redirect" },
+  { pattern: /(^|[\s;&|])\d*>>\s*(?!&)\S+/, level: "workspace_write", reason: "shell append redirect" },
+  { pattern: /(^|[\s;&|])\d*>\s*(?![>&])\S+/, level: "workspace_write", reason: "shell output redirect" },
 ];
 
 const COMPUTE_PATTERNS: RiskRule[] = [
@@ -100,8 +101,39 @@ const COMPUTE_PATTERNS: RiskRule[] = [
   { pattern: /\blint\b/, level: "local_compute", reason: "linter" },
 ];
 
+function maskQuotedLiterals(command: string): string {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let result = "";
+  for (const char of command) {
+    if (quote) {
+      if (quote === '"' && escaped) {
+        escaped = false;
+        result += " ";
+        continue;
+      }
+      if (quote === '"' && char === "\\") {
+        escaped = true;
+        result += " ";
+        continue;
+      }
+      if (char === quote) quote = null;
+      result += " ";
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      result += " ";
+      continue;
+    }
+    result += char;
+  }
+  return result;
+}
+
 export function classifyRisk(command: string, deniedPaths?: string[]): { level: RiskLevel; reasons: string[] } {
   const trimmed = command.trim();
+  const shellStructure = maskQuotedLiterals(trimmed);
 
   if (deniedPaths?.length) {
     const denied = checkDeniedPaths(trimmed, deniedPaths);
@@ -117,25 +149,25 @@ export function classifyRisk(command: string, deniedPaths?: string[]): { level: 
   }
 
   for (const rule of DESTRUCTIVE_PATTERNS) {
-    if (rule.pattern.test(trimmed)) {
+    if (rule.pattern.test(shellStructure)) {
       return { level: "destructive_or_process_control", reasons: [rule.reason] };
     }
   }
 
   for (const rule of NETWORK_PATTERNS) {
-    if (rule.pattern.test(trimmed)) {
+    if (rule.pattern.test(shellStructure)) {
       return { level: "network_or_dependency", reasons: [rule.reason] };
     }
   }
 
   for (const rule of WRITE_PATTERNS) {
-    if (rule.pattern.test(trimmed)) {
+    if (rule.pattern.test(shellStructure)) {
       return { level: "workspace_write", reasons: [rule.reason] };
     }
   }
 
   for (const rule of COMPUTE_PATTERNS) {
-    if (rule.pattern.test(trimmed)) {
+    if (rule.pattern.test(shellStructure)) {
       return { level: "local_compute", reasons: [rule.reason] };
     }
   }
