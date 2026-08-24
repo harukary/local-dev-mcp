@@ -44,6 +44,7 @@ type JsonResult = {
 };
 
 type MobileObserve = "none" | "after";
+type MobileWaitFor = { target: string; timeout_ms?: number };
 
 function jsonResult(value: unknown, imageContent: ImageContent[] = []): JsonResult {
   return {
@@ -338,9 +339,13 @@ async function screenshotPayload(ctx: AppContext, chatContextId: string, project
   }, imageContent);
 }
 
-async function observeOrJson(ctx: AppContext, chatContextId: string, project: ProjectConfig, device: MobileDevice, action: string, observe: MobileObserve | undefined, payload: Record<string, unknown>) {
-  if (observe === "none") return jsonResult({ ok: true, project_id: project.projectId, action, device, ...payload });
-  return await screenshotPayload(ctx, chatContextId, project, device, action, payload);
+async function observeOrJson(ctx: AppContext, chatContextId: string, project: ProjectConfig, device: MobileDevice, action: string, observe: MobileObserve | undefined, payload: Record<string, unknown>, waitFor?: MobileWaitFor) {
+  const waited = waitFor ? await handleMobileWait(ctx, chatContextId, { device: device.id, target: waitFor.target, timeout_ms: waitFor.timeout_ms }) : undefined;
+  if (waited && "isError" in waited && waited.isError) return waited;
+  const wait = waited && "structuredContent" in waited ? waited.structuredContent : undefined;
+  const details = wait === undefined ? payload : { ...payload, wait };
+  if (observe === "none" || (observe === undefined && waitFor)) return jsonResult({ ok: true, project_id: project.projectId, action, device, ...details });
+  return await screenshotPayload(ctx, chatContextId, project, device, action, details);
 }
 
 export async function handleMobileBoot(ctx: AppContext, chatContextId: string, args: { device?: string } = {}) {
@@ -366,7 +371,7 @@ export async function handleMobileBoot(ctx: AppContext, chatContextId: string, a
   }
 }
 
-export async function handleMobileOpenUrl(ctx: AppContext, chatContextId: string, args: { device?: string; url?: string; observe?: MobileObserve } = {}) {
+export async function handleMobileOpenUrl(ctx: AppContext, chatContextId: string, args: { device?: string; url?: string; observe?: MobileObserve; wait_for?: MobileWaitFor } = {}) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
   const url = validateUrlForMobile(args.url ?? "");
@@ -383,14 +388,14 @@ export async function handleMobileOpenUrl(ctx: AppContext, chatContextId: string
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url], { maxBuffer: 2 * 1024 * 1024 });
     }
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    return await observeOrJson(ctx, chatContextId, project, device, "mobile.open_url", args.observe, { url });
+    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 800));
+    return await observeOrJson(ctx, chatContextId, project, device, "mobile.open_url", args.observe, { url }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_OPEN_URL_FAILED", err, { device, url });
   }
 }
 
-export async function handleMobileTap(ctx: AppContext, chatContextId: string, args: { device?: string; x?: number; y?: number; observe?: MobileObserve } = {}) {
+export async function handleMobileTap(ctx: AppContext, chatContextId: string, args: { device?: string; x?: number; y?: number; observe?: MobileObserve; wait_for?: MobileWaitFor } = {}) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
   if (typeof args.x !== "number" || typeof args.y !== "number") return jsonError("INVALID_COORDINATES", "mobile.tap requires numeric x and y coordinates.", { x: args.x, y: args.y });
@@ -404,8 +409,8 @@ export async function handleMobileTap(ctx: AppContext, chatContextId: string, ar
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "input", "tap", String(Math.round(args.x)), String(Math.round(args.y))], { maxBuffer: 2 * 1024 * 1024 });
     }
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    return await observeOrJson(ctx, chatContextId, project, device, "mobile.tap", args.observe, { x: Math.round(args.x), y: Math.round(args.y) });
+    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 400));
+    return await observeOrJson(ctx, chatContextId, project, device, "mobile.tap", args.observe, { x: Math.round(args.x), y: Math.round(args.y) }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_TAP_FAILED", err, { device, x: args.x, y: args.y });
   }
@@ -415,7 +420,7 @@ function androidInputText(text: string): string {
   return text.replace(/%/g, "%25").replace(/\s/g, "%s").replace(/'/g, "\\'").replace(/"/g, '\\"');
 }
 
-export async function handleMobileType(ctx: AppContext, chatContextId: string, args: { device?: string; text?: string; observe?: MobileObserve } = {}) {
+export async function handleMobileType(ctx: AppContext, chatContextId: string, args: { device?: string; text?: string; observe?: MobileObserve; wait_for?: MobileWaitFor } = {}) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
   if (args.text === undefined) return jsonError("MISSING_TEXT", "mobile.type requires text.");
@@ -429,8 +434,8 @@ export async function handleMobileType(ctx: AppContext, chatContextId: string, a
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "input", "text", androidInputText(args.text)], { maxBuffer: 2 * 1024 * 1024 });
     }
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    return await observeOrJson(ctx, chatContextId, project, device, "mobile.type", args.observe, { text: args.text });
+    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 400));
+    return await observeOrJson(ctx, chatContextId, project, device, "mobile.type", args.observe, { text: args.text }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_TYPE_FAILED", err, { device });
   }
@@ -474,7 +479,7 @@ export async function handleMobileSnapshot(ctx: AppContext, chatContextId: strin
   }
 }
 
-export async function handleMobileTapElement(ctx: AppContext, chatContextId: string, args: { device?: string; target?: string; observe?: MobileObserve } = {}) {
+export async function handleMobileTapElement(ctx: AppContext, chatContextId: string, args: { device?: string; target?: string; observe?: MobileObserve; wait_for?: MobileWaitFor } = {}) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
   if (!args.target?.trim()) return jsonError("MISSING_TARGET", "mobile.tap_element requires a snapshot ref, text, or selector target.");
@@ -489,14 +494,14 @@ export async function handleMobileTapElement(ctx: AppContext, chatContextId: str
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await agentAndroidTapTarget(device.id, adb, target);
     }
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    return await observeOrJson(ctx, chatContextId, project, device, "mobile.tap_element", args.observe, { target });
+    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 400));
+    return await observeOrJson(ctx, chatContextId, project, device, "mobile.tap_element", args.observe, { target }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_TAP_ELEMENT_FAILED", err, { device, target });
   }
 }
 
-export async function handleMobileLaunchApp(ctx: AppContext, chatContextId: string, args: { device?: string; app?: string; observe?: MobileObserve } = {}) {
+export async function handleMobileLaunchApp(ctx: AppContext, chatContextId: string, args: { device?: string; app?: string; observe?: MobileObserve; wait_for?: MobileWaitFor } = {}) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
   if (!args.app?.trim()) return jsonError("MISSING_APP", "mobile.launch_app requires an app name, bundle ID, or Android package.");
@@ -511,14 +516,14 @@ export async function handleMobileLaunchApp(ctx: AppContext, chatContextId: stri
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "monkey", "-p", app, "-c", "android.intent.category.LAUNCHER", "1"], { maxBuffer: 2 * 1024 * 1024 });
     }
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    return await observeOrJson(ctx, chatContextId, project, device, "mobile.launch_app", args.observe, { app });
+    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 800));
+    return await observeOrJson(ctx, chatContextId, project, device, "mobile.launch_app", args.observe, { app }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_LAUNCH_APP_FAILED", err, { device, app });
   }
 }
 
-export async function handleMobileSwipe(ctx: AppContext, chatContextId: string, args: { device?: string; x1?: number; y1?: number; x2?: number; y2?: number; duration_ms?: number; observe?: MobileObserve } = {}) {
+export async function handleMobileSwipe(ctx: AppContext, chatContextId: string, args: { device?: string; x1?: number; y1?: number; x2?: number; y2?: number; duration_ms?: number; observe?: MobileObserve; wait_for?: MobileWaitFor } = {}) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
   const coords = [args.x1, args.y1, args.x2, args.y2];
@@ -534,14 +539,14 @@ export async function handleMobileSwipe(ctx: AppContext, chatContextId: string, 
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "input", "swipe", String(Math.round(args.x1!)), String(Math.round(args.y1!)), String(Math.round(args.x2!)), String(Math.round(args.y2!)), String(duration)], { maxBuffer: 2 * 1024 * 1024 });
     }
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    return await observeOrJson(ctx, chatContextId, project, device, "mobile.swipe", args.observe, { x1: args.x1, y1: args.y1, x2: args.x2, y2: args.y2, duration_ms: duration });
+    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 400));
+    return await observeOrJson(ctx, chatContextId, project, device, "mobile.swipe", args.observe, { x1: args.x1, y1: args.y1, x2: args.x2, y2: args.y2, duration_ms: duration }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_SWIPE_FAILED", err, { device });
   }
 }
 
-export async function handleMobilePress(ctx: AppContext, chatContextId: string, args: { device?: string; key?: "home" | "back"; observe?: MobileObserve } = {}) {
+export async function handleMobilePress(ctx: AppContext, chatContextId: string, args: { device?: string; key?: "home" | "back"; observe?: MobileObserve; wait_for?: MobileWaitFor } = {}) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
   if (args.key !== "home" && args.key !== "back") return jsonError("INVALID_KEY", "mobile.press supports key=home or key=back.", { key: args.key });
@@ -556,8 +561,8 @@ export async function handleMobilePress(ctx: AppContext, chatContextId: string, 
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "input", "keyevent", keyCode], { maxBuffer: 2 * 1024 * 1024 });
     }
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    return await observeOrJson(ctx, chatContextId, project, device, "mobile.press", args.observe, { key: args.key });
+    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 400));
+    return await observeOrJson(ctx, chatContextId, project, device, "mobile.press", args.observe, { key: args.key }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_PRESS_FAILED", err, { device, key: args.key });
   }

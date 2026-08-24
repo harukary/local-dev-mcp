@@ -270,10 +270,10 @@ function createMcpServer(ctx: AppContext): Server {
           return await handleBrowserSelectors(ctx, chatContextId, args as { session_id?: string; limit?: number; query?: string });
 
         case "browser.click":
-          return await handleBrowserClick(ctx, chatContextId, args as { session_id?: string; selector?: string; observe?: "none" | "after"; wait_ms?: number });
+          return await handleBrowserClick(ctx, chatContextId, args as { session_id?: string; selector?: string; observe?: "none" | "after"; wait_ms?: number; wait_for?: { selector?: string; text?: string; url_contains?: string; title_contains?: string; timeout_ms?: number } });
 
         case "browser.type":
-          return await handleBrowserType(ctx, chatContextId, args as { session_id?: string; selector?: string; text?: string; submit?: boolean; observe?: "none" | "after"; wait_ms?: number });
+          return await handleBrowserType(ctx, chatContextId, args as { session_id?: string; selector?: string; text?: string; submit?: boolean; observe?: "none" | "after"; wait_ms?: number; wait_for?: { selector?: string; text?: string; url_contains?: string; title_contains?: string; timeout_ms?: number } });
 
         case "browser.wait":
           return await handleBrowserWait(ctx, chatContextId, args as { session_id?: string; selector?: string; text?: string; url_contains?: string; title_contains?: string; timeout_ms?: number });
@@ -297,7 +297,7 @@ function createMcpServer(ctx: AppContext): Server {
           return await handleBrowserScreenshot(ctx, chatContextId, args as { session_id?: string });
 
         case "browser.open":
-          return await handleBrowserOpen(ctx, chatContextId, args as { url?: string; session_id?: string; observe?: "none" | "after"; wait_ms?: number });
+          return await handleBrowserOpen(ctx, chatContextId, args as { url?: string; session_id?: string; observe?: "none" | "after"; wait_ms?: number; wait_for?: { selector?: string; text?: string; url_contains?: string; title_contains?: string; timeout_ms?: number } });
 
         case "mobile.status":
           return await handleMobileStatus(ctx, chatContextId);
@@ -315,25 +315,25 @@ function createMcpServer(ctx: AppContext): Server {
           return await handleMobileBoot(ctx, chatContextId, args as { device?: string });
 
         case "mobile.launch_app":
-          return await handleMobileLaunchApp(ctx, chatContextId, args as { device?: string; app?: string; observe?: "none" | "after" });
+          return await handleMobileLaunchApp(ctx, chatContextId, args as { device?: string; app?: string; observe?: "none" | "after"; wait_for?: { target: string; timeout_ms?: number } });
 
         case "mobile.open_url":
-          return await handleMobileOpenUrl(ctx, chatContextId, args as { device?: string; url?: string; observe?: "none" | "after" });
+          return await handleMobileOpenUrl(ctx, chatContextId, args as { device?: string; url?: string; observe?: "none" | "after"; wait_for?: { target: string; timeout_ms?: number } });
 
         case "mobile.tap":
-          return await handleMobileTap(ctx, chatContextId, args as { device?: string; x?: number; y?: number; observe?: "none" | "after" });
+          return await handleMobileTap(ctx, chatContextId, args as { device?: string; x?: number; y?: number; observe?: "none" | "after"; wait_for?: { target: string; timeout_ms?: number } });
 
         case "mobile.tap_element":
-          return await handleMobileTapElement(ctx, chatContextId, args as { device?: string; target?: string; observe?: "none" | "after" });
+          return await handleMobileTapElement(ctx, chatContextId, args as { device?: string; target?: string; observe?: "none" | "after"; wait_for?: { target: string; timeout_ms?: number } });
 
         case "mobile.type":
-          return await handleMobileType(ctx, chatContextId, args as { device?: string; text?: string; observe?: "none" | "after" });
+          return await handleMobileType(ctx, chatContextId, args as { device?: string; text?: string; observe?: "none" | "after"; wait_for?: { target: string; timeout_ms?: number } });
 
         case "mobile.swipe":
-          return await handleMobileSwipe(ctx, chatContextId, args as { device?: string; x1?: number; y1?: number; x2?: number; y2?: number; duration_ms?: number; observe?: "none" | "after" });
+          return await handleMobileSwipe(ctx, chatContextId, args as { device?: string; x1?: number; y1?: number; x2?: number; y2?: number; duration_ms?: number; observe?: "none" | "after"; wait_for?: { target: string; timeout_ms?: number } });
 
         case "mobile.press":
-          return await handleMobilePress(ctx, chatContextId, args as { device?: string; key?: "home" | "back"; observe?: "none" | "after" });
+          return await handleMobilePress(ctx, chatContextId, args as { device?: string; key?: "home" | "back"; observe?: "none" | "after"; wait_for?: { target: string; timeout_ms?: number } });
 
         case "mobile.wait":
           return await handleMobileWait(ctx, chatContextId, args as { device?: string; target?: string; timeout_ms?: number });

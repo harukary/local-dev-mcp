@@ -18,6 +18,7 @@ const DEFAULT_SESSION_ID = "default";
 const DEFAULT_PROFILE_DIR = join(BROWSER_HOME, "profiles", DEFAULT_SESSION_ID);
 
 type BrowserObserve = "none" | "after";
+type BrowserWaitFor = { selector?: string; text?: string; url_contains?: string; title_contains?: string; timeout_ms?: number };
 
 type BrowserSession = {
   session_id: string;
@@ -538,7 +539,7 @@ export async function handleBrowserScreenshot(ctx: AppContext, chatContextId: st
 export async function handleBrowserOpen(
   ctx: AppContext,
   chatContextId: string,
-  args: { url?: string; session_id?: string; observe?: BrowserObserve; wait_ms?: number }
+  args: { url?: string; session_id?: string; observe?: BrowserObserve; wait_ms?: number; wait_for?: BrowserWaitFor }
 ) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
@@ -550,13 +551,16 @@ export async function handleBrowserOpen(
     await withPage(session.port, async (client) => {
       await client.send("Page.enable");
       await client.send("Page.navigate", { url });
-      await sleep(Math.min(Math.max(args?.wait_ms ?? 1000, 0), 10_000));
+      await sleep(Math.min(Math.max(args?.wait_ms ?? (args?.wait_for ? 0 : 1000), 0), 10_000));
     });
     session.url = url;
     session.updated_at = new Date().toISOString();
     await saveSession(session);
-    if (args?.observe === "none") return jsonResult({ ok: true, project_id: project.projectId, action: "browser.open", session_id: session.session_id, port: session.port, url });
-    return await captureCdpScreenshot(ctx, chatContextId, project, session, "browser.open", { url });
+    const waited = args?.wait_for ? await handleBrowserWait(ctx, chatContextId, { session_id: session.session_id, ...args.wait_for }) : undefined;
+    if (waited && "isError" in waited && waited.isError) return waited;
+    const wait = waited && "structuredContent" in waited ? waited.structuredContent : undefined;
+    if (args?.observe === "none" || (args?.observe === undefined && args?.wait_for)) return jsonResult({ ok: true, project_id: project.projectId, action: "browser.open", session_id: session.session_id, port: session.port, url, wait });
+    return await captureCdpScreenshot(ctx, chatContextId, project, session, "browser.open", { url, wait });
   } catch (err) {
     return jsonError("BROWSER_OPEN_FAILED", err instanceof Error ? err.message : String(err), { session_id: session.session_id, port: session.port });
   }
@@ -688,7 +692,7 @@ export async function handleBrowserSelectors(ctx: AppContext, chatContextId: str
 }
 
 
-export async function handleBrowserClick(ctx: AppContext, chatContextId: string, args: { session_id?: string; selector?: string; observe?: BrowserObserve; wait_ms?: number } = {}) {
+export async function handleBrowserClick(ctx: AppContext, chatContextId: string, args: { session_id?: string; selector?: string; observe?: BrowserObserve; wait_ms?: number; wait_for?: BrowserWaitFor } = {}) {
   const selected = await activeSessionAndProject(ctx, chatContextId, args.session_id);
   if ("error" in selected) return selected.error;
   const { project, session } = selected;
@@ -718,15 +722,18 @@ export async function handleBrowserClick(ctx: AppContext, chatContextId: string,
       };
     })()`);
     if (!clicked.found) return jsonError("SELECTOR_NOT_FOUND", `No element found for selector: ${selector}`, { selector, session_id: session.session_id, port: session.port });
-    await sleep(Math.min(Math.max(args.wait_ms ?? 500, 0), 10_000));
-    if (args.observe === "none") return jsonResult({ ok: true, project_id: project.projectId, action: "browser.click", session_id: session.session_id, port: session.port, ...clicked });
-    return await captureCdpScreenshot(ctx, chatContextId, project, session, "browser.click", { clicked });
+    await sleep(Math.min(Math.max(args.wait_ms ?? (args.wait_for ? 0 : 500), 0), 10_000));
+    const waited = args.wait_for ? await handleBrowserWait(ctx, chatContextId, { session_id: session.session_id, ...args.wait_for }) : undefined;
+    if (waited && "isError" in waited && waited.isError) return waited;
+    const wait = waited && "structuredContent" in waited ? waited.structuredContent : undefined;
+    if (args.observe === "none" || (args.observe === undefined && args.wait_for)) return jsonResult({ ok: true, project_id: project.projectId, action: "browser.click", session_id: session.session_id, port: session.port, ...clicked, wait });
+    return await captureCdpScreenshot(ctx, chatContextId, project, session, "browser.click", { clicked, wait });
   } catch (err) {
     return jsonError("BROWSER_CLICK_FAILED", err instanceof Error ? err.message : String(err), { session_id: session.session_id, port: session.port, selector });
   }
 }
 
-export async function handleBrowserType(ctx: AppContext, chatContextId: string, args: { session_id?: string; selector?: string; text?: string; submit?: boolean; observe?: BrowserObserve; wait_ms?: number } = {}) {
+export async function handleBrowserType(ctx: AppContext, chatContextId: string, args: { session_id?: string; selector?: string; text?: string; submit?: boolean; observe?: BrowserObserve; wait_ms?: number; wait_for?: BrowserWaitFor } = {}) {
   const selected = await activeSessionAndProject(ctx, chatContextId, args.session_id);
   if ("error" in selected) return selected.error;
   const { project, session } = selected;
@@ -769,9 +776,12 @@ export async function handleBrowserType(ctx: AppContext, chatContextId: string, 
       return { selector, found: true, tagName: element.tagName, value: "value" in element ? element.value : element.textContent, submitted, title: document.title, url: location.href };
     })()`);
     if (!typed.found) return jsonError("SELECTOR_NOT_FOUND", `No element found for selector: ${selector}`, { selector, session_id: session.session_id, port: session.port });
-    await sleep(Math.min(Math.max(args.wait_ms ?? 500, 0), 10_000));
-    if (args.observe === "none") return jsonResult({ ok: true, project_id: project.projectId, action: "browser.type", session_id: session.session_id, port: session.port, ...typed });
-    return await captureCdpScreenshot(ctx, chatContextId, project, session, "browser.type", { typed });
+    await sleep(Math.min(Math.max(args.wait_ms ?? (args.wait_for ? 0 : 500), 0), 10_000));
+    const waited = args.wait_for ? await handleBrowserWait(ctx, chatContextId, { session_id: session.session_id, ...args.wait_for }) : undefined;
+    if (waited && "isError" in waited && waited.isError) return waited;
+    const wait = waited && "structuredContent" in waited ? waited.structuredContent : undefined;
+    if (args.observe === "none" || (args.observe === undefined && args.wait_for)) return jsonResult({ ok: true, project_id: project.projectId, action: "browser.type", session_id: session.session_id, port: session.port, ...typed, wait });
+    return await captureCdpScreenshot(ctx, chatContextId, project, session, "browser.type", { typed, wait });
   } catch (err) {
     return jsonError("BROWSER_TYPE_FAILED", err instanceof Error ? err.message : String(err), { session_id: session.session_id, port: session.port, selector });
   }

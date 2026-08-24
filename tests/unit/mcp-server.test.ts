@@ -244,6 +244,12 @@ describe("tool schema snapshot", () => {
     for (const name of ["browser.click", "browser.open", "mobile.screenshot", "mobile.tap"]) {
       expect(snapshot.tools.find((tool) => tool.name === name)?._meta).toBeUndefined();
     }
+    expect(snapshot.tools.find((tool) => tool.name === "browser.click")?.inputSchema).toMatchObject({
+      properties: { wait_for: { properties: { text: { type: "string" }, timeout_ms: { maximum: 60000 } } } },
+    });
+    expect(snapshot.tools.find((tool) => tool.name === "mobile.tap_element")?.inputSchema).toMatchObject({
+      properties: { wait_for: { required: ["target"], properties: { target: { type: "string" } } } },
+    });
     expect(shellRun?.annotations).toMatchObject({
       readOnlyHint: false,
       destructiveHint: true,
