@@ -155,6 +155,38 @@ describe("job retention", () => {
     expect(payload.stdout).toContain("status-persisted");
   });
 
+  it("returns only output after a reused shell.status cursor", async () => {
+    const result = startJob(project, "printf 'first\nsecond\n'");
+    if ("error" in result) throw new Error(result.error);
+    await waitForJobCompletion(result.id);
+
+    const initial = JSON.parse((await handleShellStatus({ job_id: result.id })).content[0].text);
+    expect(initial.stdout).toContain("first");
+    expect(initial.cursor).toMatch(/^\d+:\d+$/);
+
+    const replay = JSON.parse((await handleShellStatus({ job_id: result.id, cursor: "0:0" })).content[0].text);
+    expect(replay.stdout_delta).toBe(initial.stdout);
+    expect(replay.command).toBeUndefined();
+
+    const empty = JSON.parse((await handleShellStatus({ job_id: result.id, cursor: replay.cursor })).content[0].text);
+    expect(empty.stdout_delta).toBe("");
+    expect(empty.stderr_delta).toBe("");
+  });
+
+  it("long-polls shell.status until output changes", async () => {
+    const result = startJob(project, `node -e "setTimeout(() => console.log('later-output'), 250)"`);
+    if ("error" in result) throw new Error(result.error);
+
+    const started = Date.now();
+    const status = await handleShellStatus({ job_id: result.id, cursor: "0:0", wait_ms: 1000 });
+    const elapsed = Date.now() - started;
+    const body = JSON.parse(status.content[0].text);
+
+    expect(body.stdout_delta).toContain("later-output");
+    expect(elapsed).toBeGreaterThanOrEqual(100);
+    await waitForJobCompletion(result.id);
+  });
+
   it("lets long-running jobs exceed the normal timeout", async () => {
     const result = startJob(
       project,

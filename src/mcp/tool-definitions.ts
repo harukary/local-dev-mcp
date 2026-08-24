@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-08-25.1";
+export const TOOL_SCHEMA_VERSION = "2026-08-25.2";
 
 export function buildToolDefinitions() {
   return [
@@ -127,13 +127,23 @@ export function buildToolDefinitions() {
     },
     {
       name: "shell.status",
-      description: "Return the status and output of a background job. Poll this after shell.run(async=true) until the job is no longer running.",
+      description: "Return background-job status and output. Reuse the returned cursor on later polls to receive only new stdout/stderr; wait_ms can long-poll server-side for output or completion.",
       inputSchema: {
         type: "object",
         properties: {
           job_id: {
             type: "string",
             description: "The job ID returned by shell.run with async=true.",
+          },
+          cursor: {
+            type: "string",
+            description: "Opaque output cursor returned by the previous shell.status call. Omit on the first call.",
+          },
+          wait_ms: {
+            type: "integer",
+            minimum: 0,
+            maximum: 30000,
+            description: "Wait up to this many milliseconds for new output or a status change before returning.",
           },
         },
         required: ["job_id"],

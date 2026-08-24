@@ -361,7 +361,7 @@ function createMcpServer(ctx: AppContext): Server {
           );
 
         case "shell.status":
-          return await handleShellStatus(args as { job_id: string });
+          return await handleShellStatus(args as { job_id: string; cursor?: string; wait_ms?: number });
 
         case "shell.cancel":
           return await handleShellCancel(args as { job_id?: string; pid?: number });
