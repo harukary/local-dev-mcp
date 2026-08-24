@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-08-25.3";
+export const TOOL_SCHEMA_VERSION = "2026-08-25.4";
 
 export function buildToolDefinitions() {
   return [
@@ -344,6 +344,12 @@ export function buildToolDefinitions() {
         required: ["project_id", "path", "absolute_path", "size_bytes", "download_url", "expires_at", "ttl_seconds", "filename", "markdown"],
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    {
+      name: "tool.usage",
+      description: "Return compact aggregated MCP tool usage metrics: call counts, failures, durations, per-project counts, and shell.run share. No tool arguments or outputs are recorded.",
+      inputSchema: { type: "object", properties: {} },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: "tool.schema",

@@ -245,9 +245,9 @@ describe("tool schema snapshot", () => {
       expect(snapshot.tools.find((tool) => tool.name === name)?._meta).toBeUndefined();
     }
     expect(shellRun?.annotations).toMatchObject({
-      readOnlyHint: true,
-      destructiveHint: false,
-      openWorldHint: false,
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
     });
     expect(shellRun?.inputSchema).toMatchObject({
       properties: {

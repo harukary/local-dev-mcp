@@ -24,6 +24,7 @@ import type { ProjectRegistry } from "../project/registry.js";
 import type { ChatContextStore } from "../project/context-store.js";
 import type { ShellRunner } from "../shell/runner.js";
 import type { AuditLogger } from "../audit/audit-log.js";
+import type { ToolUsageMetrics } from "../metrics/tool-usage.js";
 import { handleProjectList } from "./tools/project-list.js";
 import { handleProjectSelect } from "./tools/project-select.js";
 import { handleProjectCurrent } from "./tools/project-current.js";
@@ -59,6 +60,7 @@ export interface AppContext {
   contextStore: ChatContextStore;
   shellRunner: ShellRunner;
   auditLogger: AuditLogger;
+  toolUsageMetrics: ToolUsageMetrics;
 }
 
 type CallToolMeta = {
@@ -145,6 +147,7 @@ async function createAppContext(configPath: string): Promise<AppContext> {
   const { ChatContextStore } = await import("../project/context-store.js");
   const { ShellRunner } = await import("../shell/runner.js");
   const { AuditLogger } = await import("../audit/audit-log.js");
+  const { ToolUsageMetrics } = await import("../metrics/tool-usage.js");
 
   const registry = await ProjectRegistry.load(configPath);
   const runtimeDir = join(homedir(), ".local-dev-mcp", "runtime");
@@ -153,8 +156,9 @@ async function createAppContext(configPath: string): Promise<AppContext> {
   await contextStore.load();
   const shellRunner = new ShellRunner();
   const auditLogger = new AuditLogger("./logs/audit.jsonl");
+  const toolUsageMetrics = new ToolUsageMetrics("./logs/tool-usage.json");
 
-  return { configPath, registry, contextStore, shellRunner, auditLogger };
+  return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics };
 }
 
 function createMcpServer(ctx: AppContext): Server {
@@ -170,10 +174,12 @@ function createMcpServer(ctx: AppContext): Server {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     const chatContextId = resolveChatContextId(request.params._meta as CallToolMeta | undefined);
+    const usageStartedAt = performance.now();
 
     try {
       debugMcpLog(`[CallTool] ${name} chatContextId=${chatContextId} store=${ctx.contextStore.getAll().size}ctxs`);
-      switch (name) {
+      const result: any = await (async () => {
+        switch (name) {
         case "project.list":
           return await handleProjectList(ctx, chatContextId);
 
@@ -412,8 +418,17 @@ function createMcpServer(ctx: AppContext): Server {
         case "download.link":
           return await handleDownloadLink(ctx, chatContextId, args as { path?: string; ttl_seconds?: number; filename?: string });
 
+        case "tool.usage": {
+          const usage = ctx.toolUsageMetrics.snapshot();
+          return {
+            structuredContent: usage,
+            content: [{ type: "text", text: JSON.stringify(usage, null, 2) }],
+          };
+        }
+
         case "tool.schema":
           return {
+            structuredContent: buildToolSchemaSnapshot(),
             content: [{ type: "text", text: JSON.stringify(buildToolSchemaSnapshot(), null, 2) }],
           };
 
@@ -422,8 +437,22 @@ function createMcpServer(ctx: AppContext): Server {
             content: [{ type: "text", text: `Unknown tool: ${name}` }],
             isError: true,
           };
-      }
+        }
+      })();
+      ctx.toolUsageMetrics.record({
+        tool: name,
+        project_id: ctx.contextStore.getCurrentProject(chatContextId),
+        duration_ms: performance.now() - usageStartedAt,
+        failed: result?.isError === true,
+      });
+      return result;
     } catch (err) {
+      ctx.toolUsageMetrics.record({
+        tool: name,
+        project_id: ctx.contextStore.getCurrentProject(chatContextId),
+        duration_ms: performance.now() - usageStartedAt,
+        failed: true,
+      });
       const message = err instanceof Error ? err.message : String(err);
       await ctx.auditLogger.log({
         timestamp: new Date().toISOString(),
