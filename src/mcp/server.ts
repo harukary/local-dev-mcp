@@ -46,7 +46,7 @@ import { handleWorkspaceRead } from "./tools/dev/workspace-read.js";
 import { handleWorkspaceList } from "./tools/dev/workspace-list.js";
 import { handleWorkspaceSearch } from "./tools/dev/workspace-search.js";
 import { handleWorkspacePatch } from "./tools/dev/workspace-patch.js";
-import { handleGitStatus, handleGitDiff } from "./tools/dev/git.js";
+import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleGitDiff } from "./tools/dev/git.js";
 import { handleNotesCreate, handleNotesGuidelines, handleNotesValidate } from "./tools/notes/index.js";
 import { handlePrivateNotesCreate, handlePrivateNotesGuidelines, handlePrivateNotesValidate } from "./tools/private-notes/index.js";
 import { handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
@@ -226,8 +226,17 @@ function createMcpServer(ctx: AppContext): Server {
         case "private_notes.validate":
           return await handlePrivateNotesValidate(ctx, chatContextId, args as { path?: string });
 
+        case "git.inspect":
+          return await handleGitInspect(ctx, chatContextId, args as { include_untracked?: boolean; recent_commits?: number; include_worktrees?: boolean; include_diff_stat?: boolean });
+
         case "git.status":
           return await handleGitStatus(ctx, chatContextId, args as { include_untracked?: boolean });
+
+        case "git.log":
+          return await handleGitLog(ctx, chatContextId, args as { ref?: string; path?: string; limit?: number });
+
+        case "git.show":
+          return await handleGitShow(ctx, chatContextId, args as { ref?: string; path?: string; mode?: "patch" | "stat" | "name-status"; max_bytes?: number });
 
         case "git.diff":
           return await handleGitDiff(ctx, chatContextId, args as { path?: string; staged?: boolean; stat?: boolean; max_bytes?: number });

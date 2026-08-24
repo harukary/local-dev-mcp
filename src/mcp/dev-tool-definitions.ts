@@ -73,7 +73,10 @@ export function buildDevToolDefinitions() {
       inputSchema: { type: "object", properties: { path: { type: "string" } } },
       annotations: RO,
     },
-    { name: "git.status", description: "Return structured git status for the selected project.", inputSchema: { type: "object", properties: { include_untracked: { type: "boolean" } } }, annotations: RO },
+    { name: "git.inspect", description: "Inspect repository state in one call: branch/upstream/ahead-behind, changed files, recent commits, worktrees, and diff stat. Prefer this over bundling multiple read-only git shell commands.", inputSchema: { type: "object", properties: { include_untracked: { type: "boolean" }, recent_commits: { type: "integer", minimum: 0, maximum: 20 }, include_worktrees: { type: "boolean" }, include_diff_stat: { type: "boolean" } } }, annotations: RO },
+    { name: "git.status", description: "Return structured git status, upstream, and ahead/behind counts for the selected project.", inputSchema: { type: "object", properties: { include_untracked: { type: "boolean" } } }, annotations: RO },
+    { name: "git.log", description: "Return recent commits for a git ref, optionally scoped to one project path.", inputSchema: { type: "object", properties: { ref: { type: "string" }, path: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } } }, annotations: RO },
+    { name: "git.show", description: "Show a commit/ref as a bounded patch, stat, or name-status output, optionally scoped to one project path.", inputSchema: { type: "object", properties: { ref: { type: "string" }, path: { type: "string" }, mode: { type: "string", enum: ["patch", "stat", "name-status"] }, max_bytes: { type: "integer", minimum: 1024, maximum: 2097152 } } }, annotations: RO },
     { name: "git.diff", description: "Return git diff for the selected project.", inputSchema: { type: "object", properties: { path: { type: "string" }, staged: { type: "boolean" }, stat: { type: "boolean" }, max_bytes: { type: "integer" } } }, annotations: RO },
   ];
 }
