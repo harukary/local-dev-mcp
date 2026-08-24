@@ -53,12 +53,13 @@ function payload(result: { content: Array<{ text?: string }> }) {
 }
 
 describe("browser tools", () => {
-  it("keeps the default browser session stable within one ChatGPT conversation and project", () => {
+  it("reuses one local-dev-mcp default browser across conversations and projects", () => {
     const first = browserSessionIdForContext("chatgpt-session:conv_123", "alpha");
 
     expect(browserSessionIdForContext("chatgpt-session:conv_123", "alpha")).toBe(first);
-    expect(browserSessionIdForContext("chatgpt-session:conv_456", "alpha")).not.toBe(first);
-    expect(browserSessionIdForContext("chatgpt-session:conv_123", "beta")).not.toBe(first);
+    expect(browserSessionIdForContext("chatgpt-session:conv_456", "alpha")).toBe(first);
+    expect(browserSessionIdForContext("chatgpt-session:conv_123", "beta")).toBe(first);
+    expect(first).toBe("default");
   });
 
   it("reports isolated CDP browser backend status", async () => {

@@ -4,9 +4,9 @@ const WA = { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
 export function buildBrowserToolDefinitions() {
   return [
     { name: "browser.status", description: "Return browser CDP backend availability, port range, and known sessions.", inputSchema: { type: "object", properties: {} }, annotations: RO },
-    { name: "browser.start", description: "Start an isolated Chrome DevTools Protocol browser session using local-dev-mcp profile and port range.", inputSchema: { type: "object", properties: { url: { type: "string" }, session_id: { type: "string" } } }, annotations: WA },
+    { name: "browser.start", description: "Start or reuse the local-dev-mcp default Chrome DevTools Protocol browser. An explicit session_id creates an isolated disposable session.", inputSchema: { type: "object", properties: { url: { type: "string" }, session_id: { type: "string" } } }, annotations: WA },
     { name: "browser.sessions", description: "List known browser CDP sessions for the selected project.", inputSchema: { type: "object", properties: {} }, annotations: RO },
-    { name: "browser.stop", description: "Stop a browser CDP session and remove it from local-dev-mcp session state.", inputSchema: { type: "object", properties: { session_id: { type: "string" } } }, annotations: WA },
+    { name: "browser.stop", description: "Stop a browser CDP session. The default local-dev-mcp profile is retained for login continuity; explicit session profiles are deleted.", inputSchema: { type: "object", properties: { session_id: { type: "string" } } }, annotations: WA },
     { name: "browser.tabs", description: "List page targets/tabs for a browser CDP session.", inputSchema: { type: "object", properties: { session_id: { type: "string" } } }, annotations: RO },
     { name: "browser.dom", description: "Return DOM text and HTML for a selector in a browser CDP session.", inputSchema: { type: "object", properties: { session_id: { type: "string" }, selector: { type: "string" } } }, annotations: RO },
     { name: "browser.selectors", description: "Return interactive selector candidates from a browser CDP session.", inputSchema: { type: "object", properties: { session_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 500 }, query: { type: "string" } } }, annotations: RO },

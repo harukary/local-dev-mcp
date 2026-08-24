@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
@@ -14,6 +14,8 @@ const PORT_MIN = Number(process.env.LOCAL_DEV_MCP_BROWSER_PORT_BASE ?? 18300);
 const PORT_MAX = Number(process.env.LOCAL_DEV_MCP_BROWSER_PORT_MAX ?? 18799);
 const BROWSER_HOME = join(homedir(), ".local-dev-mcp", "runtime", "browser");
 const SESSION_FILE = join(BROWSER_HOME, "sessions.json");
+const DEFAULT_SESSION_ID = "default";
+const DEFAULT_PROFILE_DIR = join(BROWSER_HOME, "profiles", DEFAULT_SESSION_ID);
 
 type BrowserObserve = "none" | "after";
 
@@ -137,6 +139,40 @@ async function removeSession(sessionId: string) {
   await writeSessions((await readSessions()).filter((session) => session.session_id !== sessionId));
 }
 
+function profileDirForSession(sessionId: string): string {
+  if (sessionId === DEFAULT_SESSION_ID) return DEFAULT_PROFILE_DIR;
+  const digest = createHash("sha256").update(sessionId).digest("hex").slice(0, 20);
+  return join(BROWSER_HOME, "profiles", "sessions", digest);
+}
+
+async function removeDisposableProfile(session: BrowserSession) {
+  if (session.session_id === DEFAULT_SESSION_ID) return;
+  const profilesRoot = join(BROWSER_HOME, "profiles");
+  const relativePath = relative(profilesRoot, session.profile_dir);
+  if (!relativePath || relativePath.startsWith("..") || relativePath.includes("/../")) return;
+  await rm(session.profile_dir, { recursive: true, force: true });
+}
+
+async function pruneDeadSessions() {
+  const sessions = await readSessions();
+  const retained: BrowserSession[] = [];
+  for (const session of sessions) {
+    try {
+      await waitForCdp(session.port, 300);
+      retained.push(session);
+      continue;
+    } catch {
+      if (isPidAlive(session.pid)) {
+        retained.push(session);
+        continue;
+      }
+    }
+    await removeDisposableProfile(session);
+  }
+  if (retained.length !== sessions.length) await writeSessions(retained);
+  return retained;
+}
+
 async function findFreePort(restartingSessionId?: string): Promise<number> {
   const used = new Set(
     (await readSessions())
@@ -150,12 +186,8 @@ async function findFreePort(restartingSessionId?: string): Promise<number> {
   throw new Error(`No free browser port in range ${PORT_MIN}-${PORT_MAX}`);
 }
 
-export function browserSessionIdForContext(chatContextId: string, projectId: string): string {
-  const digest = createHash("sha256")
-    .update(`${chatContextId}\0${projectId}`)
-    .digest("hex")
-    .slice(0, 20);
-  return `conversation-${digest}`;
+export function browserSessionIdForContext(_chatContextId: string, _projectId: string): string {
+  return DEFAULT_SESSION_ID;
 }
 
 function canListen(port: number): Promise<boolean> {
@@ -219,9 +251,8 @@ async function getSession(ctx: AppContext, chatContextId: string, sessionId?: st
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project;
   const sessions = await readSessions();
-  const candidates = sessions.filter((session) => session.project_id === project.projectId);
   const resolvedSessionId = sessionId ?? browserSessionIdForContext(chatContextId, project.projectId);
-  const session = candidates.find((candidate) => candidate.session_id === resolvedSessionId);
+  const session = sessions.find((candidate) => candidate.session_id === resolvedSessionId);
   if (!session) return { error: jsonError("BROWSER_SESSION_NOT_FOUND", "No browser session found. Call browser.start first.", { session_id: sessionId }) };
   try {
     await waitForCdp(session.port, 1200);
@@ -367,7 +398,7 @@ export async function handleBrowserStatus(ctx: AppContext, chatContextId: string
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
   const chrome = resolveChromeExecutable();
-  const sessions = (await readSessions()).filter((session) => session.project_id === project.projectId);
+  const sessions = await readSessions();
   return jsonResult({
     project_id: project.projectId,
     backend: "chrome-devtools-protocol",
@@ -387,9 +418,7 @@ export async function handleBrowserStart(ctx: AppContext, chatContextId: string,
   const url = args.url ? validateHttpUrl(args.url) ?? undefined : undefined;
   if (args.url && !url) return jsonError("INVALID_URL", "browser.start url must be http or https.");
   const sessionId = args.session_id ?? browserSessionIdForContext(chatContextId, project.projectId);
-  const previous = (await readSessions()).find(
-    (session) => session.project_id === project.projectId && session.session_id === sessionId
-  );
+  const previous = (await pruneDeadSessions()).find((session) => session.session_id === sessionId);
   if (previous) {
     try {
       const version = await waitForCdp(previous.port, 1200);
@@ -417,7 +446,7 @@ export async function handleBrowserStart(ctx: AppContext, chatContextId: string,
     }
   }
   const port = await findFreePort(previous?.session_id);
-  const profileDir = previous?.profile_dir ?? join(BROWSER_HOME, "profiles", project.projectId, sessionId);
+  const profileDir = previous?.profile_dir ?? profileDirForSession(sessionId);
   await mkdir(profileDir, { recursive: true });
   const child = spawn(chrome.executable_path, [
     `--remote-debugging-port=${port}`,
@@ -459,7 +488,7 @@ export async function handleBrowserStart(ctx: AppContext, chatContextId: string,
 export async function handleBrowserSessions(ctx: AppContext, chatContextId: string) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
-  const sessions = (await readSessions()).filter((session) => session.project_id === project.projectId);
+  const sessions = await readSessions();
   const enriched = await Promise.all(sessions.map(async (session) => {
     let ready = false;
     try { await waitForCdp(session.port, 800); ready = true; } catch { ready = false; }
@@ -469,8 +498,11 @@ export async function handleBrowserSessions(ctx: AppContext, chatContextId: stri
 }
 
 export async function handleBrowserStop(ctx: AppContext, chatContextId: string, args: { session_id?: string } = {}) {
-  const session = await getSession(ctx, chatContextId, args.session_id);
-  if ("error" in session) return session.error;
+  const project = getProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+  const sessionId = args.session_id ?? browserSessionIdForContext(chatContextId, project.projectId);
+  const session = (await readSessions()).find((candidate) => candidate.session_id === sessionId);
+  if (!session) return jsonError("BROWSER_SESSION_NOT_FOUND", "No browser session found. Call browser.start first.", { session_id: args.session_id });
   try {
     const target = await pickPageTarget(session.port);
     await fetchJson(`http://127.0.0.1:${session.port}/json/close/${target.id}`);
@@ -481,7 +513,14 @@ export async function handleBrowserStop(ctx: AppContext, chatContextId: string, 
     try { process.kill(session.pid); } catch { /* ignore */ }
   }
   await removeSession(session.session_id);
-  return jsonResult({ ok: true, action: "browser.stop", session_id: session.session_id, port: session.port });
+  await removeDisposableProfile(session);
+  return jsonResult({
+    ok: true,
+    action: "browser.stop",
+    session_id: session.session_id,
+    port: session.port,
+    profile_retained: session.session_id === DEFAULT_SESSION_ID,
+  });
 }
 
 export async function handleBrowserScreenshot(ctx: AppContext, chatContextId: string, args: { session_id?: string } = {}) {
