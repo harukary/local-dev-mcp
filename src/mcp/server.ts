@@ -199,10 +199,10 @@ function createMcpServer(ctx: AppContext): Server {
           return await handleWorkspaceRead(ctx, chatContextId, args as { path?: string; start_line?: number; end_line?: number; max_bytes?: number });
 
         case "workspace.list":
-          return await handleWorkspaceList(ctx, chatContextId, args as { path?: string; depth?: number; glob?: string; include_hidden?: boolean });
+          return await handleWorkspaceList(ctx, chatContextId, args as { path?: string; depth?: number; glob?: string; include_hidden?: boolean; include_artifacts?: boolean; max_entries?: number });
 
         case "workspace.search":
-          return await handleWorkspaceSearch(ctx, chatContextId, args as { query?: string; glob?: string; context_lines?: number; max_results?: number });
+          return await handleWorkspaceSearch(ctx, chatContextId, args as { query?: string; path?: string; glob?: string; context_lines?: number; max_results?: number; regex?: boolean; case_sensitive?: boolean; include_hidden?: boolean; include_artifacts?: boolean });
 
         case "workspace.patch":
           return await handleWorkspacePatch(ctx, chatContextId, args as { patches?: Array<{ path?: string; expected_sha256?: string; replacement?: string }>; dry_run?: boolean });

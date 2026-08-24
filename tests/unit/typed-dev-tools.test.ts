@@ -87,6 +87,25 @@ describe("typed development tools", () => {
     expect(payload(denied).error.code).toBe("DENIED_PATH");
   });
 
+  it("reads a bounded line range from large files", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-typed-"));
+    const lines = Array.from({ length: 300_000 }, (_, index) => `line-${index + 1}`);
+    writeFileSync(join(tmpRoot, "large.log"), `${lines.join("\n")}\n`);
+    const ctx = createContext(createProject(tmpRoot));
+
+    const result = await handleWorkspaceRead(ctx, "chat-a", {
+      path: "large.log",
+      start_line: 299_998,
+      end_line: 300_000,
+      max_bytes: 1024,
+    });
+    expect(payload(result).lines).toEqual([
+      { line: 299_998, text: "line-299998" },
+      { line: 299_999, text: "line-299999" },
+      { line: 300_000, text: "line-300000" },
+    ]);
+  });
+
   it("lists and searches project files while omitting denied paths", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-typed-"));
     mkdirSync(join(tmpRoot, "src"));
@@ -101,6 +120,33 @@ describe("typed development tools", () => {
 
     const searched = payload(await handleWorkspaceSearch(ctx, "chat-a", { query: "token", context_lines: 0 }));
     expect(searched.matches.map((match: { path: string }) => match.path)).toEqual(["src/app.ts"]);
+  });
+
+  it("bounds workspace listings and excludes generated artifacts by default", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-typed-"));
+    mkdirSync(join(tmpRoot, "src"));
+    mkdirSync(join(tmpRoot, "generated"));
+    writeFileSync(join(tmpRoot, "src", "a.ts"), "a\n");
+    writeFileSync(join(tmpRoot, "src", "b.ts"), "b\n");
+    writeFileSync(join(tmpRoot, "generated", "artifact.txt"), "artifact\n");
+    const ctx = createContext(createProject(tmpRoot));
+
+    const bounded = payload(await handleWorkspaceList(ctx, "chat-a", { depth: 2, max_entries: 2 }));
+    expect(bounded.entries).toHaveLength(2);
+    expect(bounded.truncated).toBe(true);
+    expect(bounded.entries.some((entry: { path: string }) => entry.path.startsWith("generated"))).toBe(false);
+
+    const artifacts = payload(await handleWorkspaceList(ctx, "chat-a", { depth: 2, include_artifacts: true }));
+    expect(artifacts.entries.some((entry: { path: string }) => entry.path === "generated/artifact.txt")).toBe(true);
+  });
+
+  it("supports regex and case-insensitive ripgrep search", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-typed-"));
+    writeFileSync(join(tmpRoot, "sample.txt"), "Alpha-123\nbeta\n");
+    const ctx = createContext(createProject(tmpRoot));
+
+    const searched = payload(await handleWorkspaceSearch(ctx, "chat-a", { query: "alpha-[0-9]+", regex: true, case_sensitive: false }));
+    expect(searched.matches).toMatchObject([{ path: "sample.txt", line: 1, text: "Alpha-123" }]);
   });
 
   it("applies replacement patches and detects expected sha mismatches", async () => {
