@@ -250,6 +250,9 @@ describe("tool schema snapshot", () => {
     expect(snapshot.tools.find((tool) => tool.name === "mobile.tap_element")?.inputSchema).toMatchObject({
       properties: { wait_for: { required: ["target"], properties: { target: { type: "string" } } } },
     });
+    for (const name of ["mobile.current_app", "mobile.logs", "mobile.stop_app", "mobile.restart_app"]) {
+      expect(snapshot.tools.some((tool) => tool.name === name)).toBe(true);
+    }
     expect(shellRun?.annotations).toMatchObject({
       readOnlyHint: false,
       destructiveHint: true,

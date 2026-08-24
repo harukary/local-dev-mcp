@@ -51,7 +51,7 @@ import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleG
 import { handleNotesCreate, handleNotesGuidelines, handleNotesValidate } from "./tools/notes/index.js";
 import { handlePrivateNotesCreate, handlePrivateNotesGuidelines, handlePrivateNotesValidate } from "./tools/private-notes/index.js";
 import { handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
-import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
+import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete, handleTodoDiscord } from "./tools/todo.js";
 
 export interface AppContext {
@@ -310,6 +310,18 @@ function createMcpServer(ctx: AppContext): Server {
 
         case "mobile.snapshot":
           return await handleMobileSnapshot(ctx, chatContextId, args as { device?: string; query?: string; limit?: number });
+
+        case "mobile.current_app":
+          return await handleMobileCurrentApp(ctx, chatContextId, args as { device?: string });
+
+        case "mobile.logs":
+          return await handleMobileLogs(ctx, chatContextId, args as { device?: string; package?: string; query?: string; lines?: number });
+
+        case "mobile.stop_app":
+          return await handleMobileStopApp(ctx, chatContextId, args as { device?: string; app?: string });
+
+        case "mobile.restart_app":
+          return await handleMobileRestartApp(ctx, chatContextId, args as { device?: string; app?: string; observe?: "none" | "after"; wait_for?: { target: string; timeout_ms?: number } });
 
         case "mobile.boot":
           return await handleMobileBoot(ctx, chatContextId, args as { device?: string });

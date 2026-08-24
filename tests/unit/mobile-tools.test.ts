@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { handleMobileLaunchApp, handleMobileListDevices, handleMobileOpenUrl, handleMobilePress, handleMobileScreenshot, handleMobileStatus, handleMobileSwipe, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileWait } from "../../src/mcp/tools/mobile.js";
+import { handleMobileLaunchApp, handleMobileListDevices, handleMobileOpenUrl, handleMobilePress, handleMobileRestartApp, handleMobileScreenshot, handleMobileStatus, handleMobileStopApp, handleMobileSwipe, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileWait, parseAndroidCurrentApp } from "../../src/mcp/tools/mobile.js";
 
 let tmpRoot = "";
 
@@ -54,6 +54,18 @@ function payload(result: { content: Array<{ text?: string }> }) {
 }
 
 describe("mobile tools", () => {
+  it("parses Android foreground activities from dumpsys variants", () => {
+    expect(parseAndroidCurrentApp("mCurrentFocus=Window{abc u0 dev.example.app/dev.example.app.MainActivity}")).toEqual({
+      package_name: "dev.example.app",
+      activity: "dev.example.app.MainActivity",
+    });
+    expect(parseAndroidCurrentApp("mResumedActivity: ActivityRecord{abc u0 com.example/.HomeActivity t42}")).toEqual({
+      package_name: "com.example",
+      activity: ".HomeActivity",
+    });
+    expect(parseAndroidCurrentApp("nothing useful")).toBeNull();
+  });
+
   it("reports backend availability and device list shape", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-mobile-"));
     const ctx = createContext(createProject(tmpRoot));
@@ -114,6 +126,12 @@ describe("mobile tools", () => {
 
     const missingApp = await handleMobileLaunchApp(ctx, "chat-a", {});
     expect(payload(missingApp).error.code).toBe("MISSING_APP");
+
+    const missingStopApp = await handleMobileStopApp(ctx, "chat-a", {});
+    expect(payload(missingStopApp).error.code).toBe("MISSING_APP");
+
+    const missingRestartApp = await handleMobileRestartApp(ctx, "chat-a", {});
+    expect(payload(missingRestartApp).error.code).toBe("MISSING_APP");
 
     const invalidSwipe = await handleMobileSwipe(ctx, "chat-a", { x1: 1, y1: 2, x2: undefined, y2: 4 });
     expect(payload(invalidSwipe).error.code).toBe("INVALID_COORDINATES");

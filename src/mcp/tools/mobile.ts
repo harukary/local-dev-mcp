@@ -568,6 +568,137 @@ export async function handleMobilePress(ctx: AppContext, chatContextId: string, 
   }
 }
 
+export function parseAndroidCurrentApp(output: string): { package_name: string; activity: string } | null {
+  const patterns = [
+    /mCurrentFocus=.*?\s(?:u\d+\s+)?([A-Za-z0-9._]+)\/([A-Za-z0-9._$]+)/,
+    /mResumedActivity:.*?\s(?:u\d+\s+)?([A-Za-z0-9._]+)\/([A-Za-z0-9._$]+)/,
+    /mFocusedApp=.*?\s(?:u\d+\s+)?([A-Za-z0-9._]+)\/([A-Za-z0-9._$]+)/,
+  ];
+  for (const pattern of patterns) {
+    const match = output.match(pattern);
+    if (match?.[1] && match[2]) return { package_name: match[1], activity: match[2] };
+  }
+  return null;
+}
+
+export async function handleMobileCurrentApp(ctx: AppContext, chatContextId: string, args: { device?: string } = {}) {
+  const project = getProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+  const device = await resolveDevice(args.device);
+  if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
+  if (device.platform !== "android") {
+    return jsonError("MOBILE_CURRENT_APP_UNSUPPORTED", "mobile.current_app currently supports Android devices and emulators.", { device });
+  }
+  try {
+    const adb = await resolveAdbPath();
+    if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
+    const { stdout } = await execFileAsync(adb, ["-s", device.id, "shell", "dumpsys", "window"], { maxBuffer: 8 * 1024 * 1024 });
+    const current = parseAndroidCurrentApp(String(stdout));
+    return jsonResult({ ok: true, project_id: project.projectId, action: "mobile.current_app", device, current });
+  } catch (err) {
+    return mobileError("MOBILE_CURRENT_APP_FAILED", err, { device });
+  }
+}
+
+export async function handleMobileLogs(
+  ctx: AppContext,
+  chatContextId: string,
+  args: { device?: string; package?: string; query?: string; lines?: number } = {}
+) {
+  const project = getProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+  const device = await resolveDevice(args.device);
+  if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
+  if (device.platform !== "android") {
+    return jsonError("MOBILE_LOGS_UNSUPPORTED", "mobile.logs currently supports Android devices and emulators.", { device });
+  }
+  const maxLines = Math.min(1000, Math.max(1, Math.round(args.lines ?? 200)));
+  try {
+    const adb = await resolveAdbPath();
+    if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
+    const logArgs = ["-s", device.id, "logcat", "-d", "-v", "brief", "-t", String(Math.min(5000, Math.max(maxLines * 5, 500)))];
+    let pid: string | undefined;
+    if (args.package?.trim()) {
+      const packageName = args.package.trim();
+      const pidResult = await execFileAsync(adb, ["-s", device.id, "shell", "pidof", packageName], { maxBuffer: 1024 * 1024 }).catch(() => ({ stdout: "" }));
+      pid = String(pidResult.stdout).trim().split(/\s+/)[0] || undefined;
+      if (pid) logArgs.push("--pid", pid);
+    }
+    const { stdout } = await execFileAsync(adb, logArgs, { maxBuffer: 8 * 1024 * 1024 });
+    const query = args.query?.toLowerCase();
+    const all = String(stdout).split(/\r?\n/).filter(Boolean);
+    const filtered = query ? all.filter((line) => line.toLowerCase().includes(query)) : all;
+    const selected = filtered.slice(-maxLines);
+    return jsonResult({
+      ok: true,
+      project_id: project.projectId,
+      action: "mobile.logs",
+      device,
+      package: args.package?.trim() || null,
+      pid: pid ?? null,
+      query: args.query ?? null,
+      lines: selected,
+      matched_lines: filtered.length,
+      truncated: filtered.length > selected.length,
+    });
+  } catch (err) {
+    return mobileError("MOBILE_LOGS_FAILED", err, { device, package: args.package, query: args.query });
+  }
+}
+
+async function stopAppOnDevice(device: MobileDevice, app: string): Promise<void> {
+  if (device.platform === "android") {
+    const adb = await resolveAdbPath();
+    if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
+    await execFileAsync(adb, ["-s", device.id, "shell", "am", "force-stop", app], { maxBuffer: 2 * 1024 * 1024 });
+    return;
+  }
+  if (device.type === "simulator") {
+    await execFileAsync("xcrun", ["simctl", "terminate", device.id, app], { maxBuffer: 2 * 1024 * 1024 }).catch(() => undefined);
+    return;
+  }
+  throw new Error("Stopping apps on physical iOS devices is not supported by the current backend.");
+}
+
+export async function handleMobileStopApp(ctx: AppContext, chatContextId: string, args: { device?: string; app?: string } = {}) {
+  const project = getProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+  if (!args.app?.trim()) return jsonError("MISSING_APP", "mobile.stop_app requires a bundle ID or Android package name.");
+  const app = args.app.trim();
+  const device = await resolveDevice(args.device);
+  if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
+  try {
+    await stopAppOnDevice(device, app);
+    return jsonResult({ ok: true, project_id: project.projectId, action: "mobile.stop_app", device, app });
+  } catch (err) {
+    return mobileError("MOBILE_STOP_APP_FAILED", err, { device, app });
+  }
+}
+
+export async function handleMobileRestartApp(ctx: AppContext, chatContextId: string, args: { device?: string; app?: string; observe?: MobileObserve; wait_for?: MobileWaitFor } = {}) {
+  const project = getProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+  if (!args.app?.trim()) return jsonError("MISSING_APP", "mobile.restart_app requires a bundle ID or Android package name.");
+  const app = args.app.trim();
+  const device = await resolveDevice(args.device);
+  if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
+  if (isPhysicalIos(device)) return jsonError("MOBILE_RESTART_APP_UNSUPPORTED", "mobile.restart_app does not currently support physical iOS devices.", { device, app });
+  try {
+    await stopAppOnDevice(device, app);
+    if (device.platform === "android") {
+      const adb = await resolveAdbPath();
+      if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
+      await execFileAsync(adb, ["-s", device.id, "shell", "monkey", "-p", app, "-c", "android.intent.category.LAUNCHER", "1"], { maxBuffer: 2 * 1024 * 1024 });
+    } else {
+      await execFileAsync("xcrun", ["simctl", "launch", device.id, app], { maxBuffer: 2 * 1024 * 1024 });
+    }
+    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 800));
+    return await observeOrJson(ctx, chatContextId, project, device, "mobile.restart_app", args.observe, { app }, args.wait_for);
+  } catch (err) {
+    return mobileError("MOBILE_RESTART_APP_FAILED", err, { device, app });
+  }
+}
+
 export async function handleMobileWait(ctx: AppContext, chatContextId: string, args: { device?: string; target?: string; timeout_ms?: number } = {}) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
