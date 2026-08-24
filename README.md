@@ -409,6 +409,22 @@ Then run:
 pnpm tunnel
 ```
 
+For long-lived macOS operation, keep the MCP server and Cloudflare Tunnel in separate launchd jobs so a tunnel restart does not restart the MCP process. Write the jobs without changing the running service:
+
+```bash
+pnpm run launchd:install
+```
+
+Then activate them. If an older combined LaunchAgent is still installed, pass its label so it is booted out before the new server starts:
+
+```bash
+scripts/install-launchd.sh --activate --legacy-label your.old.launchd.label
+```
+
+The generated jobs are `io.local-dev-mcp.server` and `io.local-dev-mcp.tunnel` by default. They write independently rotating logs to `logs/mcp-server.log` and `logs/cloudflared.log` (10 MiB, five backups by default). The tunnel defaults to protocol `auto` and log level `warn`; set `LOCAL_DEV_MCP_CLOUDFLARE_PROTOCOL=http2` only as a diagnostic fallback when QUIC is unstable.
+
+Use `http://127.0.0.1:3456/healthz` to distinguish server restarts from tunnel-only reconnects: `instance_id` changes only when the MCP process restarts.
+
 ## Safety Notes
 
 - Do not commit `.env`, `.local-dev-mcp`, `logs`, `generated`, or `config/projects.local.yaml`.

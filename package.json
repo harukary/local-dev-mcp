@@ -12,7 +12,10 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "tunnel": "bash scripts/tunnel.sh"
+    "server:http": "bash scripts/server.sh",
+    "tunnel": "bash scripts/tunnel.sh",
+    "tunnel:only": "bash scripts/tunnel.sh --tunnel-only",
+    "launchd:install": "bash scripts/install-launchd.sh --install-only"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",

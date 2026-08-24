@@ -394,6 +394,22 @@ LOCAL_DEV_MCP_PROJECTS_CONFIG=/absolute/path/to/config/projects.local.yaml
 pnpm tunnel
 ```
 
+macOSで常駐させる場合は、MCP serverとCloudflare Tunnelを別々のlaunchd jobにし、Tunnelの再起動がMCP processへ波及しない構成を使います。まず現在のserviceを止めずにjobを書き出します。
+
+```bash
+pnpm run launchd:install
+```
+
+その後にactivateします。旧combined LaunchAgentが残っている場合は、そのlabelを指定して新server起動前にbootoutします。
+
+```bash
+scripts/install-launchd.sh --activate --legacy-label your.old.launchd.label
+```
+
+生成jobは既定で`io.local-dev-mcp.server`と`io.local-dev-mcp.tunnel`です。logは`logs/mcp-server.log`と`logs/cloudflared.log`へ分離し、既定で10 MiB・5世代でrotateします。Tunnel protocolは既定で`auto`、log levelは`warn`です。QUICが不安定な場合だけ診断用に`LOCAL_DEV_MCP_CLOUDFLARE_PROTOCOL=http2`を使います。
+
+`http://127.0.0.1:3456/healthz`の`instance_id`はMCP processが再起動した場合だけ変わるため、Tunnelだけの再接続とserver再起動を区別できます。
+
 ## Safety Notes
 
 - `.env`、`.local-dev-mcp`、`logs`、`generated`、`config/projects.local.yaml` を commit しない。
