@@ -260,19 +260,20 @@ describe("tool schema snapshot", () => {
 });
 
 describe("image viewer resource", () => {
-  it("exposes the MCP Apps image viewer for image.show output", () => {
+  it("exposes the legacy Skybridge image viewer for image.show output", () => {
     const resource = imageViewerResource();
 
-    expect(resource.uri).toBe("ui://local-dev-mcp/image-viewer-v2.html");
-    expect(resource.mimeType).toBe("text/html;profile=mcp-app");
+    expect(resource.uri).toBe("ui://local-dev-mcp/image-viewer-skybridge-v4.html");
+    expect(resource.mimeType).toBe("text/html+skybridge");
     expect(resource.mimeType).toBe(IMAGE_VIEWER_RESOURCE_MIME_TYPE);
     expect(resource.text).toContain('document.createElement("img")');
     expect(resource.text).toContain("ui/notifications/tool-result");
+    expect(resource.text).not.toContain('method: "ui/initialize"');
+    expect(resource.text).not.toContain('method: "ui/notifications/initialized"');
     expect(resource.text).toContain('item.type === "image"');
     expect(resource.text).toContain('"data:" + mimeType + ";base64," + image.data');
     expect(resource._meta).toMatchObject({
       ui: {
-        visibility: ["model", "app"],
         prefersBorder: true,
         csp: {
           resourceDomains: expect.arrayContaining([expect.stringMatching(/^https?:\/\//)]),

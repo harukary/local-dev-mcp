@@ -1,5 +1,5 @@
-const IMAGE_VIEWER_URI = "ui://local-dev-mcp/image-viewer-v2.html";
-export const IMAGE_VIEWER_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+const IMAGE_VIEWER_URI = "ui://local-dev-mcp/image-viewer-skybridge-v4.html";
+export const IMAGE_VIEWER_RESOURCE_MIME_TYPE = "text/html+skybridge";
 
 export function imageViewerResourceUri(): string {
   return IMAGE_VIEWER_URI;
@@ -10,7 +10,6 @@ export function imageViewerMeta() {
   return {
     ui: {
       resourceUri: IMAGE_VIEWER_URI,
-      visibility: ["model", "app"],
       prefersBorder: true,
       csp: {
         connectDomains: [publicOrigin],
