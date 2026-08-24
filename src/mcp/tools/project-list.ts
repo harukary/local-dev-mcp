@@ -17,7 +17,8 @@ export async function handleProjectList(ctx: AppContext, chatContextId: string) 
   };
 
   return {
-    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    structuredContent: result,
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
   };
 }
 
@@ -29,18 +30,12 @@ function resolveCurrentProjectId(ctx: AppContext, chatContextId: string): string
   };
 
   const isAvailable = (projectId: string): boolean => {
-    if (typeof ctx.registry.has === "function") {
-      return ctx.registry.has(projectId);
-    }
-    if (typeof ctx.registry.get === "function") {
-      return Boolean(ctx.registry.get(projectId));
-    }
+    if (typeof ctx.registry.has === "function") return ctx.registry.has(projectId);
+    if (typeof ctx.registry.get === "function") return Boolean(ctx.registry.get(projectId));
     return ctx.registry.getAll().some((project) => project.projectId === projectId);
   };
 
-  if (typeof store.getActiveProject === "function") {
-    return store.getActiveProject(chatContextId, isAvailable);
-  }
+  if (typeof store.getActiveProject === "function") return store.getActiveProject(chatContextId, isAvailable);
 
   const current = store.getCurrentProject?.(chatContextId);
   if (current && !isAvailable(current)) {

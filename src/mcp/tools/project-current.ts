@@ -1,5 +1,12 @@
 import type { AppContext } from "../server.js";
 
+function jsonResult(value: Record<string, unknown>) {
+  return {
+    structuredContent: value,
+    content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+  };
+}
+
 export async function handleProjectCurrent(
   ctx: AppContext,
   chatContextId: string
@@ -7,66 +14,33 @@ export async function handleProjectCurrent(
   const currentProjectId = resolveCurrentProjectId(ctx, chatContextId);
 
   if (!currentProjectId) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              selected: false,
-              message:
-                "No project is selected for this chat. Use project.select first.",
-              available_projects: ctx.registry.getAll().map((p) => p.projectId),
-            },
-            null,
-            2
-          ),
-        },
-      ],
-    };
+    return jsonResult({
+      selected: false,
+      message: "No project is selected for this chat. Use project.select first.",
+      available_projects: ctx.registry.getAll().map((p) => p.projectId),
+    });
   }
 
   const project = ctx.registry.get(currentProjectId);
   if (!project) {
     ctx.contextStore.clearCurrentProject(chatContextId);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              selected: false,
-              message: "The selected project is no longer available. Choose another project.",
-              available_projects: ctx.registry.getAll().map((p) => p.projectId),
-            },
-            null,
-            2
-          ),
-        },
-      ],
-    };
+    return jsonResult({
+      selected: false,
+      message: "The selected project is no longer available. Choose another project.",
+      available_projects: ctx.registry.getAll().map((p) => p.projectId),
+    });
   }
 
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(
-          {
-            project_id: project.projectId,
-            display_name: project.displayName,
-            cwd: project.hostRoot,
-            sandbox_type: project.sandboxType,
-            network_policy: project.networkPolicy,
-            write_policy: project.writePolicy,
-            approval_mode: project.approvalMode,
-          },
-          null,
-          2
-        ),
-      },
-    ],
-  };
+  return jsonResult({
+    selected: true,
+    project_id: project.projectId,
+    display_name: project.displayName,
+    cwd: project.hostRoot,
+    sandbox_type: project.sandboxType,
+    network_policy: project.networkPolicy,
+    write_policy: project.writePolicy,
+    approval_mode: project.approvalMode,
+  });
 }
 
 function resolveCurrentProjectId(ctx: AppContext, chatContextId: string): string | undefined {
@@ -77,18 +51,12 @@ function resolveCurrentProjectId(ctx: AppContext, chatContextId: string): string
   };
 
   const isAvailable = (projectId: string): boolean => {
-    if (typeof ctx.registry.has === "function") {
-      return ctx.registry.has(projectId);
-    }
-    if (typeof ctx.registry.get === "function") {
-      return Boolean(ctx.registry.get(projectId));
-    }
+    if (typeof ctx.registry.has === "function") return ctx.registry.has(projectId);
+    if (typeof ctx.registry.get === "function") return Boolean(ctx.registry.get(projectId));
     return ctx.registry.getAll().some((project) => project.projectId === projectId);
   };
 
-  if (typeof store.getActiveProject === "function") {
-    return store.getActiveProject(chatContextId, isAvailable);
-  }
+  if (typeof store.getActiveProject === "function") return store.getActiveProject(chatContextId, isAvailable);
 
   const current = store.getCurrentProject?.(chatContextId);
   if (current && !isAvailable(current)) {

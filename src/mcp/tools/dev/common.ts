@@ -4,13 +4,25 @@ import { relative, resolve, isAbsolute } from "node:path";
 import type { AppContext } from "../../server.js";
 import type { ProjectConfig } from "../../../types.js";
 
+function asStructuredContent(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 export function jsonResult(value: unknown) {
-  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+  const structuredContent = asStructuredContent(value);
+  return {
+    ...(structuredContent ? { structuredContent } : {}),
+    content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+  };
 }
 
 export function jsonError(code: string, message: string, details?: unknown) {
+  const value = { error: { code, message, details } };
   return {
-    content: [{ type: "text", text: JSON.stringify({ error: { code, message, details } }, null, 2) }],
+    structuredContent: value,
+    content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
     isError: true,
   };
 }
