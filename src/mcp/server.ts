@@ -84,6 +84,23 @@ export function isMcpDebugEnabled(): boolean {
   return process.env.LOCAL_DEV_MCP_DEBUG === "1";
 }
 
+const SERVER_INSTANCE_ID = randomUUID();
+const SERVER_STARTED_AT = new Date().toISOString();
+
+export function buildHealthStatus(): {
+  ok: true;
+  instance_id: string;
+  started_at: string;
+  uptime_seconds: number;
+} {
+  return {
+    ok: true,
+    instance_id: SERVER_INSTANCE_ID,
+    started_at: SERVER_STARTED_AT,
+    uptime_seconds: Math.floor(process.uptime()),
+  };
+}
+
 export function sendStatelessMcpMethodNotAllowed(res: express.Response): void {
   res.set("Allow", "POST");
   res.status(405).json({
@@ -1100,6 +1117,11 @@ export async function startHttpServer(configPath: string, port: number): Promise
 
   app.get("/", (_req, res) => {
     res.type("text/plain").send("local-dev-mcp MCP server running.");
+  });
+
+  app.get("/healthz", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(buildHealthStatus());
   });
 
   app.post("/", requireBearerAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
