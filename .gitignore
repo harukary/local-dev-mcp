@@ -1,6 +1,8 @@
 node_modules/
 dist/
 logs/audit.jsonl
+logs/audit.jsonl.*
+logs/tool-usage.json
 .local-dev-mcp/
 .env
 config/projects.local.yaml
