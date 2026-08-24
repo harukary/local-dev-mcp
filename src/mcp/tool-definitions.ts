@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-08-25.6";
+export const TOOL_SCHEMA_VERSION = "2026-08-25.7";
 
 export function buildToolDefinitions() {
   return [

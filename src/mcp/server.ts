@@ -161,10 +161,10 @@ async function createAppContext(configPath: string): Promise<AppContext> {
   return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics };
 }
 
-function createMcpServer(ctx: AppContext): Server {
+export function createMcpServer(ctx: AppContext): Server {
   const server = new Server(
     { name: "local-dev-mcp", version: "0.1.0" },
-    { capabilities: { tools: {}, resources: {} } }
+    { capabilities: { tools: { listChanged: true }, resources: {} } }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -439,6 +439,7 @@ function createMcpServer(ctx: AppContext): Server {
         }
 
         case "tool.schema":
+          await server.sendToolListChanged().catch(() => undefined);
           return {
             structuredContent: buildToolSchemaSnapshot(),
             content: [{ type: "text", text: JSON.stringify(buildToolSchemaSnapshot(), null, 2) }],
