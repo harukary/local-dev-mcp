@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AuditLogger } from "../../src/audit/audit-log.js";
@@ -57,5 +57,17 @@ describe("AuditLogger", () => {
 
     const lines = readFileSync(logPath, "utf-8").trim().split("\n");
     expect(lines.length).toBe(3);
+  });
+
+  it("rotates audit logs before unbounded growth", async () => {
+    const rotatingPath = join(tmpDir, "rotating.jsonl");
+    const logger = new AuditLogger(rotatingPath, { max_bytes: 1024, backups: 2 });
+    const command = "x".repeat(650);
+    await logger.log({ timestamp: "2026-01-01T00:00:03.000Z", chatContextId: "default", tool: "shell.run", command });
+    await logger.log({ timestamp: "2026-01-01T00:00:04.000Z", chatContextId: "default", tool: "shell.run", command });
+
+    expect(existsSync(`${rotatingPath}.1`)).toBe(true);
+    expect(readFileSync(rotatingPath, "utf8")).toContain("2026-01-01T00:00:04.000Z");
+    expect(readFileSync(`${rotatingPath}.1`, "utf8")).toContain("2026-01-01T00:00:03.000Z");
   });
 });
