@@ -47,7 +47,9 @@ cleanup() {
     kill "$MCP_PID" 2>/dev/null || true
     wait "$MCP_PID" 2>/dev/null || true
   fi
-  cleanup_agent_device_daemons
+  if [ "$SERVICE_LOCK_OWNED" -eq 1 ]; then
+    cleanup_agent_device_daemons
+  fi
   release_service_lock
 }
 trap cleanup EXIT INT TERM
