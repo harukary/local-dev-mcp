@@ -1,20 +1,27 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
 import { handleMobileLaunchApp, handleMobileListDevices, handleMobileOpenUrl, handleMobilePress, handleMobileRestartApp, handleMobileScreenshot, handleMobileStatus, handleMobileStopApp, handleMobileSwipe, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileWait, parseAndroidCurrentApp } from "../../src/mcp/tools/mobile.js";
 
 let tmpRoot = "";
+let originalAgentDeviceBin: string | undefined;
+
+beforeEach(() => {
+  originalAgentDeviceBin = process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN;
+  process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN = join(tmpdir(), "local-dev-mcp-missing-agent-device");
+});
 
 afterEach(() => {
+  if (originalAgentDeviceBin === undefined) delete process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN;
+  else process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN = originalAgentDeviceBin;
   if (tmpRoot) {
     rmSync(tmpRoot, { recursive: true, force: true });
     tmpRoot = "";
   }
-
 });
 
 function createProject(hostRoot: string): ProjectConfig {

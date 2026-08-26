@@ -174,11 +174,11 @@ describe("job retention", () => {
   });
 
   it("long-polls shell.status until output changes", async () => {
-    const result = startJob(project, `node -e "setTimeout(() => console.log('later-output'), 250)"`);
+    const result = startJob(project, "sleep 0.2; printf 'later-output\n'");
     if ("error" in result) throw new Error(result.error);
 
     const started = Date.now();
-    const status = await handleShellStatus({ job_id: result.id, cursor: "0:0", wait_ms: 1000 });
+    const status = await handleShellStatus({ job_id: result.id, cursor: "0:0", wait_ms: 3000 });
     const elapsed = Date.now() - started;
     const body = JSON.parse(status.content[0].text);
 
