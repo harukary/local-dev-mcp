@@ -80,13 +80,15 @@ token と同じ値は command output から redact されます。この scope �
 
 ## 機能
 
-- YAML registry による project selection
-- Workspace read / list / search / patch tools
+- YAML registry による project selection。選択した project は chat context ごとに保持される
+- 大きな file の範囲 read や ripgrep 検索を含む bounded workspace read / list / search / patch tools
 - ChatGPT が使う Skills discovery / read tools（`skills.list` → `skills.read`）
-- Risk classification と approval flow 付き shell command execution
-- Git diff/status helpers
-- Browser、mobile simulator / physical device、image read helpers
-- ChatGPT Apps style client 向け OAuth-protected HTTP transport
+- Risk classification、approval、managed async job、差分 poll、long-poll status wait 付き shell command execution
+- repository 状態確認、status、history、commit 表示、diff 用の typed Git helpers（`git.inspect`, `git.status`, `git.log`, `git.show`, `git.diff`）
+- action と post-action `wait_for` condition を1 callにまとめ、不要な fixed sleep / screenshot を減らせる Browser / mobile tools
+- mobile simulator / physical device automation と、foreground app・bounded logcat などの Android runtime diagnostics
+- image read/download、public/private notes、Todo、tool schema diagnostics、compact tool-usage metrics
+- MCP tool-list change notification を含む ChatGPT Apps style client 向け OAuth-protected HTTP transport
 
 ## 物理モバイル端末の自動操作
 
@@ -94,7 +96,24 @@ token と同じ値は command output から redact されます。この scope �
 
 Android端末はADBで検出する。local-dev-mcpはPATH、`ANDROID_HOME`、`ANDROID_SDK_ROOT`、macOS標準のAndroid SDK配置から `adb` を解決する。accessibility snapshot、要素tap、waitは解決したplatform-toolsをPATHへ渡したAndroid専用 `agent-device` sessionを使い、screenshotや座標tap・入力・navigationはADBを直接使う。物理Android端末ではUSBデバッグの許可が必要。
 
-mobile toolsでは端末検出、screenshot、accessibility snapshot、アプリ起動、URL open、座標/要素tap、文字入力、swipe、Home/Back、waitを扱う。可能な場合は座標tapより `mobile.snapshot` が返すaccessibility refを優先する。
+mobile toolsでは端末検出、screenshot、accessibility snapshot、アプリ起動、URL open、座標/要素tap、文字入力、swipe、Home/Back、waitに加えて、対応環境でのapp stop/restart、foreground app確認、bounded Android log取得を扱う。可能な場合は座標tapより `mobile.snapshot` が返すaccessibility refを優先する。
+
+condition-drivenな操作では、app launch、tap、type、swipe、browser navigationなどのactionに`wait_for`を指定し、fixed sleepと別wait callを重ねるより1 callで結果を確認する。`wait_for`指定時に`observe`を省略すると、通常のafter-action screenshotの代わりにwait結果を返す。screenshotも必要な場合だけ`observe: "after"`を指定する。
+
+`mobile.current_app`と`mobile.logs`は現状Android device/emulator向け。`mobile.stop_app`はAndroidとiOS Simulator、`mobile.restart_app`はAndroidとiOS Simulatorを扱う。物理iOS端末のapp terminate/restartは現在のbackendでは提供しない。
+
+## 効率的な Tool 利用と Diagnostics
+
+dedicated typed toolがある場合はshell commandの組み合わせよりtyped toolを優先する。
+
+- 一般的なrepository状態確認には、複数のread-only Git commandを組み合わせる代わりに`git.inspect`を使う。
+- 選択済みprojectは再利用する。同じprojectへの`project.select`の繰り返しは不要。
+- broadなshell scanではなく、boundedな`workspace.read` / `workspace.list`とripgrep-backedな`workspace.search`を使う。project rootでのlist/searchは、generated artifactやlogを既定で除外する。
+- `shell.run(async: true)`のbackground jobでは、`shell.status`が返す`cursor`を再利用して新しいoutputだけを取得する。tight pollingではなく`wait_ms`でserver側のoutput/completion待ちを使える。
+- Browser/mobileのUI遷移ではfixed sleep + 別waitよりaction-level `wait_for`を使う。
+- `tool.usage`はtool call数、failure、duration、project別call数、`shell.run`比率をaggregateして返す。tool argumentやoutputは記録しない。
+
+raw audit logは無制限に増えないようrotationする。launchd setupが書き出すservice logもCloudflare Tunnel節の説明どおり独立してrotateする。
 
 ## セットアップ
 
@@ -263,6 +282,22 @@ ChatGPT は Codex/Haru の `SKILL.md` を自動では読み込みません。次
 
 `skills.list`はproject-local `<path>/.agents/skills`、runtime-user `${CODEX_HOME:-~/.haru/.codex}/skills`（`.system`を除く）、system `${CODEX_HOME:-~/.haru/.codex}/skills/.system`を列挙します。各entryはruntime `scope`とsource `origin`（`common`, `private_user`, `project`, `system`, `unmanaged`）を返します。commonとprivate-userはどちらもruntime `scope:user`になり得ます。symlinkは拒否します。
 
+local debuggingやChatGPT以外のMCP clientでは、次の接続方法も利用できます。
+
+- stdio command:
+
+  ```bash
+  pnpm dev -- /absolute/path/to/local-dev-mcp/config/projects.local.yaml
+  ```
+
+- server起動後のlocal HTTP endpoint:
+
+  ```text
+  http://127.0.0.1:3456/mcp
+  ```
+
+MCP client側のnativeな設定方法で、stdio commandまたはHTTP endpointを登録してください。他ユーザーのlocal pathをhard-codeしないでください。
+
 ## ChatGPT Developer Mode で app を追加する
 
 この部分は user が ChatGPT 内で行う必要があります。local coding agent は server の準備と endpoint の提示まではできますが、user の ChatGPT workspace settings を操作したり、app を代理で承認したりすることはできません。
@@ -309,6 +344,8 @@ app の選択は message 単位です。後続 message で local-dev-mcp の操�
 refresh tokenは使用時にrotationします。同じ旧tokenによる並列refreshは30秒間だけ同じ新tokenを返すため、複数chatから同時に更新されても一方の接続を無効化しません。
 
 MCP HTTP transportはstatelessです。`POST /mcp`でrequestを処理し、standalone SSEを提供しない`GET /mcp`には`405 Method Not Allowed`と`Allow: POST`を返します。
+
+serverはMCPの`tools.listChanged` supportをadvertiseします。`tool.schema`はcurrent runtime tool schema/versionを返すと同時にtool-list change notificationを送るため、このcapabilityに対応するclientはcached toolをrefreshできます。server更新後もChatGPT側に古いschemaが残る場合はdeveloper appのmetadata/actionsをrefreshするか、appを再作成して再認証してください。
 
 write や command execution の prompt では、ChatGPT の confirmation dialog が出ることがあります。承認前に JSON payload を確認してください。ChatGPT が接続できない場合は、endpoint が ChatGPT から到達可能か、OAuth discovery が動いているか、passphrase が正しいか、server log に request が来ているかを確認してください。
 

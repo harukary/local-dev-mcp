@@ -79,13 +79,15 @@ This means routine reads can stay smooth, while writes and network/dependency op
 
 ## Features
 
-- Project selection from a YAML registry
-- Workspace read, list, search, and patch tools
+- Project selection from a YAML registry, with the selected project persisted per chat context
+- Bounded workspace read/list/search/patch tools, including large-file range reads and ripgrep-backed text search
 - Skills discovery and read tools for ChatGPT (`skills.list`, then `skills.read`)
-- Shell command execution with risk classification and approval flow
-- Git diff/status helpers
-- Browser, mobile simulator/physical-device, and image read helpers
-- OAuth-protected HTTP transport for ChatGPT Apps style clients
+- Shell command execution with risk classification, approvals, managed async jobs, delta polling, and long-poll status waits
+- Typed Git helpers for repository inspection, status, history, commit display, and diffs (`git.inspect`, `git.status`, `git.log`, `git.show`, `git.diff`)
+- Browser and mobile actions that can combine an action with a post-action `wait_for` condition to avoid extra fixed sleeps and screenshots
+- Mobile simulator / physical-device automation plus Android runtime diagnostics such as foreground-app inspection and bounded logcat reads
+- Image read/download helpers, public/private note helpers, Todo helpers, tool schema diagnostics, and compact tool-usage metrics
+- OAuth-protected HTTP transport for ChatGPT Apps style clients, including MCP tool-list change notifications
 
 ## Physical mobile automation
 
@@ -93,7 +95,24 @@ Physical iOS devices are discovered and operated through `agent-device` with App
 
 Android devices are discovered through ADB. local-dev-mcp resolves `adb` from PATH, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or the standard macOS Android SDK location. Accessibility snapshots, element taps, and waits use a dedicated `agent-device` Android session whose PATH is seeded with the resolved platform-tools directory, while screenshots and basic coordinate/input/navigation operations use ADB directly. Physical Android devices require USB debugging authorization.
 
-The mobile tool set includes device discovery, screenshots, accessibility snapshots, app launch, URL opening, coordinate and element taps, typing, swipes, Home/Back navigation, and waits. Prefer accessibility refs from `mobile.snapshot` over coordinate taps when possible.
+The mobile tool set includes device discovery, screenshots, accessibility snapshots, app launch, URL opening, coordinate and element taps, typing, swipes, Home/Back navigation, waits, app stop/restart operations where supported, foreground-app inspection, and bounded Android logs. Prefer accessibility refs from `mobile.snapshot` over coordinate taps when possible.
+
+For condition-driven flows, prefer the `wait_for` option on actions such as app launch, tap, typing, swipe, or browser navigation instead of issuing a separate fixed sleep followed by another observation call. When `wait_for` is supplied and `observe` is omitted, the wait result replaces the default after-action screenshot; set `observe: "after"` when a screenshot is also needed.
+
+`mobile.current_app` and `mobile.logs` currently target Android devices/emulators. `mobile.stop_app` supports Android and iOS Simulator apps; `mobile.restart_app` supports Android and iOS Simulator apps. Physical iOS app termination/restart is not provided by the current backend.
+
+## Efficient Tool Usage And Diagnostics
+
+Prefer typed tools over shell composition when a dedicated tool exists:
+
+- Use `git.inspect` for the common repository-state check instead of combining several read-only Git shell commands.
+- Reuse the selected project; repeated `project.select` calls for the same project are unnecessary.
+- Use bounded `workspace.read`, `workspace.list`, and ripgrep-backed `workspace.search` instead of broad shell scans. Root-level listings/searches omit common generated artifacts and logs by default unless explicitly included.
+- For background `shell.run(async: true)` jobs, reuse the `cursor` returned by `shell.status` to fetch only new output. Set `wait_ms` to wait server-side for output or completion instead of tight polling.
+- Use action-level `wait_for` for browser/mobile UI transitions instead of fixed sleeps plus separate wait calls.
+- `tool.usage` returns aggregate call counts, failures, durations, per-project counts, and the `shell.run` share. It does not record tool arguments or outputs.
+
+Raw audit logs are bounded and rotate before unbounded growth. Service logs written by the launchd setup rotate independently as described in the Cloudflare Tunnel section.
 
 ## Setup
 
@@ -324,6 +343,8 @@ The server advertises `offline_access` in OAuth discovery and issues refresh tok
 Refresh tokens rotate when used. Concurrent refreshes with the same old token replay the same replacement token for 30 seconds, so simultaneous chats do not invalidate one another's connection.
 
 The MCP HTTP transport is stateless. It handles requests through `POST /mcp` and returns `405 Method Not Allowed` with `Allow: POST` for `GET /mcp` because it does not provide a standalone SSE stream.
+
+The server advertises MCP `tools.listChanged` support. `tool.schema` returns the current runtime tool schema/version and also emits a tool-list change notification so clients that honor the capability can refresh their cached tools. If ChatGPT still shows an old schema after a server upgrade, refresh the developer app metadata/actions or recreate and reauthorize the app.
 
 Write and command execution prompts can trigger ChatGPT confirmation dialogs. Review the JSON payload before approving. If ChatGPT cannot connect, verify the endpoint is reachable from ChatGPT, OAuth discovery works, the passphrase is correct, and the server logs show the request.
 
