@@ -93,7 +93,7 @@ describe("tool schema snapshot", () => {
     const artifactRead = snapshot.tools.find((tool) => tool.name === "artifact.read");
     const artifactReceive = snapshot.tools.find((tool) => tool.name === "artifact.receive");
 
-    expect(snapshot.schema_version).toBe("2026-08-29.4");
+    expect(snapshot.schema_version).toBe("2026-08-29.5");
     expect(names).toContain("tool.schema");
     expect(names).toContain("image.read");
     expect(names).toContain("artifact.read");
@@ -118,6 +118,9 @@ describe("tool schema snapshot", () => {
     });
     for (const name of ["browser.click", "browser.open", "mobile.screenshot", "mobile.tap"]) {
       expect(snapshot.tools.find((tool) => tool.name === name)?._meta).toBeUndefined();
+    }
+    for (const tool of snapshot.tools.filter((candidate) => candidate.name.startsWith("browser."))) {
+      expect(tool.inputSchema).not.toHaveProperty("properties.session_id");
     }
   });
 });

@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { browserSessionIdForContext, handleBrowserOpen, handleBrowserStatus } from "../../src/mcp/tools/browser.js";
+import { browserSessionIdForContext, handleBrowserOpen, handleBrowserStart } from "../../src/mcp/tools/browser.js";
+
+const CHAT_ID = "chatgpt-session:chat-a";
 
 let tmpRoot = "";
 
@@ -36,7 +38,7 @@ function createProject(hostRoot: string): ProjectConfig {
 
 function createContext(project: ProjectConfig) {
   const contextStore = new ChatContextStore();
-  contextStore.setCurrentProject("chat-a", project.projectId);
+  contextStore.setCurrentProject(CHAT_ID, project.projectId);
   return {
     registry: {
       has: (projectId: string) => projectId === project.projectId,
@@ -53,36 +55,31 @@ function payload(result: { content: Array<{ text?: string }> }) {
 }
 
 describe("browser tools", () => {
-  it("reuses one local-dev-mcp default browser across conversations and projects", () => {
+  it("derives one stable profile per conversation independent of project", () => {
     const first = browserSessionIdForContext("chatgpt-session:conv_123", "alpha");
 
     expect(browserSessionIdForContext("chatgpt-session:conv_123", "alpha")).toBe(first);
-    expect(browserSessionIdForContext("chatgpt-session:conv_456", "alpha")).toBe(first);
+    expect(browserSessionIdForContext("chatgpt-session:conv_456", "alpha")).not.toBe(first);
     expect(browserSessionIdForContext("chatgpt-session:conv_123", "beta")).toBe(first);
-    expect(first).toBe("default");
+    expect(first).toMatch(/^[a-f0-9]{32}$/);
   });
 
-  it("reports isolated CDP browser backend status", async () => {
+  it("rejects the removed explicit session API before browser startup", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-browser-"));
     const ctx = createContext(createProject(tmpRoot));
 
-    const result = await handleBrowserStatus(ctx, "chat-a");
+    const result = await handleBrowserStart(ctx, CHAT_ID, { session_id: "other-profile" });
     const body = payload(result);
 
-    expect(body.project_id).toBe("alpha");
-    expect(result.structuredContent).toEqual(body);
-    expect(body.backend).toBe("chrome-devtools-protocol");
-    expect(typeof body.chrome_available).toBe("boolean");
-    expect(body.port_range).toMatchObject({ min: expect.any(Number), max: expect.any(Number) });
-    expect(Array.isArray(body.sessions)).toBe(true);
-    expect(body.artifact_dir).toBe("generated/local-dev-mcp/browser");
+    expect(result.isError).toBe(true);
+    expect(body.error.code).toBe("BROWSER_EXPLICIT_SESSION_UNSUPPORTED");
   });
 
   it("rejects non-http browser.open URLs before invoking the browser backend", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-browser-"));
     const ctx = createContext(createProject(tmpRoot));
 
-    const result = await handleBrowserOpen(ctx, "chat-a", { url: "file:///etc/passwd" });
+    const result = await handleBrowserOpen(ctx, CHAT_ID, { url: "file:///etc/passwd" });
     const body = payload(result);
 
     expect(result.isError).toBe(true);

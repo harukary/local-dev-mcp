@@ -75,6 +75,23 @@ Prefer typed tools over broad shell commands:
 - use `shell.run` with `async=true` for work that may exceed roughly 30 seconds, then poll `shell.status`
 - use `tool.schema` after server/tool changes when ChatGPT has stale action metadata
 
+## Browser Profiles
+
+Browser state is isolated by the ChatGPT `openai/session` identity. The same chat
+keeps one profile across project changes; different chats never share a running
+profile. Browser tools fail explicitly when a chat session identity is unavailable.
+
+The first browser use in a chat copies the current immutable golden generation.
+On `browser.stop`, allowlisted live probes verify the signed-in account, the stopped
+profile is snapshotted, and a separate Chrome clone must pass the same probes before
+the snapshot can become golden. The current and previous golden generations are
+retained. Idle chat profiles that have not been used for 24 hours are removed.
+
+The default probe configuration is `config/browser-auth-probes.yaml`. Probe results
+store only hashed principals and status metadata; cookies, DOM content, and account
+labels are not written to MCP results or manifests. A legacy shared `default` profile
+is imported only while its Chrome process is stopped.
+
 ## Requirements
 
 - Node.js 22 or newer

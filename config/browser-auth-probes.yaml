@@ -1,0 +1,14 @@
+# Only allowlisted probes can contribute verified login claims to the golden profile.
+# Google exposes the account switcher link only in an authenticated My Account
+# session. The principal is extracted as an email address from the element's
+# aria-label/title/text; localized prose is not matched.
+probes:
+  - id: google
+    version: 1
+    url: https://myaccount.google.com/
+    authenticated_host: myaccount.google.com
+    authenticated_selector: 'a[href*="SignOutOptions"]'
+    signed_out_url_pattern: '^https://accounts\.google\.com/'
+    principal_selector: 'a[href*="SignOutOptions"]'
+    timeout_ms: 15000
+    ttl_hours: 24
