@@ -7,6 +7,8 @@ AGENT_DEVICE_BIN="$PROJECT_DIR/node_modules/.bin/agent-device"
 IOS_AGENT_STATE_DIR="${LOCAL_DEV_MCP_IOS_AGENT_STATE_DIR:-$HOME/.local-dev-mcp/runtime/agent-device-ios}"
 ANDROID_AGENT_STATE_DIR="${LOCAL_DEV_MCP_ANDROID_AGENT_STATE_DIR:-$HOME/.local-dev-mcp/runtime/agent-device-android}"
 SERVER_LOCK_DIR="${LOCAL_DEV_MCP_SERVER_LOCK_DIR:-$HOME/.local-dev-mcp/runtime/server.lock}"
+STATE_DIR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR:-$HOME/.local-dev-mcp/openai-tunnel}"
+TOKEN_FILE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE:-$STATE_DIR/mcp-token}"
 MCP_PID=""
 CLEANED_UP=0
 
@@ -56,14 +58,20 @@ trap cleanup EXIT INT TERM
 
 acquire_service_lock "$SERVER_LOCK_DIR" "server"
 
+if [ -n "${LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN:-}" ]; then
+  unset LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE
+elif [ ! -f "$TOKEN_FILE" ]; then
+  echo "[server] MCP tunnel token file not found: $TOKEN_FILE" >&2
+  exit 1
+else
+  export LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE="$TOKEN_FILE"
+fi
 if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "[server] Port $PORT is already in use; refusing to start a competing MCP server." >&2
   describe_port_owner >&2
   exit 75
 fi
 
-# src/index.ts loads the project's environment file itself. Keep this wrapper
-# free of secret-file handling so launchd only needs a stable executable path.
 cleanup_agent_device_daemons
 
 echo "[server] Starting MCP server on port $PORT..." >&2

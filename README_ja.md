@@ -1,427 +1,154 @@
 # local-dev-mcp
 
-English: [README.md](README.md)
+`local-dev-mcp` は、信頼した開発用PCを ChatGPT から操作するための private MCP server です。登録した project に対して、project / workspace / git / browser / mobile / Todo / artifact / controlled shell の typed tool を提供します。
 
-ChatGPT から、選択したローカル開発プロジェクトを MCP tools 経由で操作するためのローカル MCP server です。
-
-この server は project registry を中心に動きます。ChatGPT がアクセスできるのは登録済みの project root だけで、各 project ごとに `.env`、`.ssh`、`secrets`、`credentials` などの denied path を指定できます。
-
-想定している流れ:
-
-1. ローカル PC 上でこの server を起動する。
-2. ChatGPT が HTTP transport と controlled HTTPS tunnel 経由で MCP server に接続する。
-3. ChatGPT は local project registry に登録された project だけを調査・操作する。
-
-Codex、Claude Code などの coding agent は、この repo をユーザーのマシンへセットアップする用途に向いています。この project の主な runtime client は ChatGPT です。
-
-![local-dev-mcp システム構成](docs/local-dev-mcp-system-overview-ja.jpg)
+ChatGPT との正規接続経路は **OpenAI Secure MCP Tunnel** です。HTTP MCP server は loopback のみで待ち受け、public な MCP endpoint は公開しません。
 
 ## 主な用途
 
-- ChatGPT で、ローカルのコード、ログ、テスト結果、project document を見ながら議論する。
-- 大量の context を手で貼らずに、実際の local repository に基づいて設計・実装方針・不具合・リファクタを相談する。
-- ユーザーが承認した範囲で、ChatGPT からローカル command を実行する。
-- Codex や Claude Code と併用し、実装作業は coding agent、議論・整理・調査は ChatGPT という形で分担する。
-- 実装-heavy な作業に Codex の利用枠を残しつつ、ChatGPT で local-code-aware な相談や軽い操作を行う。
+- source repository の調査・編集
+- test / build / deploy / custom script の実行
+- browser session や mobile device の操作
+- MCP inline image content による画像確認
+- 開発ホストから ChatGPT への成果物受け渡し
+- ChatGPT の通常添付を selected project へ受信
+- conversation 単位の project 選択と audit 記録
 
 ## セキュリティモデル
 
-この project は、ChatGPT へローカル開発環境の操作口を提供します。public web app ではなく、ローカルマシンへのアクセス基盤として扱ってください。
+主要な境界は project registry です。登録した project root だけを操作対象にします。
 
-推奨構成:
+各 project では次を定義できます。
 
-- MCP server は `127.0.0.1` で起動する。
-- ChatGPT から remote access する場合は、厳しく制御された HTTPS tunnel 経由に限定する。
-- ChatGPT に触らせたい project directory だけを登録する。
-- `.env`、`.ssh`、credential、secret、build output、log、local-only config は git に入れず、必要に応じて `denied_paths` に入れる。
+- host / sandbox root
+- denied paths
+- write policy
+- approval mode
+- network policy
+- command timeout
+- redaction profile
 
-この server は defense-in-depth の安全策を持ちますが、強い OS sandbox ではありません。現在の sandbox type は `host` なので、shell command は server を起動した user account の権限でローカルマシン上に実行されます。server は localhost に bind し、tunnel 側で access control をかけてください。
+runtime の重要ルール:
 
-含まれる安全策:
+- HTTP MCP は `127.0.0.1` のみに bind する
+- HTTP request の `Host` は loopback だけを許可する
+- protected HTTP request では `X-Local-Dev-MCP-Tunnel-Token` を必須にする
+- local tunnel token は `tunnel-client` と `local-dev-mcp` の間だけで共有する
+- Tunnel runtime API key と local tunnel token を launchd plist に埋め込まない
+- `shell.run` は fallback escape hatch とし、可能な限り typed tool を優先する
+- denied-path check を file read/write、artifact transfer、project-scoped operation に適用する
+- artifact本体や一時 file download URL を通常のaudit logへ保存しない
 
-- Project registry allowlist: ChatGPT は登録済み project から選択する必要があります。
-- Workspace file tools は selected project root の外側の path を拒否します。
-- `denied_paths` は workspace tools と forbidden shell classification で secret path をブロックします。
-- HTTP Host / `X-Forwarded-Host` allowlist は、`LOCAL_DEV_MCP_PUBLIC_ORIGIN` または `LOCAL_DEV_MCP_ALLOWED_HOSTS` を設定した場合に localhost と設定済み tunnel host だけを受け付けます。
-- Shell risk classification は read-only、local compute、workspace write、network/dependency、destructive/process-control、forbidden を分けます。
-- `forbidden` shell command は approval mode に関係なくブロックされます。代表例は secret read や catastrophic system operation です。
-- Shell output は common token / key / credential pattern を redaction してから返します。
-- HTTP MCP access は OAuth bearer token を使います。authorization endpoint は passphrase で保護されます。
-- server は `127.0.0.1` で listen します。外部接続は controlled HTTPS tunnel で提供してください。
-
-重要な限界:
-
-- ユーザーが危険な command を承認すれば、ローカル環境に影響しえます。承認前に command を確認してください。
-- 静的な risk classification は保守的ですが、完全ではありません。
-- OS-level sandbox、container isolation、filesystem permission、network ACL の代替ではありません。
-- HTTP endpoint を public internet に直接公開しないでください。
+stdio transport はローカルMCP client向けに残します。Secure Tunnel tokenが必要なのはHTTP transportだけです。
 
 ## ChatGPT の承認
 
-ChatGPT は MCP tools の利用時に頻繁に確認・承認を求めることがあります。特に local file access、command execution、network/dependency command、write、destructive operation では起きやすいです。これは想定内で、ChatGPT 側の安全設計の一部です。バグではなく review point として扱ってください。
+writeやcommand executionではChatGPT側のconfirmation UIが出ることがあります。承認前にtarget projectと引数を確認してください。
 
-推奨 default:
-
-- `approval_mode: policy`
-- `write_policy: confirm`
-- `network_policy: ask`
-
-### コマンド単位の Bitwarden access
-
-Bitwarden Secrets Manager CLI を使う command では、`shell.run` に
-`credential_scope: "bitwarden"` を指定できます。server は
-`${HARUCLAW_HOME:-~/.haru}/.bitwarden.env` の mapping に従って macOS
-Keychain から access token を読み、その command だけへ注入します。取得した
-token と同じ値は command output から redact されます。この scope は project の
-通常の approval policy に従い、scope の指定だけでは approval を強制しません。
-通常の shell command には token を渡しません。
-
-これにより、通常の read は比較的スムーズにしつつ、write や network/dependency operation では確認が入りやすくなります。
+MCP server側でもproject policyとshell risk policyを適用します。ChatGPT側の承認だけを安全境界にはしません。
 
 ## 機能
 
-- YAML registry による project selection。選択した project は chat context ごとに保持される
-- 大きな file の範囲 read や ripgrep 検索を含む bounded workspace read / list / search / patch tools
-- ChatGPT が使う Skills discovery / read tools（`skills.list` → `skills.read`）
-- Risk classification、approval、managed async job、差分 poll、long-poll status wait 付き shell command execution
-- repository 状態確認、status、history、commit 表示、diff 用の typed Git helpers（`git.inspect`, `git.status`, `git.log`, `git.show`, `git.diff`）
-- action と post-action `wait_for` condition を1 callにまとめ、不要な fixed sleep / screenshot を減らせる Browser / mobile tools
-- mobile simulator / physical device automation と、foreground app・bounded logcat などの Android runtime diagnostics
-- image read/download、public/private notes、Todo、tool schema diagnostics、compact tool-usage metrics
-- MCP tool-list change notification を含む ChatGPT Apps style client 向け OAuth-protected HTTP transport
+主要tool family:
 
-## 物理モバイル端末の自動操作
-
-物理iOS端末は `agent-device` と Appium/XCUITest を使って検出・操作する。`mobile.status` でbackendの利用可否を確認できる。端末はMacとpairing済みで、Developer Modeが有効である必要がある。さらに `mobile.snapshot`、`mobile.screenshot`、要素tap、文字入力、swipeなどUI runnerを使う操作では、端末のiOSバージョンに対応するDeviceSupportを含むXcodeが必要になる。XCTest runnerの前提を満たさない場合でも、端末検出やアプリ起動までは利用できることがある。
-
-Android端末はADBで検出する。local-dev-mcpはPATH、`ANDROID_HOME`、`ANDROID_SDK_ROOT`、macOS標準のAndroid SDK配置から `adb` を解決する。accessibility snapshot、要素tap、waitは解決したplatform-toolsをPATHへ渡したAndroid専用 `agent-device` sessionを使い、screenshotや座標tap・入力・navigationはADBを直接使う。物理Android端末ではUSBデバッグの許可が必要。
-
-mobile toolsでは端末検出、screenshot、accessibility snapshot、アプリ起動、URL open、座標/要素tap、文字入力、swipe、Home/Back、waitに加えて、対応環境でのapp stop/restart、foreground app確認、bounded Android log取得を扱う。可能な場合は座標tapより `mobile.snapshot` が返すaccessibility refを優先する。
-
-condition-drivenな操作では、app launch、tap、type、swipe、browser navigationなどのactionに`wait_for`を指定し、fixed sleepと別wait callを重ねるより1 callで結果を確認する。`wait_for`指定時に`observe`を省略すると、通常のafter-action screenshotの代わりにwait結果を返す。screenshotも必要な場合だけ`observe: "after"`を指定する。
-
-`mobile.current_app`と`mobile.logs`は現状Android device/emulator向け。`mobile.stop_app`はAndroidとiOS Simulator、`mobile.restart_app`はAndroidとiOS Simulatorを扱う。物理iOS端末のapp terminate/restartは現在のbackendでは提供しない。
+- `project.*` — project選択・確認・reload
+- `workspace.*` — boundedなlist/read/search/patch
+- `git.*` — status/diff/history/commit inspection
+- `shell.*` — shell実行、approval、background job、cancel
+- `browser.*` — Chrome DevTools Protocol browser automation
+- `mobile.*` — iOS/Android確認・操作
+- `todo.*` — haruclaw Todo操作
+- `skills.*` — project/user/system Skillsの読み取り
+- `image.read` — public URLやcustom viewerを使わないinline画像確認
+- `artifact.read` — local fileをMCP embedded resourceとしてChatGPTへ送信
+- `artifact.receive` — ChatGPT通常添付を1回のMCP callで受信
+- `tool.schema` / `tool.usage` — tool schema refreshとusage diagnostics
 
 ## 効率的な Tool 利用と Diagnostics
 
-dedicated typed toolがある場合はshell commandの組み合わせよりtyped toolを優先する。
+broadなshell commandよりtyped toolを優先します。
 
-- 一般的なrepository状態確認には、複数のread-only Git commandを組み合わせる代わりに`git.inspect`を使う。
-- 選択済みprojectは再利用する。同じprojectへの`project.select`の繰り返しは不要。
-- broadなshell scanではなく、boundedな`workspace.read` / `workspace.list`とripgrep-backedな`workspace.search`を使う。project rootでのlist/searchは、generated artifactやlogを既定で除外する。
-- `shell.run(async: true)`のbackground jobでは、`shell.status`が返す`cursor`を再利用して新しいoutputだけを取得する。tight pollingではなく`wait_ms`でserver側のoutput/completion待ちを使える。
-- Browser/mobileのUI遷移ではfixed sleep + 別waitよりaction-level `wait_for`を使う。
-- `tool.usage`はtool call数、failure、duration、project別call数、`shell.run`比率をaggregateして返す。tool argumentやoutputは記録しない。
+- active project確認はfilesystem探索ではなく`project.inspect`
+- 大規模なshell scanではなくboundedな`workspace.read` / `workspace.list` / `workspace.search`
+- 一般的なGit確認はtyped `git.*`
+- build/test/deploy/install/未対応操作では`shell.run`
+- 約30秒を超えそうな処理は`shell.run(async=true)`で開始し、`shell.status`でpoll
+- server/tool変更後にChatGPT側schemaが古い場合は`tool.schema`とPlugin Refreshを使う
 
-raw audit logは無制限に増えないようrotationする。launchd setupが書き出すservice logもCloudflare Tunnel節の説明どおり独立してrotateする。
+## Requirements
+
+- Node.js 22以降
+- Corepack経由または互換pnpm
+- 付属launchd workflowを使う場合はmacOS
+- ChatGPT接続にはOpenAI公式`Tunnel-client`
+- browser/mobile用途では各platformの必要tool
 
 ## セットアップ
 
-### ChatGPT local access 用 Agent Quick Setup
-
-Codex、Claude Code、その他の coding agent が、ユーザーから「ChatGPT 用にセットアップして」と言われた場合は、この checklist に従ってください。目的は、ChatGPT がこの local MCP server に接続し、ユーザーが選んだ local project root を操作できるようにすることです。
-
-1. 前提確認:
-
-   ```bash
-   node --version
-   pnpm --version
-   ```
-
-   Node.js 22 以上を使います。`pnpm` がない場合は、Corepack が使える環境なら有効化します。
-
-   ```bash
-   corepack enable
-   corepack prepare pnpm@latest --activate
-   ```
-
-2. 依存関係を install:
-
-   ```bash
-   pnpm install
-   ```
-
-3. local-only config を作成:
-
-   ```bash
-   test -f .env || cp .env.example .env
-   test -f config/projects.local.yaml || cp config/projects.yaml config/projects.local.yaml
-   ```
-
-4. `.env` に OAuth authorization passphrase を設定:
-
-   ```bash
-   node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
-   ```
-
-   生成値を以下に入れます。
-
-   ```bash
-   LOCAL_DEV_MCP_PASSPHRASE=...
-   ```
-
-   最終的な `.env` の中身を user に表示しないでください。
-
-5. `config/projects.local.yaml` をユーザー環境に合わせて編集。
-
-   `/absolute/path/to/your/project` を、ChatGPT に操作させたい project の absolute path に置き換えます。対象 project が未指定なら、編集前に user に path を確認してください。secret を含みうる path は `denied_paths` に残します。
-
-   最小構成例:
-
-   ```yaml
-   projects:
-     my-project:
-       display_name: My Project
-       host_root: /absolute/path/to/my-project
-       sandbox_root: /absolute/path/to/my-project
-       sandbox_type: host
-       default_shell: /bin/bash
-       default_timeout_seconds: 30
-       max_timeout_seconds: 300
-       network_policy: ask
-       write_policy: confirm
-       approval_mode: policy
-       denied_paths:
-         - .env
-         - .env.*
-         - .npmrc
-         - .ssh
-         - secrets
-         - credentials
-       redaction_profile: default
-   ```
-
-6. 検証:
-
-   ```bash
-   pnpm run doctor -- config/projects.local.yaml
-   pnpm typecheck
-   pnpm test
-   ```
-
-7. local HTTP server を起動:
-
-   ```bash
-   pnpm dev:http -- config/projects.local.yaml
-   ```
-
-   応答確認:
-
-   ```bash
-   curl -sS http://127.0.0.1:3456/
-   ```
-
-   期待応答:
-
-   ```text
-   local-dev-mcp MCP server running.
-   ```
-
-8. ChatGPT から外部接続する場合は、controlled HTTPS tunnel を設定。
-
-   HTTP endpoint を直接 public exposure しないでください。この repo には Cloudflare Tunnel 用の `scripts/tunnel.sh` もあります。必要な `.env` は以下です。
-
-   ```bash
-   LOCAL_DEV_MCP_PUBLIC_ORIGIN=https://your-tunnel.example.com
-   LOCAL_DEV_MCP_ALLOWED_HOSTS=your-tunnel.example.com
-   LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID=your-tunnel-id
-   LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE=/absolute/path/to/credentials.json
-   LOCAL_DEV_MCP_PROJECTS_CONFIG=/absolute/path/to/local-dev-mcp/config/projects.local.yaml
-   ```
-
-   値が未確定なら、tunnel details を user に確認してください。tunnel ID、hostname、credential path を推測で作らないでください。
-
-9. ChatGPT 用の connection target を user に返す:
-
-   - local test 用 HTTP endpoint: `http://127.0.0.1:3456/mcp`
-   - ChatGPT から到達可能な tunnel endpoint: `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`
-
-   ChatGPT では、connector flow から到達できる HTTP MCP endpoint を使います。stdio は主に local MCP client や debug 用です。
-
-10. ChatGPT Developer Mode で app を追加する手順を user に伝える。
-
-   Codex、Claude Code、その他の local coding agent は、user の ChatGPT account 内で app 作成や承認を完了できません。step 9 の endpoint を user に渡し、[ChatGPT Developer mode](https://developers.openai.com/api/docs/guides/developer-mode) と [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt) に沿って user 自身が操作する必要がある、と明示してください。
-
-   user に伝える手順:
-
-   1. Web 版 ChatGPT を開く。
-   2. Developer Mode を有効化する。plan / workspace 権限により、Settings -> Apps -> Advanced settings -> Developer mode、または Workspace settings -> Apps / Permissions & Roles にあります。
-   3. Apps settings を開き、Create app を選ぶ。
-   4. ChatGPT から到達可能な MCP endpoint を入力する。例: `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`
-   5. OAuth authentication を選ぶ。
-   6. Scan Tools を実行する。
-   7. authorization page が開いたら、`.env` の `LOCAL_DEV_MCP_PASSPHRASE` を入力する。
-   8. tool scan が完了したら Create を押す。
-   9. 新しい chat を開き、tools / plus menu または Developer Mode tool picker から draft app を選ぶ。
-   10. まず read-only prompt で試す。例: 「Use local-dev-mcp to list projects.」
-
-   user への注意:
-
-   - ChatGPT から MCP endpoint に到達できる必要があります。`127.0.0.1` は local test 用です。ChatGPT から使う場合は controlled tunnel endpoint を使ってください。
-   - app の選択は chat 全体ではなく message 単位です。後続 message で新しい tool call が必要なら、`@local-dev-mcp` で再指定してください。
-   - Developer Mode と MCP の write / modify support は、user の ChatGPT plan、workspace settings、admin permissions に依存します。
-   - ChatGPT は頻繁に confirmation を出すことがあります。write や command execution を承認する前に tool payload を確認してください。
-
-11. 報告内容:
-
-   - `config/projects.local.yaml` の absolute path
-   - selected project IDs
-   - `pnpm typecheck` / `pnpm test` の結果
-   - local HTTP のみ ready か、public tunnel も ready か
-   - ChatGPT に設定すべき MCP endpoint
-   - ChatGPT Developer Mode での app 作成は user 側の残作業であること
-
-`.env`、`.local-dev-mcp`、`logs`、`generated`、`dist`、`node_modules`、`config/projects.local.yaml` の中身は commit したり表示したりしないでください。
-
-## ChatGPT からの Skills 読み取り
-
-ChatGPT は Codex/Haru の `SKILL.md` を自動では読み込みません。次の順で使います。
-
-1. `skills.list` に任意で登録済み project 内の `path` を渡す。
-2. 原則として`skills.list`が返したexact `SKILL.md` pathを`skills.read`へ渡す。別pathを指定する場合も、allowed Skill root内のreal pathかつnon-symlinkでなければならない。
-
-`skills.list`はproject-local `<path>/.agents/skills`、runtime-user `${CODEX_HOME:-~/.haru/.codex}/skills`（`.system`を除く）、system `${CODEX_HOME:-~/.haru/.codex}/skills/.system`を列挙します。各entryはruntime `scope`とsource `origin`（`common`, `private_user`, `project`, `system`, `unmanaged`）を返します。commonとprivate-userはどちらもruntime `scope:user`になり得ます。symlinkは拒否します。
-
-local debuggingやChatGPT以外のMCP clientでは、次の接続方法も利用できます。
-
-- stdio command:
-
-  ```bash
-  pnpm dev -- /absolute/path/to/local-dev-mcp/config/projects.local.yaml
-  ```
-
-- server起動後のlocal HTTP endpoint:
-
-  ```text
-  http://127.0.0.1:3456/mcp
-  ```
-
-MCP client側のnativeな設定方法で、stdio commandまたはHTTP endpointを登録してください。他ユーザーのlocal pathをhard-codeしないでください。
-
-## ChatGPT Developer Mode で app を追加する
-
-この部分は user が ChatGPT 内で行う必要があります。local coding agent は server の準備と endpoint の提示まではできますが、user の ChatGPT workspace settings を操作したり、app を代理で承認したりすることはできません。
-
-前提:
-
-- account / workspace で Developer Mode が使える ChatGPT web access がある。
-- ChatGPT から到達可能な MCP endpoint がある。通常は `${LOCAL_DEV_MCP_PUBLIC_ORIGIN}/mcp`。
-- local `.env` に `LOCAL_DEV_MCP_PASSPHRASE` が設定されている。
-
-手順:
-
-1. Web 版 ChatGPT を開く。
-2. Developer Mode を有効化する。
-   - user settings 側: Settings -> Apps -> Advanced settings -> Developer mode
-   - workspace / admin 側: plan と権限により Workspace settings -> Apps、または Workspace settings -> Permissions & Roles
-3. Apps settings を開き、Create app を押す。
-4. MCP endpoint を入力する。例:
-
-   ```text
-   https://your-trusted-endpoint.example.com/mcp
-   ```
-
-5. OAuth authentication を選ぶ。
-6. Scan Tools を押す。
-7. authorization prompt で `LOCAL_DEV_MCP_PASSPHRASE` を入力する。
-8. tool scan が完了したら Create を押す。
-9. app が draft / developer app として表示されることを確認する。
-10. 新しい chat を開き、tools / plus menu または Developer Mode tool picker から app を選ぶ。
-11. まず read-only prompt で試す。
-
-   ```text
-   Use local-dev-mcp to list projects.
-   ```
-
-   ```text
-   Use local-dev-mcp to select my project, then show the current project.
-   ```
-
-app の選択は message 単位です。後続 message で local-dev-mcp の操作が必要な場合は、`@local-dev-mcp` でappを再指定してください。
-
-このserverはOAuth discoveryで`offline_access`を公開し、refresh tokenを発行します。`offline_access`対応前に作成したappは古いmetadataを保持しているため、server更新後にChatGPTのapp設定でmetadata/actionsをrefreshするか、appを再作成して再認証してください。
-
-refresh tokenは使用時にrotationします。同じ旧tokenによる並列refreshは30秒間だけ同じ新tokenを返すため、複数chatから同時に更新されても一方の接続を無効化しません。
-
-MCP HTTP transportはstatelessです。`POST /mcp`でrequestを処理し、standalone SSEを提供しない`GET /mcp`には`405 Method Not Allowed`と`Allow: POST`を返します。
-
-serverはMCPの`tools.listChanged` supportをadvertiseします。`tool.schema`はcurrent runtime tool schema/versionを返すと同時にtool-list change notificationを送るため、このcapabilityに対応するclientはcached toolをrefreshできます。server更新後もChatGPT側に古いschemaが残る場合はdeveloper appのmetadata/actionsをrefreshするか、appを再作成して再認証してください。
-
-write や command execution の prompt では、ChatGPT の confirmation dialog が出ることがあります。承認前に JSON payload を確認してください。ChatGPT が接続できない場合は、endpoint が ChatGPT から到達可能か、OAuth discovery が動いているか、passphrase が正しいか、server log に request が来ているかを確認してください。
-
-公式 reference:
-
-- [ChatGPT Developer mode](https://developers.openai.com/api/docs/guides/developer-mode)
-- [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)
-
-## 手動セットアップ
+依存関係をinstallします。
 
 ```bash
 pnpm install
-cp .env.example .env
-cp config/projects.yaml config/projects.local.yaml
+pnpm typecheck
+pnpm test
 ```
 
-OAuth authorization flow を使う前に、`.env` に `LOCAL_DEV_MCP_PASSPHRASE` を設定します。
+local project registryを設定します。通常は`config/projects.local.yaml`、未配置の場合は`config/projects.yaml`を使います。
+
+診断:
 
 ```bash
-node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
+pnpm doctor
 ```
 
-`config/projects.local.yaml` の `host_root` と `sandbox_root` を、公開したい local project の path に変更します。
-
-setup doctor:
+local MCP clientからstdioで使う場合:
 
 ```bash
-pnpm run doctor -- config/projects.local.yaml
+pnpm dev
 ```
-
-HTTP server:
-
-```bash
-pnpm dev:http -- config/projects.local.yaml
-```
-
-stdio transport:
-
-```bash
-pnpm dev -- config/projects.local.yaml
-```
-
-## Project Registry
-
-`config/projects.yaml` は安全な example file です。実マシンの path は git ignored な `config/projects.local.yaml` に置いてください。
-
-各 project entry は以下を持ちます。
-
-- `display_name`
-- `host_root`
-- `sandbox_root`
-- `sandbox_type`
-- `default_shell`
-- `default_timeout_seconds`
-- `max_timeout_seconds`
-- `network_policy`
-- `write_policy`
-- `approval_mode`
-- `denied_paths`
-- `redaction_profile`
 
 ## OpenAI Secure MCP Tunnel
 
-対応している ChatGPT account / workspace などから private な local MCP に接続する場合は、OpenAI Secure MCP Tunnel を利用できます。この構成では `local-dev-mcp` は `127.0.0.1` だけで待ち受け、公式 `tunnel-client` が OpenAI へ outbound HTTPS 接続を確立します。MCP server の public URL や inbound firewall rule は不要です。
+### 構成
 
-既存の Cloudflare Tunnel + OAuth 構成とは独立しています。`LOCAL_DEV_MCP_AUTH_MODE=openai-tunnel` のときは OAuth discovery / authorization / token / registration endpoint を公開せず、local hop は `X-Local-Dev-MCP-Tunnel-Token` で保護します。`tunnel-client` は通常の MCP request と startup discovery/probe の両方にこの header を付与します。
-
-公式 `tunnel-client` の install:
-
-```bash
-pnpm tunnel:openai:install
+```text
+ChatGPT Web / Mobile
+        │
+        │ custom plugin
+        ▼
+OpenAI Secure MCP Tunnel
+        │
+        ▼
+tunnel-client
+        │  X-Local-Dev-MCP-Tunnel-Token
+        ▼
+127.0.0.1:3456/mcp
+        │
+        ▼
+local-dev-mcp
 ```
 
-既定では公式 latest release を解決し、checksum 検証して `~/.local-dev-mcp/tunnel-client/` 配下に配置し、`~/.local-dev-mcp/bin/tunnel-client` から参照できるようにします。version を固定したい場合は `LOCAL_DEV_MCP_TUNNEL_CLIENT_VERSION` を指定します。
+public MCP hostname、reverse proxy、inbound firewall ruleは不要です。
 
-常駐運用では、次の private state directory を使います。
+### tunnel-client install
+
+公式latest releaseをchecksum検証してinstallします。
+
+```bash
+pnpm tunnel:install
+```
+
+既定のbinary link:
+
+```text
+~/.local-dev-mcp/bin/tunnel-client
+```
+
+releaseを明示固定する場合だけ`LOCAL_DEV_MCP_TUNNEL_CLIENT_VERSION`を指定します。
+
+### Private state
+
+正規のprivate state directory:
 
 ```text
 ~/.local-dev-mcp/openai-tunnel/
@@ -430,130 +157,206 @@ pnpm tunnel:openai:install
 └─ mcp-token
 ```
 
-- `tunnel-id`: OpenAI Platform で作成した Tunnel ID。形式は `tunnel_` + 32文字の小文字16進数
-- `runtime-api-key`: Tunnel runtime 用 API key。少なくとも Tunnels Read + Use を付与する
-- `mcp-token`: `tunnel-client` と local MCP 間だけで使うランダム値。32文字以上必須
+- `tunnel-id`: OpenAI Platformで作成したTunnel ID
+- `runtime-api-key`: `tunnel-client`用runtime key
+- `mcp-token`: `tunnel-client`とlocal MCP間だけで使うrandom secret
 
-state directory は owner のみアクセス可能にし、各 file は `0600` にします。credential value を repository、plist、command line、通常 log に書かないでください。
-
-local hop 用 token の生成例:
+推奨permission:
 
 ```bash
-mkdir -p ~/.local-dev-mcp/openai-tunnel
 chmod 700 ~/.local-dev-mcp/openai-tunnel
-node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" > ~/.local-dev-mcp/openai-tunnel/mcp-token
-chmod 600 ~/.local-dev-mcp/openai-tunnel/mcp-token
+chmod 600 ~/.local-dev-mcp/openai-tunnel/*
 ```
 
-Tunnel ID と runtime API key は OpenAI Platform で作成した値を対応する file に保存します。値自体は chat や log に貼り付けません。
+`mcp-token`は32文字以上のcryptographically randomな値にします。これらの値をGitやlogへ保存しません。
 
-server を OpenAI Tunnel auth mode で起動:
+automationでは次のenvironment variableも利用できます。
+
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_ID`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_ID_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR`
+- `LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_STARTUP_WAIT`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_LOG_LEVEL`
+
+### 起動・診断
+
+loopback HTTP MCP server:
 
 ```bash
-pnpm server:openai-tunnel
+pnpm server:http
 ```
 
-公式 client の事前診断:
+server起動後にTunnel設定とMCP probeを確認:
 
 ```bash
-pnpm tunnel:openai:doctor
+pnpm tunnel:doctor
 ```
 
-local MCP が起動済みで設定が正しければ、少なくとも `mcp_target` / `mcp_server_reachable` が PASS し、OAuth を使わない構成では `oauth_metadata` が「not advertised」で PASS します。
-
-Tunnel を起動:
-
-```bash
-pnpm tunnel:openai
-```
-
-`tunnel-client` 自身の health / readiness / UI は既定で loopback の `127.0.0.1:3460` に bind します。MCP server の `127.0.0.1:3456` とは process と failure domain を分離します。
-
-macOS で常駐させる場合は、server と OpenAI Tunnel を別 LaunchAgent にします。まず plist だけを書き出します。
-
-```bash
-pnpm launchd:install:openai
-```
-
-state files と Tunnel 設定を確認後に activate します。
-
-```bash
-scripts/install-openai-tunnel-launchd.sh --activate
-```
-
-生成 job は既定で `io.local-dev-mcp.server` と `io.local-dev-mcp.openai-tunnel` です。Tunnel client が再接続しても MCP process 自体は再起動しません。
-
-移行中に既存の Cloudflare/OAuth service を残す場合は、別の label prefix と port を使います。OpenAI Tunnel 用 server wrapper は server lock と mobile agent state も専用 directory に分離するため、2つの MCP process が同じ service lock を取り合いません。例:
-
-```bash
-PORT=13461 LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX=io.local-dev-mcp.openai-dev \
-  scripts/install-openai-tunnel-launchd.sh --activate
-```
-
-ChatGPT 側では、必要に応じて OpenAI Platform で Tunnel を利用対象の ChatGPT account / workspace に関連付け、Developer Mode の custom MCP app でその Tunnel を選択します。この repository では Pro の developer-mode plugin でも end-to-end 動作確認済みです。Secure MCP Tunnel を使う場合、ChatGPT に public MCP endpoint URL を登録する必要はありません。
-
-開発ホストから ChatGPT へ通常のファイル受け渡しを行う場合は `artifact.read` を優先します。ファイル本体を標準 MCP の `EmbeddedResource` / `BlobResourceContents` として tool result に直接埋め込むため、public HTTP endpoint を用意せず Secure MCP Tunnel の中だけで転送できます。現在の 1 call あたりの raw file 上限は 8 MiB で、MIME type と SHA-256 digest も返します。ユーザーへ成果物そのものを渡す必要がなく内容だけ確認する場合は、whole file transfer ではなく `workspace.read` または `image.read` を使います。
-
-現在の ChatGPT client では、custom plugin が初めて embedded file を返す際に **Allow file materialization?** の確認が出る場合があります。許可すると、ChatGPT が embedded resource を通常のファイル添付カードとして materialize します（ZIP なら “Zip Archive” カード）。この materialization はファイル本体が MCP / Secure Tunnel を通過した後の ChatGPT 側処理なので、`LOCAL_DEV_MCP_PUBLIC_ORIGIN` は不要です。
-
-逆方向は `artifact.receive` を使います。この tool は `_meta["openai/fileParams"] = ["file"]` を宣言しているため、ChatGPT の通常添付を authorized temporary file reference としてそのまま tool input にできます。ChatGPT からは `{ download_url, file_id, mime_type?, file_name? }` が渡され、`local-dev-mcp` はその URL を selected project へ同じ MCP tool call の中で stream 保存します。base64 chunk を複数回送る必要はありません。
-
-既定では `generated/uploads/` 配下にunique pathで保存し、必要ならproject-relativeな `destination` を明示できます。既存ファイルは上書きしません。server側ではHTTPS限定、loopback / local network宛てと危険なredirect先の拒否、512 MiBのhard limit（`LOCAL_DEV_MCP_ARTIFACT_RECEIVE_MAX_BYTES` で縮小可能）、stream中のSHA-256計算を行い、一時 `download_url` はaudit logへ保存しません。
-
-2026-08-29 に Pro の developer-mode plugin で通常のChatGPT添付を使ってend-to-end確認済みです。`artifact.receive` 1回だけでlocal fileとして保存され、byte countとSHA-256が元ファイルと完全一致しました。
-
-`download.link` は通常の browser URL が必要な場合の legacy / fallback として残します。この URL は通常の MCP traffic の外側なので、Secure MCP Tunnel だけでは公開されません。URL 方式が必要な場合だけ別途 HTTPS の `LOCAL_DEV_MCP_PUBLIC_ORIGIN` を設定し、未設定時は localhost URL を返さず明示的に失敗します。
-
-## Cloudflare Tunnel
-
-`scripts/tunnel.sh` は HTTP server と Cloudflare Tunnel を起動できます。controlled access path の一部として使う場合だけ利用してください。local MCP server を直接 public exposure しないでください。
-
-launcherは1つだけ起動します。scriptは`~/.local-dev-mcp/runtime/tunnel-launcher.lock`でPID lockを保持し、別の生存中launcherが所有している場合はstatus 75で終了します。これにより、手動起動がlaunchd管理instanceと競合してCloudflare Tunnelを繰り返し再接続する状態を防ぎます。
-
-`.env` に以下を設定します。
-
-```bash
-LOCAL_DEV_MCP_PUBLIC_ORIGIN=https://your-tunnel.example.com
-LOCAL_DEV_MCP_ALLOWED_HOSTS=your-tunnel.example.com
-LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID=your-tunnel-id
-LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE=/absolute/path/to/credentials.json
-LOCAL_DEV_MCP_PROJECTS_CONFIG=/absolute/path/to/config/projects.local.yaml
-```
-
-`LOCAL_DEV_MCP_PUBLIC_ORIGIN` は HTTP host allowlist に自動追加されます。`LOCAL_DEV_MCP_ALLOWED_HOSTS` は追加で信頼する proxy hostname がある場合だけ使います。
-
-起動:
+Tunnel client起動:
 
 ```bash
 pnpm tunnel
 ```
 
-macOSで常駐させる場合は、MCP serverとCloudflare Tunnelを別々のlaunchd jobにし、Tunnelの再起動がMCP processへ波及しない構成を使います。まず現在のserviceを止めずにjobを書き出します。
+既定:
+
+- MCP server: `127.0.0.1:3456`
+- tunnel-client health/readiness: `127.0.0.1:3460`
+
+正常時はlocal MCP probeがreachableになり、Tunnel readinessが`ready`になります。
+
+### launchd
+
+plistだけ生成:
 
 ```bash
-pnpm run launchd:install
+pnpm launchd:install
 ```
 
-その後にactivateします。旧combined LaunchAgentが残っている場合は、そのlabelを指定して新server起動前にbootoutします。
+activate:
 
 ```bash
-scripts/install-launchd.sh --activate --legacy-label your.old.launchd.label
+scripts/install-launchd.sh --activate
 ```
 
-生成jobは既定で`io.local-dev-mcp.server`と`io.local-dev-mcp.tunnel`です。logは`logs/mcp-server.log`と`logs/cloudflared.log`へ分離し、既定で10 MiB・5世代でrotateします。Tunnel protocolは既定で`auto`、log levelは`warn`です。QUICが不安定な場合だけ診断用に`LOCAL_DEV_MCP_CLOUDFLARE_PROTOCOL=http2`を使います。
+既定job:
 
-`http://127.0.0.1:3456/healthz`の`instance_id`はMCP processが再起動した場合だけ変わるため、Tunnelだけの再接続とserver再起動を区別できます。
+```text
+io.local-dev-mcp.server
+io.local-dev-mcp.openai-tunnel
+```
+
+serverとTunnel clientは別processなので、Tunnel reconnectでMCP serverまで再起動しません。
+
+## ChatGPT Developer Mode で Plugin を追加する
+
+1. OpenAI PlatformでTunnelを作る
+2. Platform UIで必要な場合は利用対象のChatGPT account/workspaceへ関連付ける
+3. `local-dev-mcp` と `tunnel-client` を起動してreadinessを確認する
+4. ChatGPT Developer Mode / Pluginsを開く
+5. connection typeに **Tunnel** を選んでcustom pluginを作る
+6. Tunnel IDを選択または入力する
+7. Plugin側の追加authenticationは`None`にする。private local hopはTunnel tokenで保護する
+8. tool schema変更後はPluginをRefreshする
+
+このrepositoryでは、Proのdeveloper-mode pluginを使いChatGPT WebとAndroid Mobileの両方でend-to-end確認済みです。
+
+## 双方向ファイル転送
+
+### 開発ホスト → ChatGPT
+
+ユーザーへfileそのものを渡すときは`artifact.read`を使います。
+
+```text
+local file
+  → artifact.read
+  → MCP EmbeddedResource / BlobResourceContents
+  → Secure MCP Tunnel
+  → ChatGPT file materialization
+```
+
+現在のraw file上限は1 callあたり8 MiBです。MIME type、byte size、SHA-256も返します。
+
+custom pluginから初めてembedded fileを返す場合、ChatGPTが **Allow file materialization?** を表示することがあります。許可後は通常のfile attachment cardになります。
+
+内容確認だけなら、textは`workspace.read`、画像は`image.read`を使います。
+
+### ChatGPT → 開発ホスト
+
+`artifact.receive` は次を宣言します。
+
+```text
+_meta["openai/fileParams"] = ["file"]
+```
+
+ChatGPTの通常添付はhost側で一時的に認可されたfile referenceへ変換されます。
+
+```text
+download_url
+file_id
+mime_type?
+file_name?
+```
+
+`artifact.receive` は**同じ1回のMCP tool call内**でdownloadしてlocalへ保存します。base64 chunkを複数回送る必要はありません。
+
+既定の保存仕様:
+
+- `generated/uploads/`配下にunique fileを作る
+- project-relativeな`destination`を明示可能
+- 既存fileは上書きしない
+
+受信側の保護:
+
+- HTTPS sourceのみ
+- source URLがloopback/local networkへ解決される場合は拒否
+- redirect先も再検証
+- project root / denied pathを適用
+- destination parentのsymlink traversalを拒否
+- stream中にSHA-256計算
+- hard limit 512 MiB。`LOCAL_DEV_MCP_ARTIFACT_RECEIVE_MAX_BYTES`で縮小可能
+- 一時download URLをaudit logへ保存しない
+
+通常添付の受信はChatGPT WebとAndroid Mobileでend-to-end確認済みで、byte countとSHA-256が元fileと完全一致することを確認しています。
+
+## Image Handling
+
+`image.read` はmodelが確認できるMCP `ImageContent`とmetadataを返します。HTTP image cache、public URL、custom ChatGPT viewerは作りません。
+
+mode:
+
+- `preview`: 既定。対応画像が大きい場合は可能ならdownscale
+- `full`: original imageをinlineで返す
+- `metadata`: inline bytesなしでmetadataだけ返す
+
+画像fileそのものをユーザーへ渡す場合は`artifact.read`を使います。
+
+## Project Registry
+
+ChatGPTに操作を許可するrootだけを登録してください。
+
+project entryでは少なくとも次を管理します。
+
+- `project_id`
+- display name
+- host/sandbox root
+- shell / timeout
+- network/write/approval policy
+- denied paths
+- redaction profile
+
+conversation単位の選択は`project.select`で保持します。project-sensitiveな操作でcontextが不明なら`project.current`を確認します。
+
+## 物理モバイル端末の自動操作
+
+mobile toolsは検出されたiOS/Android targetを操作できます。physical deviceの対応範囲はlocal toolchainとdevice stateに依存します。
+
+macOSでは`pnpm doctor`がproject-local `agent-device`とphysical iOSのDeveloper Tools Security状態を確認します。
 
 ## Safety Notes
 
-- `.env`、`.local-dev-mcp`、`logs`、`generated`、`config/projects.local.yaml` を commit しない。
-- secret は registered project から外すか、`denied_paths` に追加する。
-- write / network / destructive operation の承認前に command を確認する。
+- private stateをregistered project root外へ置く
+- local secret materialをGitへ入れない
+- Tunnel state fileのpermissionを制限する
+- registered projectごとのdenied-path ruleを維持する
+- ChatGPT write confirmationの引数を確認する
+- arbitrary shellよりtyped toolを優先する
+- loopback HTTP MCP serverを別のpublic ingressへ公開しない
 
 ## Development
 
+commit前の基本check:
+
 ```bash
-pnpm run doctor -- config/projects.local.yaml
 pnpm typecheck
 pnpm test
+bash -n scripts/server.sh scripts/tunnel.sh scripts/install-launchd.sh scripts/install-openai-tunnel-client.sh
 ```
+
+tool surfaceを変更したら`TOOL_SCHEMA_VERSION`を更新し、ChatGPT PluginのactionsをRefreshします。

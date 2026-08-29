@@ -3,9 +3,15 @@
 - 返答は、上位のユーザー指示が別言語を指定しない限り日本語で行う。
 - このrepoの主なruntime clientはChatGPTであり、WebだけでなくChatGPT Androidからの実利用も互換性対象として扱う。
 
-## MCP image viewer
+## ChatGPT transport
 
-- `image.show` の画像ビューアは、ChatGPT Androidで確認済みのlegacy Skybridge経路を維持する。
-- `src/mcp/resources/image-viewer.ts` のviewer resourceを変更するときは、`text/html+skybridge` MIME、`ui://local-dev-mcp/image-viewer-skybridge-*.html` 系URI、legacy `window.openai` / `ui/notifications/tool-result` 経路を互換性契約として扱う。
-- `text/html;profile=mcp-app`、MCP Apps `ui/initialize` / `ui/notifications/initialized` handshake、またはviewer visibility metadataへ切り替える場合は、unit testだけで完了扱いにせず、ChatGPT Androidで新しい `image.show` cardの画像表示とBranch chatを実操作で確認する。
-- 画像表示不具合の調査では、tool実行成功、resource取得、viewer内の画像データ受信、ChatGPT Android card描画、Branch chat遷移を別々の層として切り分ける。既存conversationの古いcardはviewer URIやclient cacheの影響を受けうるため、新規 `image.show` 実行での確認を優先する。
+- ChatGPTとの正規接続経路はOpenAI Secure MCP Tunnelのみとする。public MCP ingressや別Tunnel方式の互換コードを追加しない。
+- HTTP MCPはloopback bind + `X-Local-Dev-MCP-Tunnel-Token`を安全境界とする。stdio transportはlocal MCP client向けに独立して維持する。
+- tool schemaやTunnel起動方式を変更した場合はunit testだけで完了扱いにせず、ChatGPT WebまたはAndroidで実tool callを確認する。
+
+## File and image transfer
+
+- ユーザーへfileそのものを渡す場合は`artifact.read`を使い、MCP EmbeddedResourceとしてmaterializeする。
+- ChatGPTの通常添付をlocalへ受信する場合は`artifact.receive` + `openai/fileParams`を使い、base64 chunk loopを追加しない。
+- 画像のmodel inspectionには`image.read`のinline MCP ImageContentを使う。public image URLやcustom image viewerを再導入しない。
+- `artifact.read` / `artifact.receive` の変更は、ChatGPT Androidを含む実file transferでbyte sizeまたはSHA-256をread-backして確認する。

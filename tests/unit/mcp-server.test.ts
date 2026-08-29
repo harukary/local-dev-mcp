@@ -1,47 +1,35 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  isAllowedRedirectUri,
-  isRegisteredRedirectUri,
-  isMcpDebugEnabled,
-  getPublicOrigin,
-  getAllowedHttpHosts,
-  hasExplicitHttpHostAllowlist,
   isAllowedHttpHost,
+  isMcpDebugEnabled,
   normalizeHttpHost,
   resolveChatContextId,
-  renderPassphrasePage,
-  renderDownloadAuthPage,
   sanitizeRequestUrlForLog,
   sendStatelessMcpMethodNotAllowed,
 } from "../../src/mcp/server.js";
 import { buildToolSchemaSnapshot } from "../../src/mcp/tool-definitions.js";
-import { imageViewerMeta, imageViewerResource, imageViewerResourceUri, IMAGE_VIEWER_RESOURCE_MIME_TYPE } from "../../src/mcp/resources/image-viewer.js";
 
 describe("resolveChatContextId", () => {
   it("uses openai/session when present", () => {
-    expect(
-      resolveChatContextId({
-        "openai/session": "conv_123",
-        "openai/subject": "user_456",
-      })
-    ).toBe("chatgpt-session:conv_123");
+    expect(resolveChatContextId({
+      "openai/session": "conv_123",
+      "openai/subject": "user_456",
+    })).toBe("chatgpt-session:conv_123");
   });
 
   it("falls back to openai/subject when session is missing", () => {
-    expect(
-      resolveChatContextId({
-        "openai/session": "",
-        "openai/subject": "user_456",
-      })
-    ).toBe("chatgpt-user:user_456");
+    expect(resolveChatContextId({
+      "openai/session": "",
+      "openai/subject": "user_456",
+    })).toBe("chatgpt-user:user_456");
   });
 
-  it("falls back to default when no app meta is present", () => {
+  it("falls back to default when no app metadata is present", () => {
     expect(resolveChatContextId(undefined)).toBe("default");
     expect(resolveChatContextId({ "openai/session": "" })).toBe("default");
   });
 
-  it("reads the debug env gate from LOCAL_DEV_MCP_DEBUG", () => {
+  it("reads the debug env gate", () => {
     const previous = process.env.LOCAL_DEV_MCP_DEBUG;
     delete process.env.LOCAL_DEV_MCP_DEBUG;
     expect(isMcpDebugEnabled()).toBe(false);
@@ -49,87 +37,13 @@ describe("resolveChatContextId", () => {
     expect(isMcpDebugEnabled()).toBe(true);
     process.env.LOCAL_DEV_MCP_DEBUG = "0";
     expect(isMcpDebugEnabled()).toBe(false);
-    if (previous === undefined) {
-      delete process.env.LOCAL_DEV_MCP_DEBUG;
-    } else {
-      process.env.LOCAL_DEV_MCP_DEBUG = previous;
-    }
-  });
-});
-
-describe("OAuth helpers", () => {
-  it("prefers LOCAL_DEV_MCP_PUBLIC_ORIGIN over request-derived origin", () => {
-    const previous = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
-    process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = "https://public.example.com/base";
-
-    expect(
-      getPublicOrigin({
-        headers: {
-          host: "127.0.0.1:3456",
-          "x-forwarded-proto": "http",
-        },
-      } as never)
-    ).toBe("https://public.example.com");
-
-    if (previous === undefined) {
-      delete process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
-    } else {
-      process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = previous;
-    }
+    if (previous === undefined) delete process.env.LOCAL_DEV_MCP_DEBUG;
+    else process.env.LOCAL_DEV_MCP_DEBUG = previous;
   });
 
-  it("allows localhost and ChatGPT connector redirect URIs", () => {
-    expect(isAllowedRedirectUri("http://localhost/redirect")).toBe(true);
-    expect(isAllowedRedirectUri("http://127.0.0.1:3000/callback")).toBe(true);
-    expect(isAllowedRedirectUri("https://chatgpt.com/connector/oauth/callback")).toBe(true);
-    expect(isAllowedRedirectUri("https://chat.openai.com/connector/oauth/callback")).toBe(true);
-  });
-
-  it("rejects unknown external redirect origins", () => {
-    expect(isAllowedRedirectUri("https://evil.example.com/callback")).toBe(false);
-    expect(isAllowedRedirectUri("javascript:alert(1)")).toBe(false);
-  });
-
-  it("matches redirect URIs against registered client data", () => {
-    const client = {
-      redirect_uris: [
-        "http://localhost/redirect",
-        "https://chatgpt.com/connector/oauth/callback-123",
-      ],
-    };
-
-    expect(isRegisteredRedirectUri("http://localhost/redirect", client)).toBe(true);
-    expect(isRegisteredRedirectUri("https://chatgpt.com/connector/oauth/callback-123", client)).toBe(true);
-    expect(isRegisteredRedirectUri("https://chatgpt.com/connector/oauth/callback-456", client)).toBe(false);
-  });
-
-  it("escapes hidden passphrase form inputs", () => {
-    const html = renderPassphrasePage(
-      new URLSearchParams([
-        ["client_id", `x" onfocus="alert(1)`],
-        ["state", `<script>alert('x')</script>`],
-        ["passphrase", "secret"],
-      ])
-    );
-
-    expect(html).toContain('name="client_id"');
-    expect(html).toContain('method="POST"');
-    expect(html).toContain("x&quot; onfocus=&quot;alert(1)");
-    expect(html).toContain("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;");
-    expect(html).not.toContain("<script>alert('x')</script>");
-  });
-
-  it("renders a link-bound download authentication form", () => {
-    const html = renderDownloadAuthPage("link-123", "challenge-456");
-    expect(html).toContain('action="/download-auth"');
-    expect(html).toContain('name="link" value="link-123"');
-    expect(html).toContain('name="challenge" value="challenge-456"');
-    expect(html).not.toContain("Bearer");
-  });
-
-  it("redacts passphrases from request URLs before logging", () => {
-    expect(sanitizeRequestUrlForLog("/authorize?client_id=x&passphrase=secret&state=y")).toBe(
-      "/authorize?client_id=x&passphrase=%5BREDACTED%5D&state=y"
+  it("sanitizes sensitive query values before debug logging", () => {
+    expect(sanitizeRequestUrlForLog("/mcp?token=value&state=x")).toBe(
+      "/mcp?token=%5BREDACTED%5D&state=x"
     );
   });
 });
@@ -155,156 +69,55 @@ describe("stateless MCP transport", () => {
   });
 });
 
-describe("HTTP host allowlist helpers", () => {
-  it("normalizes host headers and origins", () => {
-    expect(normalizeHttpHost("Public.Example.com:443")).toBe("public.example.com");
-    expect(normalizeHttpHost("https://Tunnel.Example.com/path")).toBe("tunnel.example.com");
+describe("Secure Tunnel HTTP host boundary", () => {
+  it("normalizes loopback host headers", () => {
+    expect(normalizeHttpHost("LOCALHOST:3456")).toBe("localhost");
+    expect(normalizeHttpHost("http://127.0.0.1:3456/mcp")).toBe("127.0.0.1");
     expect(normalizeHttpHost("")).toBeNull();
   });
 
-  it("allows localhost and configured public hosts", () => {
-    const previousPublicOrigin = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
-    const previousAllowedHosts = process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS;
-    process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = "https://public.example.com/base";
-    process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS = "extra.example.com, https://second.example.com/path";
-
-    expect(getAllowedHttpHosts()).toEqual(expect.arrayContaining([
-      "localhost",
-      "127.0.0.1",
-      "public.example.com",
-      "extra.example.com",
-      "second.example.com",
-    ]));
-    expect(isAllowedHttpHost("public.example.com")).toBe(true);
-    expect(isAllowedHttpHost("extra.example.com:443")).toBe(true);
-    expect(isAllowedHttpHost("evil.example.com")).toBe(false);
-
-    if (previousPublicOrigin === undefined) {
-      delete process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
-    } else {
-      process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = previousPublicOrigin;
-    }
-    if (previousAllowedHosts === undefined) {
-      delete process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS;
-    } else {
-      process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS = previousAllowedHosts;
-    }
-  });
-
-  it("does not enforce an external host allowlist until one is configured", () => {
-    const previousPublicOrigin = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
-    const previousAllowedHosts = process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS;
-    delete process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
-    delete process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS;
-
-    expect(hasExplicitHttpHostAllowlist()).toBe(false);
-    expect(isAllowedHttpHost("ephemeral.example.com")).toBe(true);
-
-    if (previousPublicOrigin === undefined) {
-      delete process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
-    } else {
-      process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = previousPublicOrigin;
-    }
-    if (previousAllowedHosts === undefined) {
-      delete process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS;
-    } else {
-      process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS = previousAllowedHosts;
-    }
+  it("accepts loopback hosts and rejects external hosts", () => {
+    expect(isAllowedHttpHost("localhost:3456")).toBe(true);
+    expect(isAllowedHttpHost("127.0.0.1:3456")).toBe(true);
+    expect(isAllowedHttpHost("example.com")).toBe(false);
+    expect(isAllowedHttpHost(undefined)).toBe(false);
   });
 });
 
 describe("tool schema snapshot", () => {
-  it("exposes runtime tool definitions with shell.run annotations", () => {
+  it("publishes the Secure Tunnel-era tool surface", () => {
     const snapshot = buildToolSchemaSnapshot();
+    const names = snapshot.tools.map((tool) => tool.name);
     const shellRun = snapshot.tools.find((tool) => tool.name === "shell.run");
     const imageRead = snapshot.tools.find((tool) => tool.name === "image.read");
-    const imageShow = snapshot.tools.find((tool) => tool.name === "image.show");
-    const downloadLink = snapshot.tools.find((tool) => tool.name === "download.link");
-    const skillsList = snapshot.tools.find((tool) => tool.name === "skills.list");
-    const skillsRead = snapshot.tools.find((tool) => tool.name === "skills.read");
+    const artifactRead = snapshot.tools.find((tool) => tool.name === "artifact.read");
+    const artifactReceive = snapshot.tools.find((tool) => tool.name === "artifact.receive");
 
-    expect(snapshot.schema_version).toMatch(/^\d{4}-\d{2}-\d{2}\./);
-    expect(snapshot.tools.some((tool) => tool.name === "tool.schema")).toBe(true);
-    expect(downloadLink?.inputSchema).toMatchObject({
-      type: "object",
-      required: ["path"],
-    });
-    expect(downloadLink?.description).toContain("passphrase authentication screen");
-    expect(skillsList?.annotations).toMatchObject({ readOnlyHint: true });
-    expect(skillsRead?.inputSchema).toMatchObject({
-      type: "object",
-      required: ["path"],
-    });
+    expect(snapshot.schema_version).toBe("2026-08-29.4");
+    expect(names).toContain("tool.schema");
+    expect(names).toContain("image.read");
+    expect(names).toContain("artifact.read");
+    expect(names).toContain("artifact.receive");
+    expect(names).not.toContain("image.show");
+    expect(names).not.toContain("download.link");
+
     expect(imageRead?._meta).toBeUndefined();
-    expect(imageShow?._meta).toMatchObject({
-      ui: { resourceUri: imageViewerResourceUri() },
-      "openai/outputTemplate": imageViewerResourceUri(),
-      "openai/widgetAccessible": true,
+    expect(imageRead?.outputSchema).toMatchObject({
+      required: expect.arrayContaining(["project_id", "path", "returned_image_mode"]),
     });
-    for (const name of ["browser.click", "browser.open", "mobile.screenshot", "mobile.tap"]) {
-      expect(snapshot.tools.find((tool) => tool.name === name)?._meta).toBeUndefined();
-    }
-    expect(snapshot.tools.find((tool) => tool.name === "browser.click")?.inputSchema).toMatchObject({
-      properties: { wait_for: { properties: { text: { type: "string" }, timeout_ms: { maximum: 60000 } } } },
-    });
-    expect(snapshot.tools.find((tool) => tool.name === "mobile.tap_element")?.inputSchema).toMatchObject({
-      properties: { wait_for: { required: ["target"], properties: { target: { type: "string" } } } },
-    });
-    for (const name of ["mobile.current_app", "mobile.logs", "mobile.stop_app", "mobile.restart_app"]) {
-      expect(snapshot.tools.some((tool) => tool.name === name)).toBe(true);
-    }
+    expect(imageRead?.outputSchema).not.toHaveProperty("properties.display_url");
+
+    expect(artifactRead?.annotations).toMatchObject({ readOnlyHint: true });
+    expect(artifactReceive?._meta).toEqual({ "openai/fileParams": ["file"] });
+    expect(artifactReceive?.annotations).toMatchObject({ readOnlyHint: false });
+
     expect(shellRun?.annotations).toMatchObject({
       readOnlyHint: false,
       destructiveHint: true,
       openWorldHint: true,
     });
-    expect(shellRun?.inputSchema).toMatchObject({
-      properties: {
-        credential_scope: {
-          enum: ["bitwarden"],
-        },
-      },
-    });
-  });
-});
-
-describe("image viewer resource", () => {
-  it("exposes the legacy Skybridge image viewer for image.show output", () => {
-    const resource = imageViewerResource();
-
-    expect(resource.uri).toBe("ui://local-dev-mcp/image-viewer-skybridge-v4.html");
-    expect(resource.mimeType).toBe("text/html+skybridge");
-    expect(resource.mimeType).toBe(IMAGE_VIEWER_RESOURCE_MIME_TYPE);
-    expect(resource.text).toContain('document.createElement("img")');
-    expect(resource.text).toContain("ui/notifications/tool-result");
-    expect(resource.text).not.toContain('method: "ui/initialize"');
-    expect(resource.text).not.toContain('method: "ui/notifications/initialized"');
-    expect(resource.text).toContain('item.type === "image"');
-    expect(resource.text).toContain('"data:" + mimeType + ";base64," + image.data');
-    expect(resource._meta).toMatchObject({
-      ui: {
-        prefersBorder: true,
-        csp: {
-          resourceDomains: expect.arrayContaining([expect.stringMatching(/^https?:\/\//)]),
-        },
-      },
-      "openai/widgetDescription": expect.stringContaining("image.show"),
-      "openai/widgetPrefersBorder": true,
-      "openai/outputTemplate": imageViewerResourceUri(),
-      "openai/widgetAccessible": true,
-    });
-    expect(resource._meta["openai/widgetCSP"]).toMatchObject({
-      resource_domains: expect.arrayContaining([expect.stringMatching(/^https?:\/\//)]),
-    });
-  });
-
-  it("uses the same widget metadata for tool descriptors and invocation results", () => {
-    expect(imageViewerMeta()).toMatchObject({
-      ui: { resourceUri: imageViewerResourceUri() },
-      "openai/outputTemplate": imageViewerResourceUri(),
-      "openai/toolInvocation/invoking": "Loading image",
-      "openai/toolInvocation/invoked": "Image loaded",
-      "openai/widgetAccessible": true,
-    });
+    for (const name of ["browser.click", "browser.open", "mobile.screenshot", "mobile.tap"]) {
+      expect(snapshot.tools.find((tool) => tool.name === name)?._meta).toBeUndefined();
+    }
   });
 });

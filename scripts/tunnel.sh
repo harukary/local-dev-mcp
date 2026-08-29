@@ -1,210 +1,143 @@
 #!/bin/bash
 set -euo pipefail
 
-MODE="combined"
-if [ "${1:-}" = "--tunnel-only" ]; then
-  MODE="tunnel-only"
-  shift
-fi
+MODE="run"
+case "${1:-}" in
+  "") ;;
+  --doctor) MODE="doctor"; shift ;;
+  --run) MODE="run"; shift ;;
+  -h|--help)
+    cat <<'USAGE'
+usage: tunnel.sh [--run|--doctor]
+
+Runs the official OpenAI tunnel-client against the loopback local-dev-mcp endpoint.
+Configuration may be supplied through environment variables or private files.
+
+Required:
+  LOCAL_DEV_MCP_OPENAI_TUNNEL_ID or LOCAL_DEV_MCP_OPENAI_TUNNEL_ID_FILE
+  LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY or LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE
+  LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN or LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE
+
+Defaults for file-backed service operation:
+  ~/.local-dev-mcp/openai-tunnel/tunnel-id
+  ~/.local-dev-mcp/openai-tunnel/runtime-api-key
+  ~/.local-dev-mcp/openai-tunnel/mcp-token
+
+Optional:
+  LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN=/absolute/path/to/tunnel-client
+  LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR=127.0.0.1:3460
+  LOCAL_DEV_MCP_OPENAI_TUNNEL_STARTUP_WAIT=30s
+  LOCAL_DEV_MCP_OPENAI_TUNNEL_LOG_LEVEL=info
+  PORT=3456
+USAGE
+    exit 0
+    ;;
+  *) echo "Unknown argument: $1" >&2; exit 64 ;;
+esac
 if [ "$#" -ne 0 ]; then
-  echo "usage: tunnel.sh [--tunnel-only]" >&2
+  echo "usage: tunnel.sh [--run|--doctor]" >&2
   exit 64
 fi
 
 PORT="${PORT:-3456}"
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-AGENT_DEVICE_BIN="$PROJECT_DIR/node_modules/.bin/agent-device"
-IOS_AGENT_STATE_DIR="${LOCAL_DEV_MCP_IOS_AGENT_STATE_DIR:-$HOME/.local-dev-mcp/runtime/agent-device-ios}"
-ANDROID_AGENT_STATE_DIR="${LOCAL_DEV_MCP_ANDROID_AGENT_STATE_DIR:-$HOME/.local-dev-mcp/runtime/agent-device-android}"
-LAUNCHER_LOCK_DIR="${LOCAL_DEV_MCP_LAUNCHER_LOCK_DIR:-$HOME/.local-dev-mcp/runtime/tunnel-launcher.lock}"
-SERVER_LOCK_DIR="${LOCAL_DEV_MCP_SERVER_LOCK_DIR:-$HOME/.local-dev-mcp/runtime/server.lock}"
-LAUNCHER_LOCK_OWNED=0
-MCP_PID=""
-CLOUDFLARE_PID=""
+STATE_DIR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR:-$HOME/.local-dev-mcp/openai-tunnel}"
+DEFAULT_TUNNEL_ID_FILE="$STATE_DIR/tunnel-id"
+DEFAULT_API_KEY_FILE="$STATE_DIR/runtime-api-key"
+DEFAULT_MCP_TOKEN_FILE="$STATE_DIR/mcp-token"
+HEALTH_ADDR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR:-127.0.0.1:3460}"
+STARTUP_WAIT="${LOCAL_DEV_MCP_OPENAI_TUNNEL_STARTUP_WAIT:-30s}"
+LOG_LEVEL="${LOCAL_DEV_MCP_OPENAI_TUNNEL_LOG_LEVEL:-info}"
+HEADER_NAME="X-Local-Dev-MCP-Tunnel-Token"
 
-if [ -f "$PROJECT_DIR/.env" ]; then
-  set -a
-  source "$PROJECT_DIR/.env"
-  set +a
-fi
 
-TUNNEL_ID="${LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID:-}"
-if [ -n "${LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE:-}" ]; then
-  TUNNEL_CREDENTIALS_FILE="$LOCAL_DEV_MCP_CLOUDFLARE_CREDENTIALS_FILE"
-elif [ -f "$HOME/.cloudflared/local-dev-mcp.json" ]; then
-  TUNNEL_CREDENTIALS_FILE="$HOME/.cloudflared/local-dev-mcp.json"
-else
-  TUNNEL_CREDENTIALS_FILE="$HOME/.cloudflared/tunnel-credentials.json"
-fi
-PROJECTS_CONFIG="${LOCAL_DEV_MCP_PROJECTS_CONFIG:-}"
+expand_home() {
+  case "$1" in
+    "~") printf '%s' "$HOME" ;;
+    "~/"*) printf '%s/%s' "$HOME" "${1#~/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
 
-if [ -z "$PROJECTS_CONFIG" ]; then
-  if [ -f "$PROJECT_DIR/config/projects.local.yaml" ]; then
-    PROJECTS_CONFIG="$PROJECT_DIR/config/projects.local.yaml"
-  else
-    PROJECTS_CONFIG="$PROJECT_DIR/config/projects.yaml"
+read_trimmed_file() {
+  local path
+  path="$(expand_home "$1")"
+  if [ ! -f "$path" ]; then
+    return 1
   fi
-fi
+  tr -d '\r\n' < "$path"
+}
 
-if [ -z "$TUNNEL_ID" ] && [ -f "$TUNNEL_CREDENTIALS_FILE" ]; then
-  TUNNEL_ID="$(node -e 'const fs=require("fs"); const p=process.argv[1]; const j=JSON.parse(fs.readFileSync(p,"utf8")); process.stdout.write(j.TunnelID || "")' "$TUNNEL_CREDENTIALS_FILE")"
-fi
-
+TUNNEL_ID="${LOCAL_DEV_MCP_OPENAI_TUNNEL_ID:-}"
+TUNNEL_ID_FILE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_ID_FILE:-$DEFAULT_TUNNEL_ID_FILE}"
 if [ -z "$TUNNEL_ID" ]; then
-  echo "[tunnel] LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ID is required, or credentials file must contain TunnelID." >&2
+  TUNNEL_ID="$(read_trimmed_file "$TUNNEL_ID_FILE" || true)"
+fi
+if [[ ! "$TUNNEL_ID" =~ ^tunnel_[0-9a-f]{32}$ ]]; then
+  echo "[openai-tunnel] Tunnel ID is required and must match tunnel_<32 lowercase hex chars>." >&2
   exit 1
 fi
-if [ ! -f "$TUNNEL_CREDENTIALS_FILE" ]; then
-  echo "[tunnel] Cloudflare tunnel credentials file not found: $TUNNEL_CREDENTIALS_FILE" >&2
+
+resolve_secret_ref() {
+  local inline_name="$1"
+  local file_name="$2"
+  local default_file="$3"
+  local inline_value="${!inline_name:-}"
+  local configured_file="${!file_name:-$default_file}"
+
+  if [ -n "$inline_value" ] && [ "${!file_name+x}" = "x" ] && [ -n "${!file_name}" ]; then
+    echo "[openai-tunnel] $inline_name and $file_name are mutually exclusive." >&2
+    return 1
+  fi
+  if [ -n "$inline_value" ]; then
+    printf 'env:%s' "$inline_name"
+    return 0
+  fi
+
+  local expanded
+  expanded="$(expand_home "$configured_file")"
+  if [ ! -f "$expanded" ]; then
+    echo "[openai-tunnel] Secret file not found: $expanded" >&2
+    return 1
+  fi
+  printf 'file:%s' "$expanded"
+}
+
+API_KEY_REF="$(resolve_secret_ref LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE "$DEFAULT_API_KEY_FILE")"
+MCP_TOKEN_REF="$(resolve_secret_ref LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE "$DEFAULT_MCP_TOKEN_FILE")"
+
+TUNNEL_CLIENT_BIN="${LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN:-${TUNNEL_CLIENT_BIN:-}}"
+if [ -z "$TUNNEL_CLIENT_BIN" ]; then
+  TUNNEL_CLIENT_BIN="$(command -v tunnel-client || true)"
+fi
+if [ -z "$TUNNEL_CLIENT_BIN" ] && [ -x "$HOME/.local-dev-mcp/bin/tunnel-client" ]; then
+  TUNNEL_CLIENT_BIN="$HOME/.local-dev-mcp/bin/tunnel-client"
+fi
+if [ -z "$TUNNEL_CLIENT_BIN" ] || [ ! -x "$TUNNEL_CLIENT_BIN" ]; then
+  echo "[openai-tunnel] tunnel-client was not found. Install an official release or set LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN." >&2
   exit 1
 fi
 
-CLOUDFLARE_PROTOCOL="${LOCAL_DEV_MCP_CLOUDFLARE_PROTOCOL:-auto}"
-case "$CLOUDFLARE_PROTOCOL" in
-  auto|quic|http2) ;;
-  *)
-    echo "[tunnel] LOCAL_DEV_MCP_CLOUDFLARE_PROTOCOL must be auto, quic, or http2." >&2
-    exit 64
-    ;;
-esac
+COMMON_ARGS=(
+  --control-plane.tunnel-id "$TUNNEL_ID"
+  --control-plane.api-key "$API_KEY_REF"
+  --mcp.server-url "http://127.0.0.1:$PORT/mcp"
+  --mcp.extra-headers "$HEADER_NAME: $MCP_TOKEN_REF"
+  --mcp.discovery-extra-headers "$HEADER_NAME: $MCP_TOKEN_REF"
+  --mcp.startup-wait-timeout "$STARTUP_WAIT"
+  --health.listen-addr "$HEALTH_ADDR"
+)
 
-CLOUDFLARE_LOG_LEVEL="${LOCAL_DEV_MCP_CLOUDFLARE_LOG_LEVEL:-warn}"
-case "$CLOUDFLARE_LOG_LEVEL" in
-  debug|info|warn|error|fatal) ;;
-  *)
-    echo "[tunnel] LOCAL_DEV_MCP_CLOUDFLARE_LOG_LEVEL must be debug, info, warn, error, or fatal." >&2
-    exit 64
-    ;;
-esac
-
-release_launcher_lock() {
-  if [ "$LAUNCHER_LOCK_OWNED" -ne 1 ]; then
-    return
-  fi
-
-  local owner_pid
-  owner_pid="$(cat "$LAUNCHER_LOCK_DIR/pid" 2>/dev/null || true)"
-  if [ "$owner_pid" = "$$" ]; then
-    rm -f "$LAUNCHER_LOCK_DIR/pid"
-    rmdir "$LAUNCHER_LOCK_DIR" 2>/dev/null || true
-  fi
-  LAUNCHER_LOCK_OWNED=0
-}
-
-acquire_launcher_lock() {
-  local attempt owner_pid stale_lock_dir
-  mkdir -p "$(dirname "$LAUNCHER_LOCK_DIR")"
-
-  for attempt in 1 2; do
-    if mkdir "$LAUNCHER_LOCK_DIR" 2>/dev/null; then
-      printf '%s\n' "$$" > "$LAUNCHER_LOCK_DIR/pid"
-      LAUNCHER_LOCK_OWNED=1
-      trap release_launcher_lock EXIT
-      return
-    fi
-
-    owner_pid="$(cat "$LAUNCHER_LOCK_DIR/pid" 2>/dev/null || true)"
-    if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
-      echo "[tunnel] Another launcher is already running (pid: $owner_pid)." >&2
-      exit 75
-    fi
-
-    stale_lock_dir="${LAUNCHER_LOCK_DIR}.stale.$$"
-    if mv "$LAUNCHER_LOCK_DIR" "$stale_lock_dir" 2>/dev/null; then
-      rm -f "$stale_lock_dir/pid"
-      rmdir "$stale_lock_dir" 2>/dev/null || {
-        echo "[tunnel] Stale launcher lock is not empty: $stale_lock_dir" >&2
-        exit 1
-      }
-    fi
-  done
-
-  echo "[tunnel] Could not acquire launcher lock: $LAUNCHER_LOCK_DIR" >&2
-  exit 75
-}
-
-server_service_is_running() {
-  local owner_pid
-  owner_pid="$(cat "$SERVER_LOCK_DIR/pid" 2>/dev/null || true)"
-  [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null
-}
-
-cleanup_agent_device_daemons() {
-  if [ ! -x "$AGENT_DEVICE_BIN" ]; then
-    return
-  fi
-  "$AGENT_DEVICE_BIN" daemon stop --state-dir "$IOS_AGENT_STATE_DIR" --clean >/dev/null 2>&1 || true
-  "$AGENT_DEVICE_BIN" daemon stop --state-dir "$ANDROID_AGENT_STATE_DIR" --clean >/dev/null 2>&1 || true
-}
-
-cleanup_children() {
-  if [ -n "$MCP_PID" ]; then
-    kill "$MCP_PID" 2>/dev/null || true
-    wait "$MCP_PID" 2>/dev/null || true
-    MCP_PID=""
-  fi
-  if [ -n "$CLOUDFLARE_PID" ]; then
-    kill "$CLOUDFLARE_PID" 2>/dev/null || true
-    wait "$CLOUDFLARE_PID" 2>/dev/null || true
-    CLOUDFLARE_PID=""
-  fi
-  if [ "$MODE" = "combined" ]; then
-    cleanup_agent_device_daemons
-  fi
-}
-
-is_process_running() {
-  local pid="$1"
-  local stat
-  stat="$(ps -p "$pid" -o stat= 2>/dev/null | tr -d '[:space:]' || true)"
-  [ -n "$stat" ] && [[ "$stat" != Z* ]]
-}
-
-acquire_launcher_lock
-
-if [ "$MODE" = "combined" ]; then
-  if server_service_is_running; then
-    echo "[tunnel] The split MCP server service is already running; refusing combined mode." >&2
-    echo "[tunnel] Use --tunnel-only or stop the server service first." >&2
-    exit 75
-  fi
-
-  cleanup_agent_device_daemons
-  echo "[tunnel] Starting MCP server on port $PORT..." >&2
-  cd "$PROJECT_DIR"
-  node --import tsx src/index.ts "$PROJECTS_CONFIG" --http "$PORT" &
-  MCP_PID=$!
+if [ "$MODE" = "doctor" ]; then
+  exec "$TUNNEL_CLIENT_BIN" doctor "${COMMON_ARGS[@]}" --explain
 fi
 
-echo "[tunnel] Starting Cloudflare Tunnel (protocol: $CLOUDFLARE_PROTOCOL)..." >&2
-cloudflared tunnel --loglevel "$CLOUDFLARE_LOG_LEVEL" --config <(cat <<YAML
-tunnel: $TUNNEL_ID
-credentials-file: $TUNNEL_CREDENTIALS_FILE
-url: http://localhost:$PORT
-protocol: $CLOUDFLARE_PROTOCOL
-no-autoupdate: true
-YAML
-) run &
-CLOUDFLARE_PID=$!
+if ! curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
+  echo "[openai-tunnel] local-dev-mcp is not healthy at http://127.0.0.1:$PORT/healthz" >&2
+  exit 1
+fi
 
-trap "echo '[tunnel] Shutting down...' >&2; cleanup_children; release_launcher_lock; exit 0" SIGINT SIGTERM
-
-while true; do
-  if [ "$MODE" = "combined" ] && ! is_process_running "$MCP_PID"; then
-    wait "$MCP_PID" 2>/dev/null || true
-    MCP_PID=""
-    echo "[tunnel] MCP server exited unexpectedly." >&2
-    cleanup_children
-    exit 1
-  fi
-
-  if ! is_process_running "$CLOUDFLARE_PID"; then
-    wait "$CLOUDFLARE_PID" 2>/dev/null || true
-    CLOUDFLARE_PID=""
-    echo "[tunnel] Cloudflare tunnel exited unexpectedly." >&2
-    cleanup_children
-    exit 1
-  fi
-
-  sleep 1
-done
+echo "[openai-tunnel] Starting tunnel-client for $TUNNEL_ID -> http://127.0.0.1:$PORT/mcp" >&2
+exec "$TUNNEL_CLIENT_BIN" run \
+  "${COMMON_ARGS[@]}" \
+  --log.level "$LOG_LEVEL" \
+  --log.format struct-text

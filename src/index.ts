@@ -24,7 +24,7 @@ if (command === "help") {
 
 if (command === "doctor") {
   const { runDoctor } = await import("./cli/doctor.js");
-  const code = await runDoctor({ configPath, envPath });
+  const code = await runDoctor({ configPath });
   process.exit(code);
 }
 

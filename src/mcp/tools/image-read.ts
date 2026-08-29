@@ -1,16 +1,11 @@
-import { readFile, stat, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { readFile, stat, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import type { AppContext } from "../server.js";
 import type { ProjectConfig } from "../../types.js";
-import { imageViewerMeta } from "../resources/image-viewer.js";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const IMAGE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_IMAGE_CACHE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_PREVIEW_MAX_EDGE = 900;
 const PREVIEW_FULL_INLINE_MAX_BYTES = 512 * 1024;
 
@@ -22,37 +17,10 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-interface CachedImage {
-  bytes: Buffer;
-  mimeType: string;
-  fileName: string;
-  expiresAt: number;
-}
-
-const imageCache = new Map<string, CachedImage>();
-let imageCacheBytes = 0;
-
 export async function handleImageRead(
   ctx: AppContext,
   chatContextId: string,
   args: { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }
-) {
-  return await handleImage(ctx, chatContextId, args, false);
-}
-
-export async function handleImageShow(
-  ctx: AppContext,
-  chatContextId: string,
-  args: { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }
-) {
-  return await handleImage(ctx, chatContextId, args, true);
-}
-
-async function handleImage(
-  ctx: AppContext,
-  chatContextId: string,
-  args: { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number },
-  showViewer: boolean
 ) {
   if (!args?.path) {
     return {
@@ -115,11 +83,9 @@ async function handleImage(
   }
 
   const dimensions = readImageDimensions(bytes, mimeType);
-  const cached = cacheImage(bytes, mimeType, resolved.relativePath);
   const mode = normalizeImageReadMode(args.mode);
   const maxPreviewEdge = normalizeMaxPreviewEdge(args.max_preview_edge);
   const inlineImage = await prepareInlineImage(bytes, mimeType, dimensions, mode, maxPreviewEdge);
-  const displayUrl = `${getPublicOriginForTool()}/image-cache/${cached.id}`;
   const metadata = {
     project_id: project.projectId,
     path: resolved.relativePath,
@@ -133,102 +99,32 @@ async function handleImage(
     returned_image_size_bytes: inlineImage.bytes?.length,
     returned_image_width: inlineImage.dimensions?.width,
     returned_image_height: inlineImage.dimensions?.height,
-    display_url: displayUrl,
-    display_expires_at: new Date(cached.expiresAt).toISOString(),
-    markdown: `![${resolved.relativePath}](${displayUrl})`,
   };
+
   await ctx.auditLogger.log({
     timestamp: new Date().toISOString(),
     chatContextId,
-    tool: showViewer ? "image.show" : "image.read",
-    event: showViewer ? "image_show" : "image_read",
+    tool: "image.read",
+    event: "image_read",
     projectId: project.projectId,
     cwd: project.hostRoot,
     command: args.path,
     enforcement: "audit_only",
   });
 
-  const result = {
+  return {
     structuredContent: metadata,
     content: [
-      {
-        type: "text",
-        text: JSON.stringify(metadata, null, 2),
-      },
+      { type: "text" as const, text: JSON.stringify(metadata, null, 2) },
       ...(inlineImage.bytes
         ? [{
             type: "image" as const,
             data: inlineImage.bytes.toString("base64"),
-            mimeType: inlineImage.mimeType,
+            mimeType: inlineImage.mimeType!,
           }]
         : []),
     ],
   };
-
-  if (!showViewer) return result;
-  return {
-    ...result,
-    _meta: {
-      ...imageViewerMeta(),
-      ...metadata,
-    },
-  };
-}
-
-export function getCachedImage(id: string): CachedImage | undefined {
-  const cached = imageCache.get(id);
-  if (!cached) return undefined;
-  if (cached.expiresAt <= Date.now()) {
-    deleteCachedImage(id);
-    return undefined;
-  }
-  // Map insertion order provides the LRU order: refresh this entry on access.
-  imageCache.delete(id);
-  imageCache.set(id, cached);
-  return cached;
-}
-
-function cacheImage(bytes: Buffer, mimeType: string, relativePath: string): { id: string; expiresAt: number } {
-  const id = randomUUID();
-  const expiresAt = Date.now() + IMAGE_CACHE_TTL_MS;
-  const fileName = relativePath.split("/").at(-1) || "image";
-  imageCache.set(id, { bytes, mimeType, fileName, expiresAt });
-  imageCacheBytes += bytes.length;
-  evictOldestImagesIfNeeded();
-  setTimeout(() => deleteCachedImage(id), IMAGE_CACHE_TTL_MS).unref();
-  return { id, expiresAt };
-}
-
-function evictOldestImagesIfNeeded(): void {
-  while (imageCacheBytes > MAX_IMAGE_CACHE_BYTES) {
-    const oldestId = imageCache.keys().next().value;
-    if (typeof oldestId !== "string") return;
-    deleteCachedImage(oldestId);
-  }
-}
-
-function deleteCachedImage(id: string): void {
-  const cached = imageCache.get(id);
-  if (!cached) return;
-  imageCache.delete(id);
-  imageCacheBytes -= cached.bytes.length;
-}
-
-export function clearImageCacheForTests(): void {
-  imageCache.clear();
-  imageCacheBytes = 0;
-}
-
-function getPublicOriginForTool(): string {
-  const configured = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN?.trim();
-  if (configured) {
-    try {
-      return new URL(configured).origin;
-    } catch {
-      // fall through
-    }
-  }
-  return "http://127.0.0.1:3456";
 }
 
 function normalizeImageReadMode(mode: string | undefined): "preview" | "full" | "metadata" {
@@ -253,12 +149,8 @@ async function prepareInlineImage(
   mode: "full" | "preview" | "preview_unavailable" | "metadata";
   dimensions?: { width: number; height: number };
 }> {
-  if (mode === "metadata") {
-    return { mode: "metadata" };
-  }
-  if (mode === "full") {
-    return { bytes, mimeType, mode: "full", dimensions };
-  }
+  if (mode === "metadata") return { mode: "metadata" };
+  if (mode === "full") return { bytes, mimeType, mode: "full", dimensions };
 
   const longestEdge = dimensions ? Math.max(dimensions.width, dimensions.height) : undefined;
   if (bytes.length <= PREVIEW_FULL_INLINE_MAX_BYTES && (!longestEdge || longestEdge <= maxPreviewEdge)) {
@@ -266,9 +158,7 @@ async function prepareInlineImage(
   }
 
   const preview = await createPreviewImageWithSips(bytes, mimeType, maxPreviewEdge);
-  if (!preview) {
-    return { mode: "preview_unavailable" };
-  }
+  if (!preview) return { mode: "preview_unavailable" };
   return {
     bytes: preview.bytes,
     mimeType: preview.mimeType,
@@ -306,10 +196,10 @@ function extensionForMime(mimeType: string): string {
 }
 
 function runSips(args: string[]): Promise<boolean> {
-  return new Promise((resolve) => {
+  return new Promise((resolvePromise) => {
     const child = spawn("sips", args, { stdio: "ignore" });
-    child.once("error", () => resolve(false));
-    child.once("close", (code) => resolve(code === 0));
+    child.once("error", () => resolvePromise(false));
+    child.once("close", (code) => resolvePromise(code === 0));
   });
 }
 
@@ -317,19 +207,12 @@ function resolveImagePath(project: ProjectConfig, inputPath: string):
   | { ok: true; absolutePath: string; relativePath: string }
   | { ok: false; code: string; error: string } {
   const root = resolve(project.hostRoot);
-  const absolutePath = isAbsolute(inputPath)
-    ? resolve(inputPath)
-    : resolve(root, inputPath);
+  const absolutePath = isAbsolute(inputPath) ? resolve(inputPath) : resolve(root, inputPath);
   const relativePath = relative(root, absolutePath);
 
   if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
-    return {
-      ok: false,
-      code: "PATH_OUTSIDE_PROJECT",
-      error: "Image path must stay inside the selected project root.",
-    };
+    return { ok: false, code: "PATH_OUTSIDE_PROJECT", error: "Image path must stay inside the selected project root." };
   }
-
   return { ok: true, absolutePath, relativePath: relativePath || "." };
 }
 
@@ -337,11 +220,7 @@ function checkDeniedPaths(project: ProjectConfig, relativePath: string): string 
   const normalized = relativePath.replace(/\\/g, "/");
   for (const deniedPath of project.deniedPaths) {
     const denied = deniedPath.replace(/\\/g, "/").replace(/^\/+/, "");
-    if (
-      normalized === denied ||
-      normalized.startsWith(`${denied}/`) ||
-      matchesSimpleGlob(normalized, denied)
-    ) {
+    if (normalized === denied || normalized.startsWith(`${denied}/`) || matchesSimpleGlob(normalized, denied)) {
       return `Image path is denied by project policy: ${deniedPath}`;
     }
   }
@@ -360,36 +239,19 @@ function matchesSimpleGlob(value: string, pattern: string): boolean {
 }
 
 function detectImageMime(bytes: Buffer, filePath: string): string | undefined {
-  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
-    return "image/png";
-  }
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return "image/jpeg";
-  }
-  if (bytes.length >= 6 && (bytes.subarray(0, 6).toString("ascii") === "GIF87a" || bytes.subarray(0, 6).toString("ascii") === "GIF89a")) {
-    return "image/gif";
-  }
-  if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") {
-    return "image/webp";
-  }
-
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 6 && ["GIF87a", "GIF89a"].includes(bytes.subarray(0, 6).toString("ascii"))) return "image/gif";
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
   const ext = filePath.toLowerCase().match(/\.[^.]+$/)?.[0];
   return ext ? MIME_BY_EXTENSION[ext] : undefined;
 }
 
 function readImageDimensions(bytes: Buffer, mimeType: string): { width: number; height: number } | undefined {
-  if (mimeType === "image/png" && bytes.length >= 24) {
-    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
-  }
-  if (mimeType === "image/gif" && bytes.length >= 10) {
-    return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
-  }
-  if (mimeType === "image/jpeg") {
-    return readJpegDimensions(bytes);
-  }
-  if (mimeType === "image/webp") {
-    return readWebpDimensions(bytes);
-  }
+  if (mimeType === "image/png" && bytes.length >= 24) return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  if (mimeType === "image/gif" && bytes.length >= 10) return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
+  if (mimeType === "image/jpeg") return readJpegDimensions(bytes);
+  if (mimeType === "image/webp") return readWebpDimensions(bytes);
   return undefined;
 }
 
@@ -401,10 +263,7 @@ function readJpegDimensions(bytes: Buffer): { width: number; height: number } | 
     const length = bytes.readUInt16BE(offset + 2);
     if (length < 2) return undefined;
     if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf)) {
-      return {
-        height: bytes.readUInt16BE(offset + 5),
-        width: bytes.readUInt16BE(offset + 7),
-      };
+      return { height: bytes.readUInt16BE(offset + 5), width: bytes.readUInt16BE(offset + 7) };
     }
     offset += 2 + length;
   }
@@ -413,25 +272,12 @@ function readJpegDimensions(bytes: Buffer): { width: number; height: number } | 
 
 function readWebpDimensions(bytes: Buffer): { width: number; height: number } | undefined {
   const type = bytes.subarray(12, 16).toString("ascii");
-  if (type === "VP8 " && bytes.length >= 30) {
-    return { width: bytes.readUInt16LE(26) & 0x3fff, height: bytes.readUInt16LE(28) & 0x3fff };
-  }
+  if (type === "VP8 " && bytes.length >= 30) return { width: bytes.readUInt16LE(26) & 0x3fff, height: bytes.readUInt16LE(28) & 0x3fff };
   if (type === "VP8L" && bytes.length >= 25) {
-    const b0 = bytes[21];
-    const b1 = bytes[22];
-    const b2 = bytes[23];
-    const b3 = bytes[24];
-    return {
-      width: 1 + (((b1 & 0x3f) << 8) | b0),
-      height: 1 + ((b3 << 6) | (b2 >> 2) | ((b1 & 0xc0) << 6)),
-    };
+    const [b0, b1, b2, b3] = [bytes[21], bytes[22], bytes[23], bytes[24]];
+    return { width: 1 + (((b1 & 0x3f) << 8) | b0), height: 1 + ((b3 << 6) | (b2 >> 2) | ((b1 & 0xc0) << 6)) };
   }
-  if (type === "VP8X" && bytes.length >= 30) {
-    return {
-      width: 1 + bytes.readUIntLE(24, 3),
-      height: 1 + bytes.readUIntLE(27, 3),
-    };
-  }
+  if (type === "VP8X" && bytes.length >= 30) return { width: 1 + bytes.readUIntLE(24, 3), height: 1 + bytes.readUIntLE(27, 3) };
   return undefined;
 }
 
@@ -457,12 +303,7 @@ async function logImageRead(
 
 function errorResult(code: string, message: string, extra?: Record<string, unknown>) {
   return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify({ error: { code, message, ...extra } }, null, 2),
-      },
-    ],
+    content: [{ type: "text", text: JSON.stringify({ error: { code, message, ...extra } }, null, 2) }],
     isError: true,
   };
 }
@@ -473,21 +314,10 @@ function resolveCurrentProjectId(ctx: AppContext, chatContextId: string): string
     getCurrentProject?: (chatContextId: string) => string | undefined;
     clearCurrentProject?: (chatContextId: string) => void;
   };
-
-  const isAvailable = (projectId: string): boolean => {
-    if (typeof ctx.registry.has === "function") {
-      return ctx.registry.has(projectId);
-    }
-    if (typeof ctx.registry.get === "function") {
-      return Boolean(ctx.registry.get(projectId));
-    }
-    return ctx.registry.getAll().some((project) => project.projectId === projectId);
-  };
-
-  if (typeof store.getActiveProject === "function") {
-    return store.getActiveProject(chatContextId, isAvailable);
-  }
-
+  const isAvailable = (projectId: string): boolean => typeof ctx.registry.has === "function"
+    ? ctx.registry.has(projectId)
+    : Boolean(ctx.registry.get(projectId));
+  if (typeof store.getActiveProject === "function") return store.getActiveProject(chatContextId, isAvailable);
   const current = store.getCurrentProject?.(chatContextId);
   if (current && !isAvailable(current)) {
     store.clearCurrentProject?.(chatContextId);

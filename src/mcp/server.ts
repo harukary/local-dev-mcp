@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -15,11 +15,6 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import express from "express";
 import cors from "cors";
-import { tokenHandler } from "@modelcontextprotocol/sdk/server/auth/handlers/token.js";
-import { revocationHandler } from "@modelcontextprotocol/sdk/server/auth/handlers/revoke.js";
-import { clientRegistrationHandler } from "@modelcontextprotocol/sdk/server/auth/handlers/register.js";
-import { redirectUriMatches } from "@modelcontextprotocol/sdk/server/auth/handlers/authorize.js";
-import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { ProjectRegistry } from "../project/registry.js";
 import type { ChatContextStore } from "../project/context-store.js";
 import type { ShellRunner } from "../shell/runner.js";
@@ -29,8 +24,7 @@ import { handleProjectList } from "./tools/project-list.js";
 import { handleProjectSelect } from "./tools/project-select.js";
 import { handleProjectCurrent } from "./tools/project-current.js";
 import { handleShellRun } from "./tools/shell-run.js";
-import { getCachedImage, handleImageRead, handleImageShow } from "./tools/image-read.js";
-import { getCachedDownload, handleDownloadLink } from "./tools/download-link.js";
+import { handleImageRead } from "./tools/image-read.js";
 import { handleArtifactRead } from "./tools/artifact-read.js";
 import { handleArtifactReceive, type OpenAiProvidedFile } from "./tools/artifact-receive.js";
 import { handleShellApprove, handleShellReject } from "./tools/shell-approval.js";
@@ -38,12 +32,9 @@ import { handleShellStatus } from "./tools/shell-status.js";
 import { handleShellCancel } from "./tools/shell-cancel.js";
 import { listPendingRequests } from "../shell/approval.js";
 import { getActiveJobs } from "../shell/job-manager.js";
-import { personalOAuthProvider, tokenStore, AUTH_PASSPHRASE } from "./oauth-provider.js";
-import { OAUTH_SCOPES_SUPPORTED, resolveAuthorizationScopes } from "./oauth-scopes.js";
 import { handleProjectReload } from "./tools/project-reload.js";
 import { handleSkillsList, handleSkillsRead } from "./tools/skills.js";
 import { buildToolDefinitions, buildToolSchemaSnapshot } from "./tool-definitions.js";
-import { imageViewerMeta, imageViewerResource, imageViewerResourceUri, IMAGE_VIEWER_RESOURCE_MIME_TYPE } from "./resources/image-viewer.js";
 import { handleProjectInspect } from "./tools/dev/project-inspect.js";
 import { handleWorkspaceRead } from "./tools/dev/workspace-read.js";
 import { handleWorkspaceList } from "./tools/dev/workspace-list.js";
@@ -55,7 +46,7 @@ import { handlePrivateNotesCreate, handlePrivateNotesGuidelines, handlePrivateNo
 import { handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete, handleTodoDiscord } from "./tools/todo.js";
-import { OPENAI_TUNNEL_HEADER_NAME, resolveHttpAuthConfig, verifyOpenAiTunnelToken, type HttpAuthConfig } from "./auth.js";
+import { OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiTunnelAuthConfig, verifyOpenAiTunnelToken, type OpenAiTunnelAuthConfig } from "./auth.js";
 
 export interface AppContext {
   configPath: string;
@@ -135,13 +126,13 @@ export function sanitizeRequestUrlForLog(url: string): string {
   try {
     const parsed = new URL(url, "http://local.invalid");
     for (const key of parsed.searchParams.keys()) {
-      if (key.toLowerCase() === "passphrase") {
+      if (["token", "access_token", "api_key", "key", "secret"].includes(key.toLowerCase())) {
         parsed.searchParams.set(key, "[REDACTED]");
       }
     }
     return `${parsed.pathname}${parsed.search}`;
   } catch {
-    return url.replace(/([?&]passphrase=)[^&]*/gi, "$1[REDACTED]");
+    return url.replace(/([?&](?:token|access_token|api_key|key|secret)=)[^&]*/gi, "$1[REDACTED]");
   }
 }
 
@@ -423,13 +414,6 @@ export function createMcpServer(ctx: AppContext): Server {
             args as { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }
           );
 
-        case "image.show":
-          return await handleImageShow(
-            ctx,
-            chatContextId,
-            args as { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }
-          );
-
         case "artifact.read":
           return await handleArtifactRead(ctx, chatContextId, args as { path?: string; max_bytes?: number });
 
@@ -439,9 +423,6 @@ export function createMcpServer(ctx: AppContext): Server {
             chatContextId,
             args as { file?: OpenAiProvidedFile; destination?: string; max_bytes?: number }
           );
-
-        case "download.link":
-          return await handleDownloadLink(ctx, chatContextId, args as { path?: string; ttl_seconds?: number; filename?: string });
 
         case "tool.usage": {
           const usage = ctx.toolUsageMetrics.snapshot();
@@ -495,13 +476,7 @@ export function createMcpServer(ctx: AppContext): Server {
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     const projects = ctx.registry.getAll();
-    const resources = [
-      {
-        uri: imageViewerResourceUri(),
-        name: "Image Viewer",
-        mimeType: IMAGE_VIEWER_RESOURCE_MIME_TYPE,
-      },
-    ];
+    const resources: Array<{ uri: string; name: string; mimeType: string }> = [];
     for (const p of projects) {
       resources.push({
         uri: `project://${p.projectId}/status`,
@@ -518,23 +493,11 @@ export function createMcpServer(ctx: AppContext): Server {
   });
 
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
-    resourceTemplates: [
-      {
-        uriTemplate: imageViewerResourceUri(),
-        name: "Image Viewer",
-        description: "Image viewer widget markup for image.read results",
-        mimeType: IMAGE_VIEWER_RESOURCE_MIME_TYPE,
-        _meta: imageViewerMeta(),
-      },
-    ],
+    resourceTemplates: [],
   }));
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;
-    if (uri === imageViewerResourceUri()) {
-      return { contents: [imageViewerResource()] };
-    }
-
     const match = uri.match(/^project:\/\/([^/]+)\/(status|config)$/);
     if (!match) {
       throw new Error(`Unknown resource: ${uri}`);
@@ -604,26 +567,10 @@ export async function startMcpServer(configPath: string): Promise<void> {
   await server.connect(transport);
 }
 
-export function getPublicOrigin(req: express.Request): string {
-  const configured = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN?.trim();
-  if (configured) {
-    try {
-      return new URL(configured).origin;
-    } catch {
-      // fall through to request-derived origin
-    }
-  }
-
-  const proto = (req.headers["x-forwarded-proto"] as string) || "https";
-  const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "127.0.0.1:3456";
-  return `${proto}://${host}`;
-}
-
 export function normalizeHttpHost(value: string | undefined): string | null {
   if (!value) return null;
   const first = value.split(",")[0]?.trim();
   if (!first) return null;
-
   try {
     const withScheme = first.includes("://") ? first : `http://${first}`;
     return new URL(withScheme).hostname.toLowerCase();
@@ -632,126 +579,29 @@ export function normalizeHttpHost(value: string | undefined): string | null {
   }
 }
 
-export function getAllowedHttpHosts(): string[] {
-  const hosts = new Set<string>(LOCAL_HOSTS);
-  const publicOrigin = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN?.trim();
-  if (publicOrigin) {
-    const host = normalizeHttpHost(publicOrigin);
-    if (host) hosts.add(host);
-  }
-
-  const configuredHosts = process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS?.split(",") ?? [];
-  for (const configured of configuredHosts) {
-    const host = normalizeHttpHost(configured.trim());
-    if (host) hosts.add(host);
-  }
-
-  return Array.from(hosts).sort();
-}
-
-export function hasExplicitHttpHostAllowlist(): boolean {
-  return Boolean(
-    process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN?.trim() ||
-    process.env.LOCAL_DEV_MCP_ALLOWED_HOSTS?.trim()
-  );
-}
-
 export function isAllowedHttpHost(hostHeader: string | string[] | undefined): boolean {
   const hostValue = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
   const host = normalizeHttpHost(hostValue);
-  if (!host) return false;
-  if (!hasExplicitHttpHostAllowlist()) return true;
-  return getAllowedHttpHosts().includes(host);
+  return host !== null && LOCAL_HOSTS.has(host);
 }
 
-function requireAllowedHost(
+function requireLoopbackHost(
   req: express.Request,
   res: express.Response,
   next: express.NextFunction
 ): void {
-  const forwardedHost = req.headers["x-forwarded-host"];
-  const host = forwardedHost || req.headers.host;
-  if (isAllowedHttpHost(host)) {
+  if (isAllowedHttpHost(req.headers.host)) {
     next();
     return;
   }
-
-  debugMcpLog(`[HTTP] forbidden_host host=${normalizeHttpHost(Array.isArray(host) ? host[0] : host) || "unknown"} allowed=${getAllowedHttpHosts().join(",")}`);
+  debugMcpLog(`[HTTP] forbidden_host host=${normalizeHttpHost(req.headers.host) || "unknown"}`);
   res.status(403).json({
     error: "forbidden_host",
-    message: "Request host is not allowed by LOCAL_DEV_MCP_PUBLIC_ORIGIN or LOCAL_DEV_MCP_ALLOWED_HOSTS.",
+    message: "The HTTP MCP server accepts loopback Host headers only.",
   });
 }
 
-export function isAllowedRedirectUri(redirectUri: string): boolean {
-  try {
-    const url = new URL(redirectUri);
-
-    if (
-      url.protocol === "http:" &&
-      (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]")
-    ) {
-      return true;
-    }
-
-    if (
-      url.protocol === "https:" &&
-      (url.origin === "https://chatgpt.com" || url.origin === "https://chat.openai.com") &&
-      url.pathname.startsWith("/connector/oauth/")
-    ) {
-      return true;
-    }
-
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-export function isRegisteredRedirectUri(
-  redirectUri: string,
-  client: { redirect_uris?: string[] }
-): boolean {
-  return (client.redirect_uris ?? []).some((registered) => redirectUriMatches(redirectUri, registered));
-}
-
-function requireBearerAuth(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-): void {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    sendUnauthorized(req, res, "Missing Authorization header");
-    return;
-  }
-
-  const parts = authHeader.split(" ");
-  if (parts.length !== 2 || parts[0].toLowerCase() !== "bearer" || !parts[1]) {
-    sendUnauthorized(req, res, "Invalid Authorization header format, expected 'Bearer TOKEN'");
-    return;
-  }
-
-  personalOAuthProvider
-    .verifyAccessToken(parts[1])
-    .then((authInfo) => {
-      (req as unknown as Record<string, unknown>).auth = authInfo;
-      next();
-    })
-    .catch((err: unknown) => {
-      if (err instanceof InvalidTokenError) {
-        sendUnauthorized(req, res, err.message);
-      } else {
-        res.status(500).json({ error: "server_error", message: "Internal Server Error" });
-      }
-    });
-}
-
-function buildHttpAuthMiddleware(authConfig: HttpAuthConfig): express.RequestHandler {
-  if (authConfig.mode === "oauth") {
-    return requireBearerAuth;
-  }
-
+function buildHttpAuthMiddleware(authConfig: OpenAiTunnelAuthConfig): express.RequestHandler {
   return (req, res, next) => {
     const headerValue = req.headers[OPENAI_TUNNEL_HEADER_NAME];
     if (verifyOpenAiTunnelToken(headerValue, authConfig.token)) {
@@ -768,236 +618,6 @@ function buildHttpAuthMiddleware(authConfig: HttpAuthConfig): express.RequestHan
   };
 }
 
-interface DownloadAuthAttempt {
-  linkId: string;
-  expiresAt: number;
-}
-
-interface DownloadBrowserSession {
-  linkId: string;
-  expiresAt: number;
-}
-
-const DOWNLOAD_AUTH_COOKIE_PREFIX = "local_dev_mcp_download_";
-const downloadAuthAttempts = new Map<string, DownloadAuthAttempt>();
-const downloadBrowserSessions = new Map<string, DownloadBrowserSession>();
-
-function cleanupDownloadAuthState(): void {
-  const now = Date.now();
-  for (const [challenge, attempt] of downloadAuthAttempts) {
-    if (attempt.expiresAt <= now) downloadAuthAttempts.delete(challenge);
-  }
-  for (const [token, session] of downloadBrowserSessions) {
-    if (session.expiresAt <= now) downloadBrowserSessions.delete(token);
-  }
-}
-
-function downloadAuthCookieName(linkId: string): string {
-  return `${DOWNLOAD_AUTH_COOKIE_PREFIX}${linkId}`;
-}
-
-function getCookie(req: express.Request, name: string): string | undefined {
-  const header = req.headers.cookie;
-  if (!header) return undefined;
-  for (const part of header.split(";")) {
-    const separator = part.indexOf("=");
-    if (separator < 0) continue;
-    const key = part.slice(0, separator).trim();
-    if (key === name) {
-      try {
-        return decodeURIComponent(part.slice(separator + 1).trim());
-      } catch {
-        return undefined;
-      }
-    }
-  }
-  return undefined;
-}
-
-function requireDownloadAuth(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-): void {
-  const linkId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  if (!getCachedDownload(linkId)) {
-    res.status(404).json({ error: "not_found", message: "Download link not found or expired." });
-    return;
-  }
-
-  if (req.headers.authorization) {
-    requireBearerAuth(req, res, next);
-    return;
-  }
-
-  cleanupDownloadAuthState();
-  const cookieValue = getCookie(req, downloadAuthCookieName(linkId));
-  const session = cookieValue ? downloadBrowserSessions.get(cookieValue) : undefined;
-  if (session && session.linkId === linkId && session.expiresAt > Date.now()) {
-    next();
-    return;
-  }
-
-  const returnPath = `/download/${encodeURIComponent(linkId)}`;
-  res.redirect(302, `/download-auth?link=${encodeURIComponent(linkId)}&return=${encodeURIComponent(returnPath)}`);
-}
-
-export function renderDownloadAuthPage(linkId: string, challenge: string, error?: string): string {
-  const escapedLinkId = escapeHtmlAttribute(linkId);
-  const escapedChallenge = escapeHtmlAttribute(challenge);
-  const errorHtml = error ? `<p class="error">${escapeHtmlAttribute(error)}</p>` : "";
-  return `<!DOCTYPE html>
-<html lang="ja">
-<head><meta charset="utf-8"><title>Download authentication</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f5f5f7}.card{background:#fff;border-radius:16px;padding:40px;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;max-width:400px;width:90%}h1{font-size:1.3rem;font-weight:600;margin:0 0 8px;color:#1d1d1f}p{font-size:.9rem;color:#6e6e73;margin:0 0 24px}.error{color:#b42318}input{width:100%;padding:12px 16px;border:1px solid #d2d2d7;border-radius:10px;font-size:1rem;box-sizing:border-box;outline:none}button{margin-top:16px;width:100%;padding:12px;border:none;border-radius:10px;background:#0071e3;color:#fff;font-size:1rem;font-weight:500;cursor:pointer}</style></head>
-<body><div class="card"><h1>ダウンロード認証</h1><p>ファイルをダウンロードするにはパスフレーズを入力してください。</p>${errorHtml}<form method="POST" action="/download-auth"><input type="hidden" name="link" value="${escapedLinkId}"><input type="hidden" name="challenge" value="${escapedChallenge}"><input type="password" name="passphrase" placeholder="パスフレーズ" autofocus><button type="submit">認証してダウンロード</button></form></div></body>
-</html>`;
-}
-
-function customAuthorizationHandler(provider: typeof personalOAuthProvider) {
-  return async (req: express.Request, res: express.Response) => {
-    const q = req.method === "POST" ? req.body : req.query;
-    const client_id = q.client_id as string;
-    const redirect_uri = q.redirect_uri as string | undefined;
-    const response_type = q.response_type as string;
-    const code_challenge = q.code_challenge as string;
-    const code_challenge_method = q.code_challenge_method as string;
-    const state = q.state as string | undefined;
-    const scope = q.scope as string | undefined;
-    let redirectUriToUse = redirect_uri;
-
-    if (response_type !== "code") {
-      res.status(400).json({ error: "unsupported_response_type", error_description: "Only code response type is supported" });
-      return;
-    }
-    if (!code_challenge || code_challenge_method !== "S256") {
-      res.status(400).json({ error: "invalid_request", error_description: "PKCE S256 is required" });
-      return;
-    }
-
-    const client = await provider.clientsStore.getClient(client_id);
-    if (!client) {
-      res.status(400).json({ error: "invalid_client", error_description: "Unknown client_id" });
-      return;
-    }
-
-    if (!redirectUriToUse) {
-      if (client.redirect_uris.length === 1) {
-        redirectUriToUse = client.redirect_uris[0];
-      } else {
-        res.status(400).json({ error: "invalid_request", error_description: "redirect_uri is required" });
-        return;
-      }
-    }
-    if (!isAllowedRedirectUri(redirectUriToUse)) {
-      res.status(400).json({
-        error: "invalid_request",
-        error_description: "redirect_uri must be a localhost or ChatGPT connector callback URL",
-      });
-      return;
-    }
-    if (!redirectUriToUse || !isRegisteredRedirectUri(redirectUriToUse, client)) {
-      res.status(400).json({
-        error: "invalid_request",
-        error_description: "redirect_uri must match a registered client redirect_uri",
-      });
-      return;
-    }
-
-    const requestedScopes = scope ? scope.split(" ") : [];
-    try {
-      resolveAuthorizationScopes(requestedScopes);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Invalid OAuth scope";
-      res.status(400).json({ error: "invalid_scope", error_description: message });
-      return;
-    }
-
-    await provider.authorize(client, {
-      state,
-      scopes: requestedScopes,
-      redirectUri: redirectUriToUse,
-      codeChallenge: code_challenge,
-    }, res);
-  };
-}
-
-function requirePassphrase(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-): void {
-  const body = req.body as Record<string, unknown> | undefined;
-  const bodyPassphrase = typeof body?.passphrase === "string" ? body.passphrase : undefined;
-  const provided = req.method === "POST" ? bodyPassphrase : undefined;
-  if (provided) {
-    const a = Buffer.from(provided);
-    const b = Buffer.from(AUTH_PASSPHRASE);
-    if (a.length === b.length && timingSafeEqual(a, b)) {
-      next();
-      return;
-    }
-  }
-
-  const q = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
-  const params = new URLSearchParams(q);
-
-  res.type("html").send(renderPassphrasePage(params));
-}
-
-export function escapeHtmlAttribute(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-export function renderPassphrasePage(params: URLSearchParams): string {
-  const hiddenFields = Array.from(params.entries())
-    .filter(([k]) => k !== "passphrase")
-    .map(([k, v]) => `<input type="hidden" name="${escapeHtmlAttribute(k)}" value="${escapeHtmlAttribute(v)}">`)
-    .join("\n");
-
-  return `<!DOCTYPE html>
-<html lang="ja">
-<head><meta charset="utf-8"><title>Authorize local-dev-mcp</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f5f5f7}
-.card{background:#fff;border-radius:16px;padding:40px;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;max-width:400px;width:90%}
-h1{font-size:1.3rem;font-weight:600;margin:0 0 8px;color:#1d1d1f}
-p{font-size:.9rem;color:#6e6e73;margin:0 0 24px}
-input{width:100%;padding:12px 16px;border:1px solid #d2d2d7;border-radius:10px;font-size:1rem;box-sizing:border-box;outline:none}
-input:focus{border-color:#0071e3;box-shadow:0 0 0 3px rgba(0,113,227,.2)}
-button{margin-top:16px;width:100%;padding:12px;border:none;border-radius:10px;background:#0071e3;color:#fff;font-size:1rem;font-weight:500;cursor:pointer}
-button:hover{background:#0077ed}
-</style></head>
-<body><div class="card">
-<h1>local-dev-mcp に認可</h1>
-<p>ChatGPT App からの接続を許可するには<br>パスフレーズを入力してください</p>
-<form method="POST" action="/authorize">
-${hiddenFields}
-<input type="password" name="passphrase" placeholder="パスフレーズ" autofocus>
-<button type="submit">認可する</button>
-</form>
-</div></body>
-</html>`;
-}
-
-function sendUnauthorized(req: express.Request, res: express.Response, description: string): void {
-  const baseUrl = getPublicOrigin(req);
-  const resourceMetadataUrl = `${baseUrl}/.well-known/oauth-protected-resource/mcp`;
-
-  res.set(
-    "WWW-Authenticate",
-    `Bearer error="invalid_token", error_description="${description}", resource_metadata="${resourceMetadataUrl}"`
-  );
-  res.status(401).json({ error: "invalid_token", message: description });
-}
-
 function isInitializeRequest(body: unknown): boolean {
   return (
     typeof body === "object" &&
@@ -1012,21 +632,19 @@ function parseRawBody(req: express.Request): unknown | undefined {
 }
 
 export async function startHttpServer(configPath: string, port: number): Promise<void> {
-  const httpAuthConfig = resolveHttpAuthConfig();
+  const httpAuthConfig = resolveOpenAiTunnelAuthConfig();
   const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig);
   const ctx = await createAppContext(configPath);
   const rateLimitMap = new Map<string, { count: number; reset: number }>();
 
   const app = express();
-  app.set("trust proxy", 1);
-  app.use(requireAllowedHost);
+  app.use(requireLoopbackHost);
   app.use((req, _res, next) => {
     const method = req.method;
     const sanitizedUrl = sanitizeRequestUrlForLog(req.url);
     const url = sanitizedUrl.length > 80 ? sanitizedUrl.slice(0, 80) + "..." : sanitizedUrl;
-    const auth = req.headers.authorization ? " (has auth)" : "";
     const session = req.headers["mcp-session-id"] ? ` (session=${(req.headers["mcp-session-id"] as string).slice(0, 8)}...)` : "";
-    debugMcpLog(`[HTTP] ${method} ${url}${auth}${session}`);
+    debugMcpLog(`[HTTP] ${method} ${url}${session}`);
     next();
   });
 
@@ -1042,79 +660,6 @@ export async function startHttpServer(configPath: string, port: number): Promise
     res.json(buildToolSchemaSnapshot());
   });
 
-  app.get("/image-cache/:id", (req, res) => {
-    const cached = getCachedImage(req.params.id);
-    if (!cached) {
-      res.status(404).json({ error: "not_found", message: "Image cache entry not found or expired." });
-      return;
-    }
-    res.setHeader("Cache-Control", "private, max-age=86400");
-    res.setHeader("Content-Disposition", `inline; filename="${cached.fileName.replace(/"/g, "")}"`);
-    res.type(cached.mimeType).send(cached.bytes);
-  });
-
-  app.get("/download-auth", (req, res) => {
-    const linkId = typeof req.query.link === "string" ? req.query.link : "";
-    const cached = linkId ? getCachedDownload(linkId) : undefined;
-    if (!cached) {
-      res.status(404).json({ error: "not_found", message: "Download link not found or expired." });
-      return;
-    }
-
-    cleanupDownloadAuthState();
-    const challenge = randomUUID();
-    const expiresAt = Math.min(cached.expiresAt, Date.now() + 5 * 60 * 1000);
-    downloadAuthAttempts.set(challenge, { linkId, expiresAt });
-    res.setHeader("Cache-Control", "no-store");
-    res.type("html").send(renderDownloadAuthPage(linkId, challenge));
-  });
-
-  app.post("/download-auth", express.urlencoded({ extended: false, limit: "10kb" }), (req, res) => {
-    const linkId = typeof req.body?.link === "string" ? req.body.link : "";
-    const challenge = typeof req.body?.challenge === "string" ? req.body.challenge : "";
-    const passphrase = typeof req.body?.passphrase === "string" ? req.body.passphrase : "";
-    const attempt = downloadAuthAttempts.get(challenge);
-    const cached = linkId ? getCachedDownload(linkId) : undefined;
-    if (!attempt || attempt.linkId !== linkId || attempt.expiresAt <= Date.now() || !cached) {
-      res.status(404).json({ error: "not_found", message: "Download link not found or expired." });
-      return;
-    }
-
-    const provided = Buffer.from(passphrase);
-    const expected = Buffer.from(AUTH_PASSPHRASE);
-    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-      res.status(401).setHeader("Cache-Control", "no-store");
-      res.type("html").send(renderDownloadAuthPage(linkId, challenge, "パスフレーズが正しくありません。"));
-      return;
-    }
-
-    downloadAuthAttempts.delete(challenge);
-    const sessionToken = randomUUID();
-    downloadBrowserSessions.set(sessionToken, { linkId, expiresAt: cached.expiresAt });
-    const maxAge = Math.max(1, Math.ceil((cached.expiresAt - Date.now()) / 1000));
-    const secure = req.secure ? "; Secure" : "";
-    res.setHeader(
-      "Set-Cookie",
-      `${downloadAuthCookieName(linkId)}=${encodeURIComponent(sessionToken)}; Max-Age=${maxAge}; Path=/download/${encodeURIComponent(linkId)}; HttpOnly; SameSite=Lax${secure}`
-    );
-    res.setHeader("Cache-Control", "no-store");
-    res.redirect(303, `/download/${encodeURIComponent(linkId)}`);
-  });
-
-  app.get("/download/:id", requireDownloadAuth, (req, res) => {
-    const downloadId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const cached = getCachedDownload(downloadId);
-    if (!cached) {
-      res.status(404).json({ error: "not_found", message: "Download link not found or expired." });
-      return;
-    }
-    res.setHeader("Cache-Control", "private, no-store");
-    res.download(cached.absolutePath, cached.fileName, (err) => {
-      if (err && !res.headersSent) {
-        res.status(404).json({ error: "not_found", message: "Download file is no longer available." });
-      }
-    });
-  });
 
   app.use(cors({
     origin: [/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/],
@@ -1138,58 +683,6 @@ export async function startHttpServer(configPath: string, port: number): Promise
   }
   app.use(simpleRateLimit);
 
-  if (httpAuthConfig.mode === "oauth") {
-    app.use("/authorize", express.urlencoded({ extended: false, limit: "10kb" }));
-    app.use("/authorize", requirePassphrase);
-    app.use("/authorize", customAuthorizationHandler(personalOAuthProvider));
-    app.use("/token", tokenHandler({ provider: personalOAuthProvider, rateLimit: false }));
-    app.use("/revoke", revocationHandler({ provider: personalOAuthProvider, rateLimit: false }));
-    app.use("/register", clientRegistrationHandler({
-      clientsStore: personalOAuthProvider.clientsStore,
-      rateLimit: false,
-    }));
-
-    app.get("/.well-known/oauth-authorization-server", (req, res) => {
-      const baseUrl = getPublicOrigin(req);
-      res.json({
-        issuer: baseUrl,
-        authorization_endpoint: `${baseUrl}/authorize`,
-        token_endpoint: `${baseUrl}/token`,
-        revocation_endpoint: `${baseUrl}/revoke`,
-        registration_endpoint: `${baseUrl}/register`,
-        response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code", "refresh_token"],
-        code_challenge_methods_supported: ["S256"],
-        token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
-        scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
-      });
-    });
-
-    app.get("/.well-known/openid-configuration", (req, res) => {
-      const baseUrl = getPublicOrigin(req);
-      res.json({
-        issuer: baseUrl,
-        authorization_endpoint: `${baseUrl}/authorize`,
-        token_endpoint: `${baseUrl}/token`,
-        registration_endpoint: `${baseUrl}/register`,
-        response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code", "refresh_token"],
-        code_challenge_methods_supported: ["S256"],
-        token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
-        scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
-      });
-    });
-
-    app.get("/.well-known/oauth-protected-resource/mcp", (req, res) => {
-      const baseUrl = getPublicOrigin(req);
-      res.json({
-        resource: `${baseUrl}/mcp`,
-        authorization_servers: [baseUrl],
-        scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
-        bearer_methods_supported: ["header"],
-      });
-    });
-  }
 
   app.post("/mcp", requireHttpAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
     handleMcpRequest(req, res, ctx).catch((err) => {
@@ -1205,7 +698,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
   });
 
   app.get("/", (_req, res) => {
-    res.type("text/plain").send("local-dev-mcp MCP server running.");
+    res.type("text/plain").send("local-dev-mcp MCP server running via OpenAI Secure MCP Tunnel.");
   });
 
   app.get("/healthz", (_req, res) => {
@@ -1231,11 +724,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
     }
   });
 
-  if (httpAuthConfig.mode === "oauth") {
-    console.error("[OAuth] Authorization endpoint ready; passphrase protection enabled.");
-  } else {
-    console.error(`[OpenAI Tunnel] Local MCP authentication enabled via ${OPENAI_TUNNEL_HEADER_NAME}.`);
-  }
+  console.error(`[OpenAI Tunnel] Local MCP authentication enabled via ${OPENAI_TUNNEL_HEADER_NAME}.`);
 
   await new Promise<void>((resolve, reject) => {
     app.listen(port, "127.0.0.1", (err?: Error) => {
@@ -1243,11 +732,11 @@ export async function startHttpServer(configPath: string, port: number): Promise
       else resolve();
     });
   });
-  console.error(`MCP HTTP server listening on http://127.0.0.1:${port}/mcp (auth=${httpAuthConfig.mode})`);
+  console.error(`MCP HTTP server listening on http://127.0.0.1:${port}/mcp (secure-tunnel-only)`);
 
   const shutdown = () => {
     console.error("\n[Server] Shutting down...");
-    tokenStore.shutdown().catch(() => {}).finally(() => process.exit(0));
+    process.exit(0);
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);

@@ -13,21 +13,16 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "server:http": "bash scripts/server.sh",
-    "tunnel": "bash scripts/tunnel.sh",
-    "tunnel:only": "bash scripts/tunnel.sh --tunnel-only",
-    "launchd:install": "bash scripts/install-launchd.sh --install-only",
-    "server:openai-tunnel": "bash scripts/openai-tunnel-server.sh",
-    "tunnel:openai": "bash scripts/openai-tunnel.sh --run",
-    "tunnel:openai:doctor": "bash scripts/openai-tunnel.sh --doctor",
-    "launchd:install:openai": "bash scripts/install-openai-tunnel-launchd.sh --install-only",
-    "tunnel:openai:install": "bash scripts/install-openai-tunnel-client.sh"
+    "tunnel": "bash scripts/tunnel.sh --run",
+    "tunnel:doctor": "bash scripts/tunnel.sh --doctor",
+    "tunnel:install": "bash scripts/install-openai-tunnel-client.sh",
+    "launchd:install": "bash scripts/install-launchd.sh --install-only"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
     "agent-device": "0.20.10",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "express-rate-limit": "^7.5.1",
     "js-yaml": "^4.1.0"
   },
   "devDependencies": {

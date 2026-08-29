@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ProjectRegistry } from "../project/registry.js";
 
@@ -9,7 +10,6 @@ const execFileAsync = promisify(execFile);
 
 export interface DoctorOptions {
   configPath: string;
-  envPath: string;
 }
 
 type Status = "ok" | "warn" | "fail";
@@ -28,8 +28,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   results.push(checkFile("pnpm-lock.yaml", "pnpm lockfile"));
   results.push(await checkAgentDevice());
   if (process.platform === "darwin") results.push(await checkDeveloperToolsSecurity());
-  results.push(checkEnv(options.envPath));
-  results.push(checkPublicOrigin());
+  results.push(checkSecureTunnelState());
   results.push(...await checkProjectConfig(options.configPath));
 
   for (const result of results) {
@@ -112,51 +111,23 @@ async function checkDeveloperToolsSecurity(): Promise<CheckResult> {
   }
 }
 
-function checkEnv(path: string): CheckResult {
-  if (!existsSync(path)) {
-    return { status: "warn", label: ".env", detail: `missing at ${resolve(path)}` };
+function checkSecureTunnelState(): CheckResult {
+  const inlineToken = process.env.LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN?.trim();
+  if (inlineToken && inlineToken.length >= 32) {
+    return { status: "ok", label: "Secure MCP Tunnel token", detail: "loaded from environment; value not printed" };
   }
-  if (!process.env.LOCAL_DEV_MCP_PASSPHRASE) {
-    return {
-      status: "warn",
-      label: "LOCAL_DEV_MCP_PASSPHRASE",
-      detail: `${resolve(path)} exists, but passphrase is not loaded`,
-    };
+
+  const tokenFile = process.env.LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE?.trim()
+    || join(homedir(), ".local-dev-mcp", "openai-tunnel", "mcp-token");
+  if (existsSync(tokenFile)) {
+    return { status: "ok", label: "Secure MCP Tunnel token", detail: `file present: ${tokenFile}` };
   }
+
   return {
-    status: "ok",
-    label: "LOCAL_DEV_MCP_PASSPHRASE",
-    detail: "present; value not printed",
+    status: "warn",
+    label: "Secure MCP Tunnel token",
+    detail: `missing at ${tokenFile}; HTTP MCP requires the tunnel token`,
   };
-}
-
-function checkPublicOrigin(): CheckResult {
-  const raw = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN?.trim();
-  if (!raw) {
-    return {
-      status: "warn",
-      label: "LOCAL_DEV_MCP_PUBLIC_ORIGIN",
-      detail: "not set; local HTTP is fine, but ChatGPT needs a reachable HTTPS origin",
-    };
-  }
-
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== "https:") {
-      return {
-        status: "warn",
-        label: "LOCAL_DEV_MCP_PUBLIC_ORIGIN",
-        detail: "set, but not HTTPS",
-      };
-    }
-    return { status: "ok", label: "LOCAL_DEV_MCP_PUBLIC_ORIGIN", detail: url.origin };
-  } catch {
-    return {
-      status: "fail",
-      label: "LOCAL_DEV_MCP_PUBLIC_ORIGIN",
-      detail: "invalid URL",
-    };
-  }
 }
 
 async function checkProjectConfig(configPath: string): Promise<CheckResult[]> {

@@ -3,46 +3,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
-import { clearImageCacheForTests, getCachedImage, handleImageRead, handleImageShow } from "../../src/mcp/tools/image-read.js";
+import { handleImageRead } from "../../src/mcp/tools/image-read.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
 
 let tmpRoot = "";
-let previousPublicOrigin: string | undefined;
-
 afterEach(() => {
-  clearImageCacheForTests();
-  if (tmpRoot) {
-    rmSync(tmpRoot, { recursive: true, force: true });
-    tmpRoot = "";
-  }
-  if (previousPublicOrigin === undefined) {
-    delete process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
-  } else {
-    process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = previousPublicOrigin;
-  }
+  if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
+  tmpRoot = "";
 });
 
 function createPng(width = 1, height = 1): Buffer {
-  const bytes = Buffer.from(
-    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63600000020001e221bc330000000049454e44ae426082",
-    "hex"
-  );
+  const bytes = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63600000020001e221bc330000000049454e44ae426082", "hex");
   bytes.writeUInt32BE(width, 16);
   bytes.writeUInt32BE(height, 20);
-  return bytes;
-}
-
-function createLargePng(sizeBytes = 7 * 1024 * 1024): Buffer {
-  const bytes = Buffer.alloc(sizeBytes);
-  createPng().copy(bytes);
   return bytes;
 }
 
 function createContext(project: ProjectConfig) {
   const contextStore = new ChatContextStore();
   contextStore.setCurrentProject("chat-a", project.projectId);
-
   return {
     ctx: {
       registry: {
@@ -57,14 +37,12 @@ function createContext(project: ProjectConfig) {
 }
 
 describe("handleImageRead", () => {
-  it("returns image content and metadata for a project image", async () => {
-    previousPublicOrigin = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
-    process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = "https://public.example.test/base";
+  it("returns inline image content and metadata without public URLs or viewer metadata", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
     mkdirSync(join(tmpRoot, "assets"));
-    writeFileSync(join(tmpRoot, "assets", "sample.png"), createPng(2, 3));
-    const project = createProject(tmpRoot);
-    const { ctx } = createContext(project);
+    const png = createPng(2, 3);
+    writeFileSync(join(tmpRoot, "assets", "sample.png"), png);
+    const { ctx } = createContext(createProject(tmpRoot));
 
     const result = await handleImageRead(ctx, "chat-a", { path: "assets/sample.png" });
     const metadata = JSON.parse(result.content[0].text);
@@ -78,137 +56,53 @@ describe("handleImageRead", () => {
       height: 3,
       returned_image_mode: "full",
       returned_image_mime_type: "image/png",
-      returned_image_size_bytes: createPng(2, 3).length,
+      returned_image_size_bytes: png.length,
       returned_image_width: 2,
       returned_image_height: 3,
     });
-    expect(metadata.display_url).toMatch(/^https:\/\/public\.example\.test\/image-cache\//);
-    expect(metadata.markdown).toBe(`![assets/sample.png](${metadata.display_url})`);
-    expect(result.structuredContent).toMatchObject({
-      display_url: metadata.display_url,
-      path: "assets/sample.png",
-    });
+    expect(metadata.display_url).toBeUndefined();
+    expect(metadata.display_expires_at).toBeUndefined();
+    expect(metadata.markdown).toBeUndefined();
     expect(result._meta).toBeUndefined();
-    const cacheId = metadata.display_url.split("/").at(-1);
-    expect(getCachedImage(cacheId)?.mimeType).toBe("image/png");
-    expect(result.content[1]).toMatchObject({
-      type: "image",
-      mimeType: "image/png",
-    });
-    expect(result.content[1].data).toBe(createPng(2, 3).toString("base64"));
-  });
-
-  it("only attaches the user-facing viewer for image.show", async () => {
-    previousPublicOrigin = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
-    process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = "https://public.example.test/base";
-    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
-    mkdirSync(join(tmpRoot, "assets"));
-    writeFileSync(join(tmpRoot, "assets", "sample.png"), createPng(2, 3));
-    const project = createProject(tmpRoot);
-    const { ctx } = createContext(project);
-
-    const result = await handleImageShow(ctx, "chat-a", { path: "assets/sample.png" });
-    const metadata = JSON.parse(result.content[0].text);
-
-    expect(result._meta).toMatchObject({
-      "openai/outputTemplate": "ui://local-dev-mcp/image-viewer-skybridge-v4.html",
-      "openai/widgetAccessible": true,
-      display_url: metadata.display_url,
-      path: "assets/sample.png",
-    });
-    expect(result.content[1]).toMatchObject({
-      type: "image",
-      mimeType: "image/png",
-    });
+    expect(result.content[1]).toMatchObject({ type: "image", mimeType: "image/png", data: png.toString("base64") });
   });
 
   it("can return metadata without inline image bytes", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
     mkdirSync(join(tmpRoot, "assets"));
     writeFileSync(join(tmpRoot, "assets", "sample.png"), createPng(2, 3));
-    const project = createProject(tmpRoot);
-    const { ctx } = createContext(project);
-
+    const { ctx } = createContext(createProject(tmpRoot));
     const result = await handleImageRead(ctx, "chat-a", { path: "assets/sample.png", mode: "metadata" });
-    const metadata = JSON.parse(result.content[0].text);
-
-    expect(result.isError).toBeUndefined();
-    expect(metadata).toMatchObject({
-      path: "assets/sample.png",
-      returned_image_mode: "metadata",
-    });
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ path: "assets/sample.png", returned_image_mode: "metadata" });
     expect(result.content).toHaveLength(1);
   });
 
   it("can explicitly return the full original image", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
     mkdirSync(join(tmpRoot, "assets"));
-    writeFileSync(join(tmpRoot, "assets", "sample.png"), createPng(2, 3));
-    const project = createProject(tmpRoot);
-    const { ctx } = createContext(project);
-
+    const png = createPng(2, 3);
+    writeFileSync(join(tmpRoot, "assets", "sample.png"), png);
+    const { ctx } = createContext(createProject(tmpRoot));
     const result = await handleImageRead(ctx, "chat-a", { path: "assets/sample.png", mode: "full" });
-    const metadata = JSON.parse(result.content[0].text);
-
-    expect(metadata.returned_image_mode).toBe("full");
-    expect(result.content[1]).toMatchObject({
-      type: "image",
-      mimeType: "image/png",
-    });
-    expect(result.content[1].data).toBe(createPng(2, 3).toString("base64"));
-  });
-
-  it("evicts the least recently used images after the 50 MiB limit", async () => {
-    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
-    mkdirSync(join(tmpRoot, "assets"));
-    for (let index = 0; index < 9; index++) {
-      writeFileSync(join(tmpRoot, "assets", `large-${index}.png`), createLargePng());
-    }
-    const project = createProject(tmpRoot);
-    const { ctx } = createContext(project);
-    const cacheIds: string[] = [];
-
-    for (let index = 0; index < 8; index++) {
-      const result = await handleImageRead(ctx, "chat-a", { path: `assets/large-${index}.png`, mode: "metadata" });
-      cacheIds.push(JSON.parse(result.content[0].text).display_url.split("/").at(-1)!);
-    }
-
-    expect(getCachedImage(cacheIds[0])).toBeUndefined();
-    expect(getCachedImage(cacheIds[1])).toBeDefined();
-
-    // Touch the second image so it becomes newer than the third one.
-    expect(getCachedImage(cacheIds[1])).toBeDefined();
-    const result = await handleImageRead(ctx, "chat-a", { path: "assets/large-8.png", mode: "metadata" });
-    const newestId = JSON.parse(result.content[0].text).display_url.split("/").at(-1)!;
-
-    expect(getCachedImage(cacheIds[1])).toBeDefined();
-    expect(getCachedImage(cacheIds[2])).toBeUndefined();
-    expect(getCachedImage(newestId)).toBeDefined();
+    expect(JSON.parse(result.content[0].text).returned_image_mode).toBe("full");
+    expect(result.content[1]).toMatchObject({ type: "image", mimeType: "image/png", data: png.toString("base64") });
   });
 
   it("rejects paths outside the selected project", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
-    const project = createProject(tmpRoot);
-    const { ctx } = createContext(project);
-
+    const { ctx } = createContext(createProject(tmpRoot));
     const result = await handleImageRead(ctx, "chat-a", { path: "../outside.png" });
-    const payload = JSON.parse(result.content[0].text);
-
+    expect(JSON.parse(result.content[0].text).error.code).toBe("PATH_OUTSIDE_PROJECT");
     expect(result.isError).toBe(true);
-    expect(payload.error.code).toBe("PATH_OUTSIDE_PROJECT");
   });
 
   it("rejects denied image paths", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
-    writeFileSync(join(tmpRoot, ".env.png"), createPng());
-    const project = createProject(tmpRoot, [".env*"]);
-    const { ctx } = createContext(project);
-
-    const result = await handleImageRead(ctx, "chat-a", { path: ".env.png" });
-    const payload = JSON.parse(result.content[0].text);
-
+    writeFileSync(join(tmpRoot, "blocked.png"), createPng());
+    const { ctx } = createContext(createProject(tmpRoot, ["blocked.*"]));
+    const result = await handleImageRead(ctx, "chat-a", { path: "blocked.png" });
+    expect(JSON.parse(result.content[0].text).error.code).toBe("DENIED_PATH");
     expect(result.isError).toBe(true);
-    expect(payload.error.code).toBe("DENIED_PATH");
   });
 });
 
