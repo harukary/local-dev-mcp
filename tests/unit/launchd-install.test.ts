@@ -41,4 +41,38 @@ describe("launchd installer", () => {
     expect(server).toContain("run-with-rotating-log.mjs");
     expect(tunnel).toContain("run-with-rotating-log.mjs");
   });
+  it("generates separate server and OpenAI Tunnel LaunchAgents without embedding credential values", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-openai-launchd-"));
+    tempDirs.push(tempDir);
+    const labelPrefix = "test.local-dev-mcp.openai";
+
+    const result = spawnSync("/bin/bash", [path.resolve("scripts/install-openai-tunnel-launchd.sh"), "--install-only"], {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: tempDir,
+        LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: labelPrefix,
+        PORT: "13461",
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    const server = readFileSync(path.join(tempDir, `${labelPrefix}.server.plist`), "utf8");
+    const tunnel = readFileSync(path.join(tempDir, `${labelPrefix}.openai-tunnel.plist`), "utf8");
+
+    expect(server).toContain("scripts/openai-tunnel-server.sh");
+    expect(server).toContain("logs/openai-mcp-server.log");
+    expect(tunnel).toContain("scripts/openai-tunnel.sh");
+    expect(tunnel).toContain("logs/openai-tunnel.log");
+    expect(server).toContain("<key>PORT</key>");
+    expect(server).toContain("<string>13461</string>");
+    expect(tunnel).toContain("<key>PORT</key>");
+    expect(tunnel).toContain("<string>13461</string>");
+    expect(server).toContain("run-with-rotating-log.mjs");
+    expect(tunnel).toContain("run-with-rotating-log.mjs");
+    expect(tunnel).not.toContain("CONTROL_PLANE_API_KEY");
+    expect(tunnel).not.toContain("OPENAI_TUNNEL_TOKEN");
+  });
+
 });

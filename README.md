@@ -406,6 +406,93 @@ Each project entry supports:
 - `denied_paths`
 - `redaction_profile`
 
+## OpenAI Secure MCP Tunnel
+
+Use OpenAI Secure MCP Tunnel when ChatGPT Business or another supported OpenAI client needs to reach a private local MCP server. In this mode `local-dev-mcp` remains bound to `127.0.0.1`, while the official `tunnel-client` establishes an outbound HTTPS connection to OpenAI. No public MCP URL or inbound firewall rule is required.
+
+This is independent from the existing Cloudflare Tunnel + OAuth path. When `LOCAL_DEV_MCP_AUTH_MODE=openai-tunnel`, the server does not advertise OAuth discovery / authorization / token / registration endpoints. The local hop is protected with `X-Local-Dev-MCP-Tunnel-Token`, and `tunnel-client` sends that header on both normal MCP requests and startup discovery/probe requests.
+
+Install the official `tunnel-client`:
+
+```bash
+pnpm tunnel:openai:install
+```
+
+By default the installer resolves the official latest release and verifies its checksum, installs it below `~/.local-dev-mcp/tunnel-client/`, and exposes it through `~/.local-dev-mcp/bin/tunnel-client`. Set `LOCAL_DEV_MCP_TUNNEL_CLIENT_VERSION` when a specific release must be pinned.
+
+Long-lived service operation uses this private state directory by default:
+
+```text
+~/.local-dev-mcp/openai-tunnel/
+├─ tunnel-id
+├─ runtime-api-key
+└─ mcp-token
+```
+
+- `tunnel-id`: Tunnel ID created in OpenAI Platform. Format: `tunnel_` plus 32 lowercase hex characters
+- `runtime-api-key`: runtime API key for the Tunnel. Grant at least Tunnels Read + Use
+- `mcp-token`: random value used only between `tunnel-client` and the local MCP server. Minimum 32 characters
+
+Keep the state directory owner-only and each file at mode `0600`. Do not put credential values in the repository, plist files, command-line arguments, or normal logs.
+
+Example local-hop token generation:
+
+```bash
+mkdir -p ~/.local-dev-mcp/openai-tunnel
+chmod 700 ~/.local-dev-mcp/openai-tunnel
+node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" > ~/.local-dev-mcp/openai-tunnel/mcp-token
+chmod 600 ~/.local-dev-mcp/openai-tunnel/mcp-token
+```
+
+Store the Tunnel ID and runtime API key created in OpenAI Platform in their matching files. Do not paste the values into chat or logs.
+
+Start the MCP server in OpenAI Tunnel auth mode:
+
+```bash
+pnpm server:openai-tunnel
+```
+
+Run the official client preflight:
+
+```bash
+pnpm tunnel:openai:doctor
+```
+
+With the local MCP server running and the configuration valid, `mcp_target` and `mcp_server_reachable` should pass. In the non-OAuth configuration, `oauth_metadata` should also pass as "not advertised".
+
+Start the Tunnel:
+
+```bash
+pnpm tunnel:openai
+```
+
+The `tunnel-client` health / readiness / UI listener defaults to loopback `127.0.0.1:3460`. This remains a separate process and failure domain from the MCP server on `127.0.0.1:3456`.
+
+For long-lived macOS operation, keep the server and OpenAI Tunnel in separate LaunchAgents. Write the plist files first:
+
+```bash
+pnpm launchd:install:openai
+```
+
+After verifying the state files and Tunnel configuration, activate them:
+
+```bash
+scripts/install-openai-tunnel-launchd.sh --activate
+```
+
+The default jobs are `io.local-dev-mcp.server` and `io.local-dev-mcp.openai-tunnel`. Tunnel reconnects do not restart the MCP process.
+
+To keep the existing Cloudflare/OAuth service running during migration, use a different label prefix and port. The OpenAI Tunnel server wrapper also uses separate server and mobile-agent lock/state directories, so the two MCP processes do not compete for the same service lock. For example:
+
+```bash
+PORT=13461 LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX=io.local-dev-mcp.openai-dev \
+  scripts/install-openai-tunnel-launchd.sh --activate
+```
+
+On the ChatGPT side, associate the Tunnel with the ChatGPT Business workspace in OpenAI Platform, then select that Tunnel when creating the custom MCP app in Developer Mode. Secure MCP Tunnel does not require registering a public MCP endpoint URL in ChatGPT.
+
+`download.link` is different from normal MCP tool traffic: the returned browser URL is an ordinary HTTP route, so Secure MCP Tunnel does not expose it. Configure a separate HTTPS `LOCAL_DEV_MCP_PUBLIC_ORIGIN` if browser downloads are required; otherwise `download.link` fails explicitly instead of returning a localhost URL. Inline MCP image content remains available independently of this download route.
+
 ## Cloudflare Tunnel
 
 `scripts/tunnel.sh` can start the HTTP server and a Cloudflare Tunnel. Use this only when the tunnel is part of your controlled access path. Do not expose the local MCP server directly.

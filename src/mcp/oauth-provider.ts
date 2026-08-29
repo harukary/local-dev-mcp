@@ -192,5 +192,8 @@ export const personalOAuthProvider: OAuthServerProvider = {
   },
 };
 
-// Initialize store and seed client on import
-await seedClient();
+// Initialize the OAuth store only when the HTTP server is using OAuth.
+// OpenAI Secure MCP Tunnel mode uses a loopback shared-token boundary instead.
+if (process.env.LOCAL_DEV_MCP_AUTH_MODE !== "openai-tunnel") {
+  await seedClient();
+}

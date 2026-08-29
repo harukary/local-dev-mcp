@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-08-25.7";
+export const TOOL_SCHEMA_VERSION = "2026-08-29.1";
 
 export function buildToolDefinitions() {
   return [
@@ -307,7 +307,7 @@ export function buildToolDefinitions() {
     {
       name: "download.link",
       description:
-        "Create a temporary authenticated download URL for a local file inside the selected project root. Opening the URL in a browser shows a passphrase authentication screen; MCP clients can use the same Bearer authentication as the MCP connection. The URL expires automatically and serves the file as an attachment.",
+        "Create a temporary authenticated download URL for a local file inside the selected project root. This requires a separately reachable LOCAL_DEV_MCP_PUBLIC_ORIGIN; OpenAI Secure MCP Tunnel alone transports MCP calls and does not expose arbitrary download routes. Opening the URL in a browser shows a passphrase authentication screen; OAuth MCP clients can use the same Bearer authentication as the MCP connection. The URL expires automatically and serves the file as an attachment.",
       inputSchema: {
         type: "object",
         properties: {

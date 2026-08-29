@@ -53,6 +53,7 @@ import { handlePrivateNotesCreate, handlePrivateNotesGuidelines, handlePrivateNo
 import { handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete, handleTodoDiscord } from "./tools/todo.js";
+import { OPENAI_TUNNEL_HEADER_NAME, resolveHttpAuthConfig, verifyOpenAiTunnelToken, type HttpAuthConfig } from "./auth.js";
 
 export interface AppContext {
   configPath: string;
@@ -734,6 +735,27 @@ function requireBearerAuth(
     });
 }
 
+function buildHttpAuthMiddleware(authConfig: HttpAuthConfig): express.RequestHandler {
+  if (authConfig.mode === "oauth") {
+    return requireBearerAuth;
+  }
+
+  return (req, res, next) => {
+    const headerValue = req.headers[OPENAI_TUNNEL_HEADER_NAME];
+    if (verifyOpenAiTunnelToken(headerValue, authConfig.token)) {
+      next();
+      return;
+    }
+
+    debugMcpLog(`[HTTP] invalid_openai_tunnel_token path=${sanitizeRequestUrlForLog(req.url)}`);
+    res.setHeader("Cache-Control", "no-store");
+    res.status(401).json({
+      error: "invalid_tunnel_token",
+      message: "A valid OpenAI Secure MCP Tunnel token is required.",
+    });
+  };
+}
+
 interface DownloadAuthAttempt {
   linkId: string;
   expiresAt: number;
@@ -978,6 +1000,8 @@ function parseRawBody(req: express.Request): unknown | undefined {
 }
 
 export async function startHttpServer(configPath: string, port: number): Promise<void> {
+  const httpAuthConfig = resolveHttpAuthConfig();
+  const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig);
   const ctx = await createAppContext(configPath);
   const rateLimitMap = new Map<string, { count: number; reset: number }>();
 
@@ -1002,7 +1026,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
     express.static(join(__dirname, "../ui/public"))(req, res, next);
   });
 
-  app.get("/debug/tools", requireBearerAuth, (_req, res) => {
+  app.get("/debug/tools", requireHttpAuth, (_req, res) => {
     res.json(buildToolSchemaSnapshot());
   });
 
@@ -1102,58 +1126,60 @@ export async function startHttpServer(configPath: string, port: number): Promise
   }
   app.use(simpleRateLimit);
 
-  app.use("/authorize", express.urlencoded({ extended: false, limit: "10kb" }));
-  app.use("/authorize", requirePassphrase);
-  app.use("/authorize", customAuthorizationHandler(personalOAuthProvider));
-  app.use("/token", tokenHandler({ provider: personalOAuthProvider, rateLimit: false }));
-  app.use("/revoke", revocationHandler({ provider: personalOAuthProvider, rateLimit: false }));
-  app.use("/register", clientRegistrationHandler({
-    clientsStore: personalOAuthProvider.clientsStore,
-    rateLimit: false,
-  }));
+  if (httpAuthConfig.mode === "oauth") {
+    app.use("/authorize", express.urlencoded({ extended: false, limit: "10kb" }));
+    app.use("/authorize", requirePassphrase);
+    app.use("/authorize", customAuthorizationHandler(personalOAuthProvider));
+    app.use("/token", tokenHandler({ provider: personalOAuthProvider, rateLimit: false }));
+    app.use("/revoke", revocationHandler({ provider: personalOAuthProvider, rateLimit: false }));
+    app.use("/register", clientRegistrationHandler({
+      clientsStore: personalOAuthProvider.clientsStore,
+      rateLimit: false,
+    }));
 
-  app.get("/.well-known/oauth-authorization-server", (req, res) => {
-    const baseUrl = getPublicOrigin(req);
-    res.json({
-      issuer: baseUrl,
-      authorization_endpoint: `${baseUrl}/authorize`,
-      token_endpoint: `${baseUrl}/token`,
-      revocation_endpoint: `${baseUrl}/revoke`,
-      registration_endpoint: `${baseUrl}/register`,
-      response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code", "refresh_token"],
-      code_challenge_methods_supported: ["S256"],
-      token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
-      scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
+    app.get("/.well-known/oauth-authorization-server", (req, res) => {
+      const baseUrl = getPublicOrigin(req);
+      res.json({
+        issuer: baseUrl,
+        authorization_endpoint: `${baseUrl}/authorize`,
+        token_endpoint: `${baseUrl}/token`,
+        revocation_endpoint: `${baseUrl}/revoke`,
+        registration_endpoint: `${baseUrl}/register`,
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"],
+        token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+        scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
+      });
     });
-  });
 
-  app.get("/.well-known/openid-configuration", (req, res) => {
-    const baseUrl = getPublicOrigin(req);
-    res.json({
-      issuer: baseUrl,
-      authorization_endpoint: `${baseUrl}/authorize`,
-      token_endpoint: `${baseUrl}/token`,
-      registration_endpoint: `${baseUrl}/register`,
-      response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code", "refresh_token"],
-      code_challenge_methods_supported: ["S256"],
-      token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
-      scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
+    app.get("/.well-known/openid-configuration", (req, res) => {
+      const baseUrl = getPublicOrigin(req);
+      res.json({
+        issuer: baseUrl,
+        authorization_endpoint: `${baseUrl}/authorize`,
+        token_endpoint: `${baseUrl}/token`,
+        registration_endpoint: `${baseUrl}/register`,
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"],
+        token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+        scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
+      });
     });
-  });
 
-  app.get("/.well-known/oauth-protected-resource/mcp", (req, res) => {
-    const baseUrl = getPublicOrigin(req);
-    res.json({
-      resource: `${baseUrl}/mcp`,
-      authorization_servers: [baseUrl],
-      scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
-      bearer_methods_supported: ["header"],
+    app.get("/.well-known/oauth-protected-resource/mcp", (req, res) => {
+      const baseUrl = getPublicOrigin(req);
+      res.json({
+        resource: `${baseUrl}/mcp`,
+        authorization_servers: [baseUrl],
+        scopes_supported: [...OAUTH_SCOPES_SUPPORTED],
+        bearer_methods_supported: ["header"],
+      });
     });
-  });
+  }
 
-  app.post("/mcp", requireBearerAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
+  app.post("/mcp", requireHttpAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
     handleMcpRequest(req, res, ctx).catch((err) => {
       console.error("MCP POST handler error:", err);
       if (!res.headersSent) {
@@ -1162,7 +1188,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
     });
   });
 
-  app.get("/mcp", requireBearerAuth, (_req, res) => {
+  app.get("/mcp", requireHttpAuth, (_req, res) => {
     sendStatelessMcpMethodNotAllowed(res);
   });
 
@@ -1175,14 +1201,14 @@ export async function startHttpServer(configPath: string, port: number): Promise
     res.json(buildHealthStatus());
   });
 
-  app.post("/", requireBearerAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
+  app.post("/", requireHttpAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
     handleMcpRequest(req, res, ctx).catch((err) => {
       console.error("MCP POST (root) error:", err);
       if (!res.headersSent) res.status(500).json({ error: "internal_error", message: String(err) });
     });
   });
 
-  app.post("/reload", requireBearerAuth, async (_req, res) => {
+  app.post("/reload", requireHttpAuth, async (_req, res) => {
     try {
       const projectIds = await reloadProjectRegistry(ctx);
       console.error(`[Registry] Reloaded: ${projectIds.join(", ")}`);
@@ -1193,7 +1219,11 @@ export async function startHttpServer(configPath: string, port: number): Promise
     }
   });
 
-  console.error("[OAuth] Authorization endpoint ready; passphrase protection enabled.");
+  if (httpAuthConfig.mode === "oauth") {
+    console.error("[OAuth] Authorization endpoint ready; passphrase protection enabled.");
+  } else {
+    console.error(`[OpenAI Tunnel] Local MCP authentication enabled via ${OPENAI_TUNNEL_HEADER_NAME}.`);
+  }
 
   await new Promise<void>((resolve, reject) => {
     app.listen(port, "127.0.0.1", (err?: Error) => {
@@ -1201,7 +1231,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
       else resolve();
     });
   });
-  console.error(`MCP HTTP server listening on http://127.0.0.1:${port}/mcp (OAuth 2.1)`);
+  console.error(`MCP HTTP server listening on http://127.0.0.1:${port}/mcp (auth=${httpAuthConfig.mode})`);
 
   const shutdown = () => {
     console.error("\n[Server] Shutting down...");

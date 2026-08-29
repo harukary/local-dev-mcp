@@ -31,6 +31,14 @@ export async function handleDownloadLink(
     return jsonError("MISSING_PATH", "Missing required argument: path.");
   }
 
+  const publicOrigin = getPublicOriginForTool();
+  if (!publicOrigin) {
+    const message =
+      "download.link requires LOCAL_DEV_MCP_PUBLIC_ORIGIN when using OpenAI Secure MCP Tunnel because the Tunnel transports MCP calls, not arbitrary browser download routes.";
+    await logDownloadLinkFailure(ctx, chatContextId, project, args.path, message);
+    return jsonError("PUBLIC_ORIGIN_REQUIRED", message);
+  }
+
   const resolved = await resolveDownloadPath(project, args.path);
   if (!resolved.ok) {
     await logDownloadLinkFailure(ctx, chatContextId, project, args.path, resolved.message);
@@ -65,7 +73,7 @@ export async function handleDownloadLink(
   });
   setTimeout(() => downloadCache.delete(id), ttlSeconds * 1000).unref();
 
-  const downloadUrl = `${getPublicOriginForTool()}/download/${id}`;
+  const downloadUrl = `${publicOrigin}/download/${id}`;
   const metadata = {
     project_id: project.projectId,
     path: resolved.relativePath,
@@ -150,7 +158,7 @@ function sanitizeFileName(value: string | undefined): string | undefined {
   return leaf || undefined;
 }
 
-function getPublicOriginForTool(): string {
+function getPublicOriginForTool(): string | null {
   const configured = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN?.trim();
   if (configured) {
     try {
@@ -158,6 +166,9 @@ function getPublicOriginForTool(): string {
     } catch {
       // fall through
     }
+  }
+  if (process.env.LOCAL_DEV_MCP_AUTH_MODE === "openai-tunnel") {
+    return null;
   }
   return "http://127.0.0.1:3456";
 }

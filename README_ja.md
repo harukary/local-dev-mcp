@@ -407,6 +407,93 @@ pnpm dev -- config/projects.local.yaml
 - `denied_paths`
 - `redaction_profile`
 
+## OpenAI Secure MCP Tunnel
+
+ChatGPT Business などから private な local MCP に接続する場合は、OpenAI Secure MCP Tunnel を利用できます。この構成では `local-dev-mcp` は `127.0.0.1` だけで待ち受け、公式 `tunnel-client` が OpenAI へ outbound HTTPS 接続を確立します。MCP server の public URL や inbound firewall rule は不要です。
+
+既存の Cloudflare Tunnel + OAuth 構成とは独立しています。`LOCAL_DEV_MCP_AUTH_MODE=openai-tunnel` のときは OAuth discovery / authorization / token / registration endpoint を公開せず、local hop は `X-Local-Dev-MCP-Tunnel-Token` で保護します。`tunnel-client` は通常の MCP request と startup discovery/probe の両方にこの header を付与します。
+
+公式 `tunnel-client` の install:
+
+```bash
+pnpm tunnel:openai:install
+```
+
+既定では公式 latest release を解決し、checksum 検証して `~/.local-dev-mcp/tunnel-client/` 配下に配置し、`~/.local-dev-mcp/bin/tunnel-client` から参照できるようにします。version を固定したい場合は `LOCAL_DEV_MCP_TUNNEL_CLIENT_VERSION` を指定します。
+
+常駐運用では、次の private state directory を使います。
+
+```text
+~/.local-dev-mcp/openai-tunnel/
+├─ tunnel-id
+├─ runtime-api-key
+└─ mcp-token
+```
+
+- `tunnel-id`: OpenAI Platform で作成した Tunnel ID。形式は `tunnel_` + 32文字の小文字16進数
+- `runtime-api-key`: Tunnel runtime 用 API key。少なくとも Tunnels Read + Use を付与する
+- `mcp-token`: `tunnel-client` と local MCP 間だけで使うランダム値。32文字以上必須
+
+state directory は owner のみアクセス可能にし、各 file は `0600` にします。credential value を repository、plist、command line、通常 log に書かないでください。
+
+local hop 用 token の生成例:
+
+```bash
+mkdir -p ~/.local-dev-mcp/openai-tunnel
+chmod 700 ~/.local-dev-mcp/openai-tunnel
+node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" > ~/.local-dev-mcp/openai-tunnel/mcp-token
+chmod 600 ~/.local-dev-mcp/openai-tunnel/mcp-token
+```
+
+Tunnel ID と runtime API key は OpenAI Platform で作成した値を対応する file に保存します。値自体は chat や log に貼り付けません。
+
+server を OpenAI Tunnel auth mode で起動:
+
+```bash
+pnpm server:openai-tunnel
+```
+
+公式 client の事前診断:
+
+```bash
+pnpm tunnel:openai:doctor
+```
+
+local MCP が起動済みで設定が正しければ、少なくとも `mcp_target` / `mcp_server_reachable` が PASS し、OAuth を使わない構成では `oauth_metadata` が「not advertised」で PASS します。
+
+Tunnel を起動:
+
+```bash
+pnpm tunnel:openai
+```
+
+`tunnel-client` 自身の health / readiness / UI は既定で loopback の `127.0.0.1:3460` に bind します。MCP server の `127.0.0.1:3456` とは process と failure domain を分離します。
+
+macOS で常駐させる場合は、server と OpenAI Tunnel を別 LaunchAgent にします。まず plist だけを書き出します。
+
+```bash
+pnpm launchd:install:openai
+```
+
+state files と Tunnel 設定を確認後に activate します。
+
+```bash
+scripts/install-openai-tunnel-launchd.sh --activate
+```
+
+生成 job は既定で `io.local-dev-mcp.server` と `io.local-dev-mcp.openai-tunnel` です。Tunnel client が再接続しても MCP process 自体は再起動しません。
+
+移行中に既存の Cloudflare/OAuth service を残す場合は、別の label prefix と port を使います。OpenAI Tunnel 用 server wrapper は server lock と mobile agent state も専用 directory に分離するため、2つの MCP process が同じ service lock を取り合いません。例:
+
+```bash
+PORT=13461 LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX=io.local-dev-mcp.openai-dev \
+  scripts/install-openai-tunnel-launchd.sh --activate
+```
+
+ChatGPT 側では OpenAI Platform で Tunnel を ChatGPT Business workspace に関連付け、Developer Mode の custom MCP app でその Tunnel を選択します。Secure MCP Tunnel を使う場合、ChatGPT に public MCP endpoint URL を登録する必要はありません。
+
+`download.link` は通常の MCP tool traffic と異なり、返す browser URL は通常の HTTP route です。そのため Secure MCP Tunnel だけでは公開されません。browser download が必要なら別途 HTTPS の `LOCAL_DEV_MCP_PUBLIC_ORIGIN` を設定します。未設定時は localhost URL を返さず明示的に失敗します。MCP response に inline で返す画像データはこの download route とは独立して利用できます。
+
 ## Cloudflare Tunnel
 
 `scripts/tunnel.sh` は HTTP server と Cloudflare Tunnel を起動できます。controlled access path の一部として使う場合だけ利用してください。local MCP server を直接 public exposure しないでください。

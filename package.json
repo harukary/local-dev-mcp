@@ -15,7 +15,12 @@
     "server:http": "bash scripts/server.sh",
     "tunnel": "bash scripts/tunnel.sh",
     "tunnel:only": "bash scripts/tunnel.sh --tunnel-only",
-    "launchd:install": "bash scripts/install-launchd.sh --install-only"
+    "launchd:install": "bash scripts/install-launchd.sh --install-only",
+    "server:openai-tunnel": "bash scripts/openai-tunnel-server.sh",
+    "tunnel:openai": "bash scripts/openai-tunnel.sh --run",
+    "tunnel:openai:doctor": "bash scripts/openai-tunnel.sh --doctor",
+    "launchd:install:openai": "bash scripts/install-openai-tunnel-launchd.sh --install-only",
+    "tunnel:openai:install": "bash scripts/install-openai-tunnel-client.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",

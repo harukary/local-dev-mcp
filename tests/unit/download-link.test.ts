@@ -10,6 +10,7 @@ import type { ProjectConfig } from "../../src/types.js";
 let tmpRoot = "";
 let tmpOutside = "";
 let previousPublicOrigin: string | undefined;
+let previousAuthMode: string | undefined;
 
 afterEach(() => {
   if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
@@ -21,6 +22,11 @@ afterEach(() => {
     delete process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
   } else {
     process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN = previousPublicOrigin;
+  }
+  if (previousAuthMode === undefined) {
+    delete process.env.LOCAL_DEV_MCP_AUTH_MODE;
+  } else {
+    process.env.LOCAL_DEV_MCP_AUTH_MODE = previousAuthMode;
   }
 });
 
@@ -52,6 +58,23 @@ describe("handleDownloadLink", () => {
       fileName: "report.txt",
       sizeBytes: 5,
     });
+  });
+
+  it("requires a separate public origin for browser downloads in OpenAI Tunnel mode", async () => {
+    previousPublicOrigin = process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
+    previousAuthMode = process.env.LOCAL_DEV_MCP_AUTH_MODE;
+    delete process.env.LOCAL_DEV_MCP_PUBLIC_ORIGIN;
+    process.env.LOCAL_DEV_MCP_AUTH_MODE = "openai-tunnel";
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-download-"));
+    writeFileSync(join(tmpRoot, "report.txt"), "hello");
+    const { ctx } = createContext(createProject(tmpRoot));
+
+    const result = await handleDownloadLink(ctx, "chat-a", { path: "report.txt" });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(payload.error.code).toBe("PUBLIC_ORIGIN_REQUIRED");
+    expect(payload.error.message).toContain("Secure MCP Tunnel");
   });
 
   it("rejects paths outside the selected project", async () => {
