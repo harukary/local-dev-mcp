@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-08-29.2";
+export const TOOL_SCHEMA_VERSION = "2026-08-29.3";
 
 export function buildToolDefinitions() {
   return [
@@ -332,6 +332,56 @@ export function buildToolDefinitions() {
         required: ["project_id", "path", "filename", "mime_type", "size_bytes", "sha256", "transport", "encoding", "uri"],
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    {
+      name: "artifact.receive",
+      description:
+        "Receive a user-attached ChatGPT file into the selected project in one MCP call. ChatGPT supplies the top-level file input through openai/fileParams as a temporary authorized file reference. Do not ask the user to provide download_url or file_id manually. The server streams the file, validates redirects and destination paths, computes SHA-256, and never logs the temporary download URL.",
+      _meta: {
+        "openai/fileParams": ["file"],
+      },
+      inputSchema: {
+        type: "object",
+        properties: {
+          file: {
+            type: "object",
+            properties: {
+              download_url: { type: "string", format: "uri" },
+              file_id: { type: "string" },
+              mime_type: { type: "string" },
+              file_name: { type: "string" },
+            },
+            required: ["download_url", "file_id"],
+            additionalProperties: false,
+          },
+          destination: {
+            type: "string",
+            description: "Optional project-relative destination file path. If omitted, a unique file is created under generated/uploads/. Existing files are never overwritten.",
+          },
+          max_bytes: {
+            type: "integer",
+            description: "Optional receive limit for this call. Defaults to LOCAL_DEV_MCP_ARTIFACT_RECEIVE_MAX_BYTES or 536870912 bytes (512 MiB), capped at 512 MiB.",
+            minimum: 1,
+            maximum: 536870912,
+          },
+        },
+        required: ["file"],
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          path: { type: "string" },
+          filename: { type: "string" },
+          file_id: { type: "string" },
+          mime_type: { type: "string" },
+          size_bytes: { type: "number" },
+          sha256: { type: "string" },
+          source: { type: "string" },
+        },
+        required: ["project_id", "path", "filename", "file_id", "mime_type", "size_bytes", "sha256", "source"],
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     {
       name: "download.link",

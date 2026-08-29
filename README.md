@@ -495,6 +495,12 @@ For normal file handoff from the development host to ChatGPT, prefer `artifact.r
 
 On current ChatGPT clients, the first embedded file returned by a custom plugin may trigger an **Allow file materialization?** confirmation. After approval, ChatGPT materializes the embedded resource as a normal file attachment card (for example, a ZIP appears as a “Zip Archive” card). This materialization happens after the bytes have already traveled through MCP/Secure Tunnel; it does not require `LOCAL_DEV_MCP_PUBLIC_ORIGIN`.
 
+For the reverse direction, use `artifact.receive`. The tool declares `_meta["openai/fileParams"] = ["file"]`, so a normal ChatGPT attachment can be supplied to the tool as an authorized temporary file reference. ChatGPT passes `{ download_url, file_id, mime_type?, file_name? }`; `local-dev-mcp` streams that URL directly into the selected project in the same MCP tool call. No base64 chunk loop is required.
+
+By default the received file is written to a unique path below `generated/uploads/`; callers may instead provide a project-relative `destination`. Existing files are never overwritten. The server requires HTTPS, rejects loopback/local-network targets and unsafe redirect targets, enforces a 512 MiB hard limit (configurable downward with `LOCAL_DEV_MCP_ARTIFACT_RECEIVE_MAX_BYTES`), computes SHA-256 while streaming, and does not write the temporary download URL to the audit log.
+
+This flow was end-to-end verified with a Pro developer-mode plugin on 2026-08-29 using a normal ChatGPT attachment: one `artifact.receive` tool call stored the file locally and the resulting byte count and SHA-256 matched the original exactly.
+
 `download.link` remains a legacy/fallback path for files that must be exposed as an ordinary browser URL. That URL is outside normal MCP traffic, so Secure MCP Tunnel does not expose it. Configure a separate HTTPS `LOCAL_DEV_MCP_PUBLIC_ORIGIN` only when that URL-based behavior is required; otherwise `download.link` fails explicitly instead of returning a localhost URL.
 
 ## Cloudflare Tunnel

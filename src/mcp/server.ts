@@ -32,6 +32,7 @@ import { handleShellRun } from "./tools/shell-run.js";
 import { getCachedImage, handleImageRead, handleImageShow } from "./tools/image-read.js";
 import { getCachedDownload, handleDownloadLink } from "./tools/download-link.js";
 import { handleArtifactRead } from "./tools/artifact-read.js";
+import { handleArtifactReceive, type OpenAiProvidedFile } from "./tools/artifact-receive.js";
 import { handleShellApprove, handleShellReject } from "./tools/shell-approval.js";
 import { handleShellStatus } from "./tools/shell-status.js";
 import { handleShellCancel } from "./tools/shell-cancel.js";
@@ -431,6 +432,13 @@ export function createMcpServer(ctx: AppContext): Server {
 
         case "artifact.read":
           return await handleArtifactRead(ctx, chatContextId, args as { path?: string; max_bytes?: number });
+
+        case "artifact.receive":
+          return await handleArtifactReceive(
+            ctx,
+            chatContextId,
+            args as { file?: OpenAiProvidedFile; destination?: string; max_bytes?: number }
+          );
 
         case "download.link":
           return await handleDownloadLink(ctx, chatContextId, args as { path?: string; ttl_seconds?: number; filename?: string });

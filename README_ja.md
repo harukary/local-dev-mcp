@@ -496,6 +496,12 @@ ChatGPT 側では、必要に応じて OpenAI Platform で Tunnel を利用対�
 
 現在の ChatGPT client では、custom plugin が初めて embedded file を返す際に **Allow file materialization?** の確認が出る場合があります。許可すると、ChatGPT が embedded resource を通常のファイル添付カードとして materialize します（ZIP なら “Zip Archive” カード）。この materialization はファイル本体が MCP / Secure Tunnel を通過した後の ChatGPT 側処理なので、`LOCAL_DEV_MCP_PUBLIC_ORIGIN` は不要です。
 
+逆方向は `artifact.receive` を使います。この tool は `_meta["openai/fileParams"] = ["file"]` を宣言しているため、ChatGPT の通常添付を authorized temporary file reference としてそのまま tool input にできます。ChatGPT からは `{ download_url, file_id, mime_type?, file_name? }` が渡され、`local-dev-mcp` はその URL を selected project へ同じ MCP tool call の中で stream 保存します。base64 chunk を複数回送る必要はありません。
+
+既定では `generated/uploads/` 配下にunique pathで保存し、必要ならproject-relativeな `destination` を明示できます。既存ファイルは上書きしません。server側ではHTTPS限定、loopback / local network宛てと危険なredirect先の拒否、512 MiBのhard limit（`LOCAL_DEV_MCP_ARTIFACT_RECEIVE_MAX_BYTES` で縮小可能）、stream中のSHA-256計算を行い、一時 `download_url` はaudit logへ保存しません。
+
+2026-08-29 に Pro の developer-mode plugin で通常のChatGPT添付を使ってend-to-end確認済みです。`artifact.receive` 1回だけでlocal fileとして保存され、byte countとSHA-256が元ファイルと完全一致しました。
+
 `download.link` は通常の browser URL が必要な場合の legacy / fallback として残します。この URL は通常の MCP traffic の外側なので、Secure MCP Tunnel だけでは公開されません。URL 方式が必要な場合だけ別途 HTTPS の `LOCAL_DEV_MCP_PUBLIC_ORIGIN` を設定し、未設定時は localhost URL を返さず明示的に失敗します。
 
 ## Cloudflare Tunnel
