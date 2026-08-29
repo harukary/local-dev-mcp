@@ -4,7 +4,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-08-29.1";
+export const TOOL_SCHEMA_VERSION = "2026-08-29.2";
 
 export function buildToolDefinitions() {
   return [
@@ -301,6 +301,35 @@ export function buildToolDefinitions() {
           markdown: { type: "string" },
         },
         required: ["project_id", "path", "absolute_path", "mime_type", "size_bytes", "display_url", "display_expires_at", "markdown"],
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    {
+      name: "artifact.read",
+      description:
+        "Transfer a local project file intact through the MCP response as an embedded resource. Use this when the user asks to receive, download, or attach a generated file. Prefer workspace.read for inspecting text and image.read for inspecting images. Files are base64-encoded inside MCP and limited to 8 MiB per call.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Project-relative file path, or an absolute path inside the selected project root." },
+          max_bytes: { type: "integer", description: "Maximum raw file size to embed. Defaults to and is capped at 8388608 bytes (8 MiB).", minimum: 1, maximum: 8388608 },
+        },
+        required: ["path"],
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          path: { type: "string" },
+          filename: { type: "string" },
+          mime_type: { type: "string" },
+          size_bytes: { type: "number" },
+          sha256: { type: "string" },
+          transport: { type: "string" },
+          encoding: { type: "string" },
+          uri: { type: "string" },
+        },
+        required: ["project_id", "path", "filename", "mime_type", "size_bytes", "sha256", "transport", "encoding", "uri"],
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },

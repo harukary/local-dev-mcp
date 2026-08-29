@@ -409,7 +409,7 @@ pnpm dev -- config/projects.local.yaml
 
 ## OpenAI Secure MCP Tunnel
 
-ChatGPT Business などから private な local MCP に接続する場合は、OpenAI Secure MCP Tunnel を利用できます。この構成では `local-dev-mcp` は `127.0.0.1` だけで待ち受け、公式 `tunnel-client` が OpenAI へ outbound HTTPS 接続を確立します。MCP server の public URL や inbound firewall rule は不要です。
+対応している ChatGPT account / workspace などから private な local MCP に接続する場合は、OpenAI Secure MCP Tunnel を利用できます。この構成では `local-dev-mcp` は `127.0.0.1` だけで待ち受け、公式 `tunnel-client` が OpenAI へ outbound HTTPS 接続を確立します。MCP server の public URL や inbound firewall rule は不要です。
 
 既存の Cloudflare Tunnel + OAuth 構成とは独立しています。`LOCAL_DEV_MCP_AUTH_MODE=openai-tunnel` のときは OAuth discovery / authorization / token / registration endpoint を公開せず、local hop は `X-Local-Dev-MCP-Tunnel-Token` で保護します。`tunnel-client` は通常の MCP request と startup discovery/probe の両方にこの header を付与します。
 
@@ -490,9 +490,13 @@ PORT=13461 LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX=io.local-dev-mcp.openai-dev \
   scripts/install-openai-tunnel-launchd.sh --activate
 ```
 
-ChatGPT 側では OpenAI Platform で Tunnel を ChatGPT Business workspace に関連付け、Developer Mode の custom MCP app でその Tunnel を選択します。Secure MCP Tunnel を使う場合、ChatGPT に public MCP endpoint URL を登録する必要はありません。
+ChatGPT 側では、必要に応じて OpenAI Platform で Tunnel を利用対象の ChatGPT account / workspace に関連付け、Developer Mode の custom MCP app でその Tunnel を選択します。この repository では Pro の developer-mode plugin でも end-to-end 動作確認済みです。Secure MCP Tunnel を使う場合、ChatGPT に public MCP endpoint URL を登録する必要はありません。
 
-`download.link` は通常の MCP tool traffic と異なり、返す browser URL は通常の HTTP route です。そのため Secure MCP Tunnel だけでは公開されません。browser download が必要なら別途 HTTPS の `LOCAL_DEV_MCP_PUBLIC_ORIGIN` を設定します。未設定時は localhost URL を返さず明示的に失敗します。MCP response に inline で返す画像データはこの download route とは独立して利用できます。
+開発ホストから ChatGPT へ通常のファイル受け渡しを行う場合は `artifact.read` を優先します。ファイル本体を標準 MCP の `EmbeddedResource` / `BlobResourceContents` として tool result に直接埋め込むため、public HTTP endpoint を用意せず Secure MCP Tunnel の中だけで転送できます。現在の 1 call あたりの raw file 上限は 8 MiB で、MIME type と SHA-256 digest も返します。ユーザーへ成果物そのものを渡す必要がなく内容だけ確認する場合は、whole file transfer ではなく `workspace.read` または `image.read` を使います。
+
+現在の ChatGPT client では、custom plugin が初めて embedded file を返す際に **Allow file materialization?** の確認が出る場合があります。許可すると、ChatGPT が embedded resource を通常のファイル添付カードとして materialize します（ZIP なら “Zip Archive” カード）。この materialization はファイル本体が MCP / Secure Tunnel を通過した後の ChatGPT 側処理なので、`LOCAL_DEV_MCP_PUBLIC_ORIGIN` は不要です。
+
+`download.link` は通常の browser URL が必要な場合の legacy / fallback として残します。この URL は通常の MCP traffic の外側なので、Secure MCP Tunnel だけでは公開されません。URL 方式が必要な場合だけ別途 HTTPS の `LOCAL_DEV_MCP_PUBLIC_ORIGIN` を設定し、未設定時は localhost URL を返さず明示的に失敗します。
 
 ## Cloudflare Tunnel
 

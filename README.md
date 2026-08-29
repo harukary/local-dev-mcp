@@ -408,7 +408,7 @@ Each project entry supports:
 
 ## OpenAI Secure MCP Tunnel
 
-Use OpenAI Secure MCP Tunnel when ChatGPT Business or another supported OpenAI client needs to reach a private local MCP server. In this mode `local-dev-mcp` remains bound to `127.0.0.1`, while the official `tunnel-client` establishes an outbound HTTPS connection to OpenAI. No public MCP URL or inbound firewall rule is required.
+Use OpenAI Secure MCP Tunnel when a supported ChatGPT account/workspace or another OpenAI client needs to reach a private local MCP server. In this mode `local-dev-mcp` remains bound to `127.0.0.1`, while the official `tunnel-client` establishes an outbound HTTPS connection to OpenAI. No public MCP URL or inbound firewall rule is required.
 
 This is independent from the existing Cloudflare Tunnel + OAuth path. When `LOCAL_DEV_MCP_AUTH_MODE=openai-tunnel`, the server does not advertise OAuth discovery / authorization / token / registration endpoints. The local hop is protected with `X-Local-Dev-MCP-Tunnel-Token`, and `tunnel-client` sends that header on both normal MCP requests and startup discovery/probe requests.
 
@@ -489,9 +489,13 @@ PORT=13461 LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX=io.local-dev-mcp.openai-dev \
   scripts/install-openai-tunnel-launchd.sh --activate
 ```
 
-On the ChatGPT side, associate the Tunnel with the ChatGPT Business workspace in OpenAI Platform, then select that Tunnel when creating the custom MCP app in Developer Mode. Secure MCP Tunnel does not require registering a public MCP endpoint URL in ChatGPT.
+On the ChatGPT side, associate the Tunnel with the intended ChatGPT account/workspace in OpenAI Platform when applicable, then select that Tunnel when creating the custom MCP app in Developer Mode. This repository has also been end-to-end tested with a Pro developer-mode plugin. Secure MCP Tunnel does not require registering a public MCP endpoint URL in ChatGPT.
 
-`download.link` is different from normal MCP tool traffic: the returned browser URL is an ordinary HTTP route, so Secure MCP Tunnel does not expose it. Configure a separate HTTPS `LOCAL_DEV_MCP_PUBLIC_ORIGIN` if browser downloads are required; otherwise `download.link` fails explicitly instead of returning a localhost URL. Inline MCP image content remains available independently of this download route.
+For normal file handoff from the development host to ChatGPT, prefer `artifact.read`. It embeds the file bytes directly in the MCP tool result as a standard `EmbeddedResource` / `BlobResourceContents`, so the file travels through Secure MCP Tunnel without a public HTTP endpoint. The current per-call raw file limit is 8 MiB; metadata includes the MIME type and SHA-256 digest. Use `workspace.read` for text inspection and `image.read` for image inspection instead of transferring the whole file when the user does not need the artifact itself.
+
+On current ChatGPT clients, the first embedded file returned by a custom plugin may trigger an **Allow file materialization?** confirmation. After approval, ChatGPT materializes the embedded resource as a normal file attachment card (for example, a ZIP appears as a “Zip Archive” card). This materialization happens after the bytes have already traveled through MCP/Secure Tunnel; it does not require `LOCAL_DEV_MCP_PUBLIC_ORIGIN`.
+
+`download.link` remains a legacy/fallback path for files that must be exposed as an ordinary browser URL. That URL is outside normal MCP traffic, so Secure MCP Tunnel does not expose it. Configure a separate HTTPS `LOCAL_DEV_MCP_PUBLIC_ORIGIN` only when that URL-based behavior is required; otherwise `download.link` fails explicitly instead of returning a localhost URL.
 
 ## Cloudflare Tunnel
 
