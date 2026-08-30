@@ -1,5 +1,6 @@
 const RO = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 const WA = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
+const WD = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 const BROWSER_WAIT_FOR_SCHEMA = {
   type: "object",
@@ -20,6 +21,9 @@ export function buildBrowserToolDefinitions() {
     { name: "browser.sessions", description: "Return only the current chat-owned browser session.", inputSchema: { type: "object", properties: {} }, annotations: RO },
     { name: "browser.stop", description: "Stop the current chat-owned browser, verify allowlisted logins, and checkpoint it for possible golden promotion.", inputSchema: { type: "object", properties: {} }, annotations: WA },
     { name: "browser.tabs", description: "List tabs in the current chat-owned browser.", inputSchema: { type: "object", properties: {} }, annotations: RO },
+    { name: "browser.tab.open", description: "Open a new tab and make it the active tab for the current chat-owned browser.", inputSchema: { type: "object", properties: { url: { type: "string" } } }, annotations: WA },
+    { name: "browser.tab.use", description: "Select an existing page target as the active tab for subsequent browser operations.", inputSchema: { type: "object", properties: { target_id: { type: "string" } }, required: ["target_id"] }, annotations: WA },
+    { name: "browser.tab.close", description: "Close an existing page target. Closing the active tab leaves no active selection.", inputSchema: { type: "object", properties: { target_id: { type: "string" } }, required: ["target_id"] }, annotations: WD },
     { name: "browser.dom", description: "Return DOM text and HTML for a selector in the current chat-owned browser.", inputSchema: { type: "object", properties: { selector: { type: "string" } } }, annotations: RO },
     { name: "browser.selectors", description: "Return interactive selector candidates from the current chat-owned browser.", inputSchema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 500 }, query: { type: "string" } } }, annotations: RO },
     { name: "browser.click", description: "Click an element by CSS selector. Prefer wait_for for condition-driven flows; it combines click+wait and skips the default screenshot unless observe=after is explicit.", inputSchema: { type: "object", properties: { selector: { type: "string" }, observe: { type: "string", enum: ["none", "after"] }, wait_ms: { type: "integer", minimum: 0, maximum: 10000 }, wait_for: BROWSER_WAIT_FOR_SCHEMA }, required: ["selector"] }, annotations: WA },

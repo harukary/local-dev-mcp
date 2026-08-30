@@ -43,7 +43,7 @@ import { handleWorkspacePatch } from "./tools/dev/workspace-patch.js";
 import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleGitDiff } from "./tools/dev/git.js";
 import { handleNotesCreate, handleNotesGuidelines, handleNotesValidate } from "./tools/notes/index.js";
 import { handlePrivateNotesCreate, handlePrivateNotesGuidelines, handlePrivateNotesValidate } from "./tools/private-notes/index.js";
-import { handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
+import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserToolOperation, handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserTabOpen, handleBrowserTabUse, handleBrowserTabClose, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete, handleTodoDiscord } from "./tools/todo.js";
 import { OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiTunnelAuthConfig, verifyOpenAiTunnelToken, type OpenAiTunnelAuthConfig } from "./auth.js";
@@ -172,7 +172,7 @@ export function createMcpServer(ctx: AppContext): Server {
 
     try {
       debugMcpLog(`[CallTool] ${name} chatContextId=${chatContextId} store=${ctx.contextStore.getAll().size}ctxs`);
-      const result: any = await (async () => {
+      const invokeTool = async () => {
         switch (name) {
         case "project.list":
           return await handleProjectList(ctx, chatContextId);
@@ -256,6 +256,15 @@ export function createMcpServer(ctx: AppContext): Server {
 
         case "browser.tabs":
           return await handleBrowserTabs(ctx, chatContextId, args as { session_id?: string });
+
+        case "browser.tab.open":
+          return await handleBrowserTabOpen(ctx, chatContextId, args as { url?: string });
+
+        case "browser.tab.use":
+          return await handleBrowserTabUse(ctx, chatContextId, args as { target_id?: string });
+
+        case "browser.tab.close":
+          return await handleBrowserTabClose(ctx, chatContextId, args as { target_id?: string });
 
         case "browser.dom":
           return await handleBrowserDom(ctx, chatContextId, args as { session_id?: string; selector?: string });
@@ -445,7 +454,10 @@ export function createMcpServer(ctx: AppContext): Server {
             isError: true,
           };
         }
-      })();
+      };
+      const result: any = name.startsWith("browser.")
+        ? await runBrowserToolOperation(chatContextId, invokeTool)
+        : await invokeTool();
       ctx.toolUsageMetrics.record({
         tool: name,
         project_id: ctx.contextStore.getCurrentProject(chatContextId),
@@ -564,7 +576,28 @@ export async function startMcpServer(configPath: string): Promise<void> {
   const ctx = await createAppContext(configPath);
   const server = createMcpServer(ctx);
   const transport = new StdioServerTransport();
+  const browserLifecycle = await createBrowserLifecycleService();
+  await browserLifecycle.start();
   await server.connect(transport);
+
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    browserLifecycle.stopTimer();
+    const browserOperationsIdle = beginBrowserOperationDrain();
+    void (async () => {
+      const result = await withShutdownTimeout((async () => {
+        await Promise.allSettled([transport.close(), server.close()]);
+        await browserOperationsIdle;
+        return await browserLifecycle.drain();
+      })(), 55_000);
+      if (result === "timeout") console.error("[BrowserLifecycle] shutdown drain timed out");
+      else console.error("[BrowserLifecycle] shutdown drain", result);
+    })().catch((error) => console.error("[BrowserLifecycle] shutdown drain failed", error)).finally(() => process.exit(0));
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
 }
 
 export function normalizeHttpHost(value: string | undefined): string | null {
@@ -635,6 +668,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
   const httpAuthConfig = resolveOpenAiTunnelAuthConfig();
   const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig);
   const ctx = await createAppContext(configPath);
+  const browserLifecycle = await createBrowserLifecycleService();
   const rateLimitMap = new Map<string, { count: number; reset: number }>();
 
   const app = express();
@@ -726,20 +760,50 @@ export async function startHttpServer(configPath: string, port: number): Promise
 
   console.error(`[OpenAI Tunnel] Local MCP authentication enabled via ${OPENAI_TUNNEL_HEADER_NAME}.`);
 
-  await new Promise<void>((resolve, reject) => {
-    app.listen(port, "127.0.0.1", (err?: Error) => {
-      if (err) reject(err);
-      else resolve();
-    });
+  const startupResult = await browserLifecycle.start();
+  if (startupResult.recoveredProfileKeys.length || startupResult.stoppedProfileKeys.length || startupResult.failedProfileKeys.length) {
+    console.error("[BrowserLifecycle] startup reconcile", startupResult);
+  }
+
+  const httpServer = await new Promise<ReturnType<typeof app.listen>>((resolve, reject) => {
+    const listeningServer = app.listen(port, "127.0.0.1");
+    listeningServer.once("error", reject);
+    listeningServer.once("listening", () => resolve(listeningServer));
   });
   console.error(`MCP HTTP server listening on http://127.0.0.1:${port}/mcp (secure-tunnel-only)`);
 
+  let shuttingDown = false;
   const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.error("\n[Server] Shutting down...");
-    process.exit(0);
+    browserLifecycle.stopTimer();
+    const browserOperationsIdle = beginBrowserOperationDrain();
+    void (async () => {
+      return await withShutdownTimeout((async () => {
+        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+        await browserOperationsIdle;
+        return await browserLifecycle.drain();
+      })(), 55_000);
+    })().then((result) => {
+      if (result === "timeout") console.error("[BrowserLifecycle] shutdown drain timed out");
+      else console.error("[BrowserLifecycle] shutdown drain", result);
+    }).catch((error) => console.error("[BrowserLifecycle] shutdown drain failed", error)).finally(() => process.exit(0));
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+}
+
+async function withShutdownTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T | "timeout"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function handleMcpRequest(

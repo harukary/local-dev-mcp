@@ -45,5 +45,7 @@ describe("launchd installer", () => {
     expect(tunnel).toContain("run-with-rotating-log.mjs");
     expect(tunnel).not.toContain("CONTROL_PLANE_API_KEY");
     expect(tunnel).not.toContain("OPENAI_TUNNEL_TOKEN");
+    expect(server).toContain("<key>ExitTimeOut</key>");
+    expect(server).toContain("<integer>60</integer>");
   });
 });

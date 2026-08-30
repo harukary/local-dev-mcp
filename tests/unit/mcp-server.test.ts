@@ -93,11 +93,12 @@ describe("tool schema snapshot", () => {
     const artifactRead = snapshot.tools.find((tool) => tool.name === "artifact.read");
     const artifactReceive = snapshot.tools.find((tool) => tool.name === "artifact.receive");
 
-    expect(snapshot.schema_version).toBe("2026-08-29.5");
+    expect(snapshot.schema_version).toBe("2026-08-30.1");
     expect(names).toContain("tool.schema");
     expect(names).toContain("image.read");
     expect(names).toContain("artifact.read");
     expect(names).toContain("artifact.receive");
+    expect(names).toEqual(expect.arrayContaining(["browser.tab.open", "browser.tab.use", "browser.tab.close"]));
     expect(names).not.toContain("image.show");
     expect(names).not.toContain("download.link");
 
@@ -122,5 +123,7 @@ describe("tool schema snapshot", () => {
     for (const tool of snapshot.tools.filter((candidate) => candidate.name.startsWith("browser."))) {
       expect(tool.inputSchema).not.toHaveProperty("properties.session_id");
     }
+    expect(snapshot.tools.find((tool) => tool.name === "browser.tab.use")?.inputSchema).toMatchObject({ required: ["target_id"] });
+    expect(snapshot.tools.find((tool) => tool.name === "browser.tab.close")?.annotations).toMatchObject({ destructiveHint: true });
   });
 });

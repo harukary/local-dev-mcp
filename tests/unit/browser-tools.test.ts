@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { browserSessionIdForContext, handleBrowserOpen, handleBrowserStart } from "../../src/mcp/tools/browser.js";
+import { browserSessionIdForContext, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse } from "../../src/mcp/tools/browser.js";
 
 const CHAT_ID = "chatgpt-session:chat-a";
 
@@ -84,5 +84,13 @@ describe("browser tools", () => {
 
     expect(result.isError).toBe(true);
     expect(body.error.code).toBe("INVALID_URL");
+  });
+
+  it("requires an explicit target id for tab selection and close", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-browser-"));
+    const ctx = createContext(createProject(tmpRoot));
+
+    expect(payload(await handleBrowserTabUse(ctx, CHAT_ID)).error.code).toBe("MISSING_TARGET_ID");
+    expect(payload(await handleBrowserTabClose(ctx, CHAT_ID)).error.code).toBe("MISSING_TARGET_ID");
   });
 });

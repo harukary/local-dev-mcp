@@ -1,14 +1,17 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import { createServer } from "node:net";
 import type { AppContext } from "../server.js";
 import type { ProjectConfig } from "../../types.js";
-import { BrowserProfileError, BrowserProfileManager, browserProfileKey, type AuthClaimInput } from "../../browser/profile-manager.js";
+import { BrowserProfileError, BrowserProfileManager, browserProfileKey, type AuthClaimInput, type BrowserLease } from "../../browser/profile-manager.js";
 import { loadLiveAuthProbeConfiguration, runLiveAuthProbes, type LiveAuthProbe } from "../../browser/auth-probes.js";
+import { BrowserLifecycleService, browserIdleTimeoutMsFromEnv, type BrowserStopReason } from "../../browser/browser-lifecycle.js";
+import { ActiveTabStore } from "../../browser/active-tab-store.js";
+import { BrowserOperationCoordinator } from "../../browser/browser-operation-coordinator.js";
 
 const MACOS_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const MACOS_CHROMIUM = "/Applications/Chromium.app/Contents/MacOS/Chromium";
@@ -19,7 +22,18 @@ const SESSION_FILE = join(BROWSER_HOME, "sessions.json");
 const DEFAULT_SESSION_ID = "default";
 const DEFAULT_PROFILE_DIR = join(BROWSER_HOME, "profiles", DEFAULT_SESSION_ID);
 const AUTH_PROBE_CONFIG = process.env.LOCAL_DEV_MCP_BROWSER_AUTH_PROBES ?? join(process.cwd(), "config", "browser-auth-probes.yaml");
+const ACTIVE_TABS_DIR = join(BROWSER_HOME, "active-tabs");
 const BROWSER_INSTANCE_ID = randomUUID();
+const browserOperations = new BrowserOperationCoordinator(join(BROWSER_HOME, "operation-locks"));
+const activeTabs = new ActiveTabStore(ACTIVE_TABS_DIR, browserOperations);
+
+export async function runBrowserToolOperation<T>(chatContextId: string, operation: () => Promise<T>): Promise<T> {
+  return await browserOperations.run(browserProfileKey(chatContextId), operation);
+}
+
+export async function beginBrowserOperationDrain(): Promise<void> {
+  await browserOperations.beginDrain();
+}
 
 type BrowserObserve = "none" | "after";
 type BrowserWaitFor = { selector?: string; text?: string; url_contains?: string; title_contains?: string; timeout_ms?: number };
@@ -34,6 +48,7 @@ type BrowserSession = {
   created_at: string;
   updated_at: string;
   url?: string;
+  active_target_id?: string;
 };
 
 type ChromeTarget = {
@@ -49,6 +64,10 @@ type JsonResult = {
   structuredContent: unknown;
   content: [{ type: "text"; text: string }, ...ImageContent[]];
 };
+
+class BrowserTabError extends Error {
+  constructor(public readonly code: string, message: string) { super(message); }
+}
 
 function jsonResult(value: unknown, imageContent: ImageContent[] = []): JsonResult {
   return {
@@ -69,6 +88,24 @@ function jsonError(code: string, message: string, details?: unknown) {
     content: [{ type: "text", text: JSON.stringify({ error: { code, message, details } }, null, 2) }],
     isError: true,
   };
+}
+
+function tabError(error: unknown, fallbackCode: string, details?: unknown) {
+  return error instanceof BrowserTabError
+    ? jsonError(error.code, error.message, details)
+    : jsonError(fallbackCode, error instanceof Error ? error.message : String(error), details);
+}
+
+async function readActiveTargetId(profileKey: string): Promise<string | undefined> {
+  return await activeTabs.read(profileKey);
+}
+
+async function writeActiveTargetId(profileKey: string, targetId: string): Promise<void> {
+  await activeTabs.write(profileKey, targetId);
+}
+
+async function clearActiveTargetId(profileKey: string, expectedTargetId?: string): Promise<boolean> {
+  return await activeTabs.clear(profileKey, expectedTargetId);
 }
 
 function activeProjectId(ctx: AppContext, chatContextId: string): string | undefined {
@@ -271,11 +308,24 @@ async function newTarget(port: number, url = "about:blank"): Promise<ChromeTarge
   return await response.json() as ChromeTarget;
 }
 
-async function pickPageTarget(port: number): Promise<ChromeTarget> {
-  const targets = await listTargets(port);
-  const page = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl);
-  if (page) return page;
-  return await newTarget(port);
+async function closeTarget(port: number, targetId: string): Promise<void> {
+  const endpoint = `http://127.0.0.1:${port}/json/close/${encodeURIComponent(targetId)}`;
+  const response = await fetch(endpoint);
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}: close target`);
+}
+
+async function waitForOnlyPageTarget(port: number, targetId: string, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const pageTargetIds = (await listTargets(port)).filter((target) => target.type === "page").map((target) => target.id);
+    if (pageTargetIds.length === 1 && pageTargetIds[0] === targetId) return;
+    await sleep(50);
+  }
+  throw new Error("Chrome retained redundant initial page targets.");
+}
+
+async function findPageTarget(port: number, targetId: string): Promise<ChromeTarget | undefined> {
+  return (await listTargets(port)).find((target) => target.id === targetId && target.type === "page" && target.webSocketDebuggerUrl);
 }
 
 async function getSession(ctx: AppContext, chatContextId: string, sessionId?: string): Promise<BrowserSession | { error: ReturnType<typeof jsonError> }> {
@@ -302,6 +352,7 @@ async function getSession(ctx: AppContext, chatContextId: string, sessionId?: st
       pid: profile.pid,
       created_at: profile.lastUsedAt,
       updated_at: new Date().toISOString(),
+      active_target_id: await readActiveTargetId(profile.profileKey),
     };
   } catch (err) {
     return { error: jsonError("BROWSER_SESSION_NOT_READY", err instanceof Error ? err.message : String(err), { port: profile.port }) };
@@ -362,9 +413,23 @@ class CdpClient {
   }
 }
 
-async function withPage<T>(port: number, fn: (client: CdpClient, target: ChromeTarget) => Promise<T>): Promise<T> {
-  const target = await pickPageTarget(port);
-  if (!target.webSocketDebuggerUrl) throw new Error("No CDP websocket URL for page target");
+async function validateActiveTarget(session: BrowserSession): Promise<ChromeTarget> {
+  return await activeTabs.transaction(session.session_id, async ({ read, clear }) => {
+    const targetId = await read();
+    if (!targetId) throw new BrowserTabError("BROWSER_ACTIVE_TAB_NOT_SELECTED", "No active browser tab is selected. Call browser.tabs and browser.tab.use, or browser.tab.open.");
+    const target = await findPageTarget(session.port, targetId);
+    if (!target) {
+      await clear();
+      throw new BrowserTabError("BROWSER_ACTIVE_TAB_NOT_FOUND", "The selected browser tab no longer exists. Call browser.tabs and select another tab.");
+    }
+    session.active_target_id = targetId;
+    return target;
+  });
+}
+
+async function withPage<T>(session: BrowserSession, fn: (client: CdpClient, target: ChromeTarget) => Promise<T>): Promise<T> {
+  const target = await validateActiveTarget(session);
+  if (!target.webSocketDebuggerUrl) throw new BrowserTabError("BROWSER_TAB_NOT_FOUND", "The selected browser tab has no CDP endpoint.");
   const client = new CdpClient(target.webSocketDebuggerUrl);
   await client.connect();
   try {
@@ -375,8 +440,8 @@ async function withPage<T>(port: number, fn: (client: CdpClient, target: ChromeT
 }
 
 
-async function evaluate<T = unknown>(port: number, expression: string): Promise<T> {
-  return await withPage<T>(port, async (client) => {
+async function evaluate<T = unknown>(session: BrowserSession, expression: string): Promise<T> {
+  return await withPage<T>(session, async (client) => {
     await client.send("Runtime.enable");
     const result = await client.send<{
       result?: { value?: T; unserializableValue?: string; description?: string };
@@ -438,14 +503,49 @@ async function observeAuthProbe(port: number, probe: LiveAuthProbe): Promise<{ s
   }
 }
 
-async function waitForProcessExit(pid: number | undefined, timeoutMs: number): Promise<void> {
+async function waitForProcessExit(pid: number | undefined, timeoutMs: number, force = true): Promise<void> {
   if (!pid) return;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && isPidAlive(pid)) await sleep(100);
-  if (isPidAlive(pid)) {
+  if (force && isPidAlive(pid)) {
     try { process.kill(pid, "SIGKILL"); } catch { /* ignore */ }
     await sleep(100);
   }
+}
+
+async function closeBrowserProcess(port: number, pid: number): Promise<void> {
+  let browserCloseSent = false;
+  try {
+    const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(`http://127.0.0.1:${port}/json/version`);
+    if (version.webSocketDebuggerUrl) {
+      const client = new CdpClient(version.webSocketDebuggerUrl);
+      await client.connect();
+      try {
+        await client.send("Browser.close");
+        browserCloseSent = true;
+      } finally { client.close(); }
+    }
+  } catch {
+    if (isPidAlive(pid)) {
+      throw new BrowserProfileError(
+        "BROWSER_STOP_OWNERSHIP_UNVERIFIED",
+        "Chrome DevTools is unreachable, so the recorded PID will not be terminated without an ownership proof.",
+      );
+    }
+    return;
+  }
+  if (!browserCloseSent) throw new BrowserProfileError("BROWSER_STOP_FAILED", "Chrome did not expose a browser CDP endpoint.");
+  await waitForProcessExit(pid, 5000, false);
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    try {
+      await fetchJson(`http://127.0.0.1:${port}/json/version`);
+      await sleep(100);
+    } catch {
+      return;
+    }
+  }
+  throw new BrowserProfileError("BROWSER_STOP_FAILED", "Chrome DevTools remained reachable after browser shutdown.");
 }
 
 async function validatePromotionSnapshot(
@@ -496,11 +596,12 @@ async function activeSessionAndProject(ctx: AppContext, chatContextId: string, s
   if ("error" in project) return project;
   const session = await ensureSession(ctx, chatContextId, undefined, sessionId);
   if ("error" in session) return session;
+  try { await validateActiveTarget(session); } catch (error) { return { error: tabError(error, "BROWSER_ACTIVE_TAB_FAILED") }; }
   return { project, session };
 }
 
 async function captureCdpScreenshot(ctx: AppContext, chatContextId: string, project: ProjectConfig, session: BrowserSession, action: string, extra: Record<string, unknown> = {}) {
-  const result = await withPage<{ data: string }>(session.port, async (client) => {
+  const result = await withPage<{ data: string }>(session, async (client) => {
     await client.send("Page.enable");
     return await client.send<{ data: string }>("Page.captureScreenshot", { format: "png", fromSurface: true });
   });
@@ -614,15 +715,22 @@ export async function handleBrowserStart(ctx: AppContext, chatContextId: string,
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-background-networking",
-    url ?? "about:blank",
+    "about:blank",
   ], { detached: true, stdio: "ignore" });
   child.unref();
   let version;
   try {
     version = await waitForCdp(port, 10_000);
+    const activeTarget = await newTarget(port, url ?? "about:blank");
+    if (activeTarget.type !== "page") throw new Error("Chrome did not create a page target.");
+    const redundantTargets = (await listTargets(port)).filter((target) => target.type === "page" && target.id !== activeTarget.id);
+    await Promise.all(redundantTargets.map((target) => closeTarget(port, target.id)));
+    await waitForOnlyPageTarget(port, activeTarget.id);
+    await writeActiveTargetId(profile.profileKey, activeTarget.id);
     await manager.markRunning(profile.profileKey, { instanceId: BROWSER_INSTANCE_ID, pid: child.pid ?? 0, port });
   } catch (error) {
     if (child.pid) try { process.kill(child.pid); } catch { /* ignore */ }
+    await clearActiveTargetId(profile.profileKey);
     await manager.markIdle(profile.profileKey);
     return jsonError("BROWSER_START_FAILED", error instanceof Error ? error.message : String(error), { port });
   }
@@ -670,42 +778,82 @@ export async function handleBrowserStop(ctx: AppContext, chatContextId: string, 
     return profileError(error);
   }
   if (profile.state !== "running" || !profile.port) return jsonError("BROWSER_SESSION_NOT_FOUND", "No browser session found. Call browser.start first.");
-  const probeConfig = await loadLiveAuthProbeConfiguration(AUTH_PROBE_CONFIG);
-  const probes = probeConfig.probes;
   if (!profile.instanceId || !profile.pid) return jsonError("BROWSER_PROFILE_STATE_INVALID", "The running browser lease is incomplete.");
-  const lease = { instanceId: profile.instanceId, pid: profile.pid, port: profile.port };
+  const lease: BrowserLease = {
+    instanceId: profile.instanceId,
+    pid: profile.pid,
+    port: profile.port,
+    startedAt: profile.leaseStartedAt ?? "",
+  };
   try {
-    await manager.beginCheckpoint(profile.profileKey, lease);
+    const stopped = await stopManagedBrowserProfile(profile.profileKey, lease, "explicit_stop");
+    return jsonResult({ ok: true, action: "browser.stop", ...stopped });
   } catch (error) {
     return profileError(error);
   }
-  const claims = await runLiveAuthProbes(probes, (probe) => observeAuthProbe(profile.port!, probe));
+}
+
+type ManagedBrowserStopReason = BrowserStopReason | "explicit_stop";
+
+export async function stopManagedBrowserProfile(
+  profileKey: string,
+  expectedLease: BrowserLease,
+  reason: ManagedBrowserStopReason,
+  expectedLastUsedAt?: string,
+) {
+  return await browserOperations.run(profileKey, () => stopManagedBrowserProfileExclusive(
+    profileKey,
+    expectedLease,
+    reason,
+    expectedLastUsedAt,
+  ), true);
+}
+
+async function stopManagedBrowserProfileExclusive(
+  profileKey: string,
+  expectedLease: BrowserLease,
+  reason: ManagedBrowserStopReason,
+  expectedLastUsedAt?: string,
+) {
+  const manager = await profileManager();
+  const profile = await manager.getManagedProfile(profileKey);
+  if (profile.state === "idle" && !profile.port && !profile.pid) return { stopped: true, reason: "already_stopped" };
+  if (!profile.port || !profile.pid || !profile.instanceId) {
+    throw new BrowserProfileError("BROWSER_PROFILE_STATE_INVALID", "The running browser lease is incomplete.");
+  }
+  const lease = expectedLease;
+  const probeConfig = await loadLiveAuthProbeConfiguration(AUTH_PROBE_CONFIG);
+  const probes = probeConfig.probes;
+  if (profile.state === "running") {
+    const started = await manager.beginCheckpoint(profileKey, lease, expectedLastUsedAt);
+    if (!started) return { stopped: false, reason: "recent_activity" };
+  }
+  else if (profile.state === "checkpointing") {
+    await manager.assertCheckpointLease(profileKey, lease);
+  } else {
+    throw new BrowserProfileError("BROWSER_PROFILE_BUSY", "Browser profile is not available for checkpointing.");
+  }
+  const claims = await runLiveAuthProbes(probes, (probe) => observeAuthProbe(lease.port, probe));
   try {
-    const targets = await listTargets(profile.port);
-    await Promise.all(targets.filter((target) => target.type === "page").map((target) => fetchJson(`http://127.0.0.1:${profile.port}/json/close/${target.id}`).catch(() => undefined)));
+    const targets = await listTargets(lease.port);
+    await Promise.all(targets.filter((target) => target.type === "page").map((target) => fetchJson(`http://127.0.0.1:${lease.port}/json/close/${target.id}`).catch(() => undefined)));
   } catch {
     // Fall back to terminating the owned browser process.
   }
-  if (profile.pid) {
-    try { process.kill(profile.pid, "SIGTERM"); } catch { /* ignore */ }
-  }
-  await waitForProcessExit(profile.pid, 5000);
-  try {
-    await manager.finishCheckpoint(profile.profileKey, lease, claims);
-  } catch (error) {
-    return profileError(error);
-  }
+  await closeBrowserProcess(lease.port, lease.pid);
+  await clearActiveTargetId(profileKey);
+  await manager.finishCheckpoint(profileKey, lease, claims);
   const chrome = resolveChromeExecutable();
   const promotion = chrome.executable_path
     ? await manager.promoteIfDominant(
-      profile.profileKey,
+      profileKey,
       (userDataDir) => validatePromotionSnapshot(chrome.executable_path!, userDataDir, probes, claims),
     )
     : { promoted: false, reason: "snapshot_validation_unavailable" };
   const gc = await manager.collectGarbage();
-  return jsonResult({
-    ok: true,
-    action: "browser.stop",
+  return {
+    stopped: true,
+    reason,
     profile_retained: true,
     auth_probes_checked: probes.length,
     auth_probe_config_status: probeConfig.status,
@@ -713,6 +861,14 @@ export async function handleBrowserStop(ctx: AppContext, chatContextId: string, 
     promotion_reason: promotion.reason,
     snapshot_verification: promotion.snapshotVerification,
     garbage_collected_profiles: gc.deletedProfileKeys.length,
+  };
+}
+
+export async function createBrowserLifecycleService(): Promise<BrowserLifecycleService> {
+  return new BrowserLifecycleService({
+    manager: await profileManager(),
+    stopManagedBrowserProfile,
+    idleTimeoutMs: browserIdleTimeoutMsFromEnv(),
   });
 }
 
@@ -721,6 +877,7 @@ export async function handleBrowserScreenshot(ctx: AppContext, chatContextId: st
   if ("error" in project) return project.error;
   const session = await ensureSession(ctx, chatContextId, undefined, args.session_id);
   if ("error" in session) return session.error;
+  try { await validateActiveTarget(session); } catch (error) { return tabError(error, "BROWSER_ACTIVE_TAB_FAILED", { port: session.port }); }
   try {
     return await captureCdpScreenshot(ctx, chatContextId, project, session, "browser.screenshot");
   } catch (err) {
@@ -741,8 +898,9 @@ export async function handleBrowserOpen(
   if (!url) return jsonError("INVALID_URL", "browser.open requires an http or https URL.");
   const session = await ensureSession(ctx, chatContextId, url, args.session_id);
   if ("error" in session) return session.error;
+  try { await validateActiveTarget(session); } catch (error) { return tabError(error, "BROWSER_ACTIVE_TAB_FAILED", { port: session.port }); }
   try {
-    await withPage(session.port, async (client) => {
+    await withPage(session, async (client) => {
       await client.send("Page.enable");
       await client.send("Page.navigate", { url });
       await sleep(Math.min(Math.max(args?.wait_ms ?? (args?.wait_for ? 0 : 1000), 0), 10_000));
@@ -762,16 +920,83 @@ export async function handleBrowserOpen(
 
 
 export async function handleBrowserTabs(ctx: AppContext, chatContextId: string, args: { session_id?: string } = {}) {
-  const selected = await activeSessionAndProject(ctx, chatContextId, args.session_id);
-  if ("error" in selected) return selected.error;
-  const { project, session } = selected;
+  const project = getProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+  const session = await ensureSession(ctx, chatContextId, undefined, args.session_id);
+  if ("error" in session) return session.error;
   try {
-    const tabs = (await listTargets(session.port))
-      .filter((target) => target.type === "page")
-      .map(({ id, type, title, url }) => ({ id, type, title, url }));
-    return jsonResult({ project_id: project.projectId, port: session.port, tabs });
+    return await activeTabs.transaction(session.session_id, async ({ read, clear }) => {
+      const activeTargetId = await read();
+      const tabs = (await listTargets(session.port))
+        .filter((target) => target.type === "page")
+        .map(({ id, type, title, url }) => ({ id, type, title, url, active: id === activeTargetId }));
+      if (activeTargetId && !tabs.some((tab) => tab.active)) await clear();
+      return jsonResult({ project_id: project.projectId, port: session.port, active_target_id: tabs.find((tab) => tab.active)?.id, tabs });
+    });
   } catch (err) {
     return jsonError("BROWSER_TABS_FAILED", err instanceof Error ? err.message : String(err), { port: session.port });
+  }
+}
+
+export async function handleBrowserTabOpen(ctx: AppContext, chatContextId: string, args: { url?: string } = {}) {
+  const project = getProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+  const url = args.url === undefined ? "about:blank" : validateHttpUrl(args.url);
+  if (!url) return jsonError("INVALID_URL", "browser.tab.open url must be http or https.");
+  const session = await ensureSession(ctx, chatContextId);
+  if ("error" in session) return session.error;
+  try {
+    return await activeTabs.transaction(session.session_id, async ({ write }) => {
+      const target = await newTarget(session.port, url);
+      if (target.type !== "page") return jsonError("BROWSER_TAB_OPEN_FAILED", "Chrome did not create a page target.");
+      await write(target.id);
+      await (await profileManager()).touch(session.session_id);
+      return jsonResult({ ok: true, project_id: project.projectId, action: "browser.tab.open", port: session.port, active_target_id: target.id, tab: { id: target.id, type: target.type, title: target.title, url: target.url, active: true } });
+    });
+  } catch (error) {
+    return tabError(error, "BROWSER_TAB_OPEN_FAILED", { port: session.port });
+  }
+}
+
+export async function handleBrowserTabUse(ctx: AppContext, chatContextId: string, args: { target_id?: string } = {}) {
+  const project = getProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+  if (!args.target_id) return jsonError("MISSING_TARGET_ID", "browser.tab.use requires target_id.");
+  const session = await ensureSession(ctx, chatContextId);
+  if ("error" in session) return session.error;
+  try {
+    return await activeTabs.transaction(session.session_id, async ({ write }) => {
+      const target = await findPageTarget(session.port, args.target_id!);
+      if (!target) return jsonError("BROWSER_TAB_NOT_FOUND", "The requested browser tab does not exist.", { target_id: args.target_id });
+      const response = await fetch(`http://127.0.0.1:${session.port}/json/activate/${encodeURIComponent(target.id)}`);
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}: activate target`);
+      await write(target.id);
+      await (await profileManager()).touch(session.session_id);
+      return jsonResult({ ok: true, project_id: project.projectId, action: "browser.tab.use", port: session.port, active_target_id: target.id });
+    });
+  } catch (error) {
+    return tabError(error, "BROWSER_TAB_USE_FAILED", { port: session.port, target_id: args.target_id });
+  }
+}
+
+export async function handleBrowserTabClose(ctx: AppContext, chatContextId: string, args: { target_id?: string } = {}) {
+  const project = getProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+  if (!args.target_id) return jsonError("MISSING_TARGET_ID", "browser.tab.close requires target_id.");
+  const session = await ensureSession(ctx, chatContextId);
+  if ("error" in session) return session.error;
+  try {
+    return await activeTabs.transaction(session.session_id, async ({ read, clear }) => {
+      const target = await findPageTarget(session.port, args.target_id!);
+      if (!target) return jsonError("BROWSER_TAB_NOT_FOUND", "The requested browser tab does not exist.", { target_id: args.target_id });
+      await closeTarget(session.port, target.id);
+      const activeTargetId = await read();
+      if (activeTargetId === target.id) await clear();
+      await (await profileManager()).touch(session.session_id);
+      return jsonResult({ ok: true, project_id: project.projectId, action: "browser.tab.close", port: session.port, closed_target_id: target.id, active_target_id: activeTargetId === target.id ? undefined : activeTargetId });
+    });
+  } catch (error) {
+    return tabError(error, "BROWSER_TAB_CLOSE_FAILED", { port: session.port, target_id: args.target_id });
   }
 }
 
@@ -789,7 +1014,7 @@ export async function handleBrowserDom(ctx: AppContext, chatContextId: string, a
       outerHTML?: string;
       title: string;
       url: string;
-    }>(session.port, `(() => {
+    }>(session, `(() => {
       const selector = ${jsString(selector)};
       const element = document.querySelector(selector);
       return {
@@ -831,7 +1056,7 @@ export async function handleBrowserSelectors(ctx: AppContext, chatContextId: str
         visible: boolean;
         rect: { x: number; y: number; width: number; height: number };
       }>;
-    }>(session.port, `(() => {
+    }>(session, `(() => {
       const limit = ${Number(limit)};
       const query = ${jsString(query)};
       const cssEscape = globalThis.CSS?.escape || ((value) => String(value).replace(/[^a-zA-Z0-9_-]/g, "\\\\$&"));
@@ -900,7 +1125,7 @@ export async function handleBrowserClick(ctx: AppContext, chatContextId: string,
       text?: string;
       title: string;
       url: string;
-    }>(session.port, `(() => {
+    }>(session, `(() => {
       const selector = ${jsString(selector)};
       const element = document.querySelector(selector);
       if (!element) return { selector, found: false, title: document.title, url: location.href };
@@ -943,7 +1168,7 @@ export async function handleBrowserType(ctx: AppContext, chatContextId: string, 
       submitted?: boolean;
       title: string;
       url: string;
-    }>(session.port, `(() => {
+    }>(session, `(() => {
       const selector = ${jsString(selector)};
       const text = ${jsString(args.text)};
       const submit = ${args.submit ? "true" : "false"};
@@ -1001,7 +1226,7 @@ export async function handleBrowserWait(ctx: AppContext, chatContextId: string, 
         titleContainsFound?: boolean;
         title: string;
         url: string;
-      }>(session.port, `(() => {
+      }>(session, `(() => {
         const selector = ${jsString(args.selector ?? "")};
         const text = ${jsString(args.text ?? "")};
         const urlContains = ${jsString(args.url_contains ?? "")};
@@ -1036,8 +1261,8 @@ export async function handleBrowserEval(ctx: AppContext, chatContextId: string, 
   const { project, session } = selected;
   if (!args.expression) return jsonError("MISSING_EXPRESSION", "browser.eval requires expression.");
   try {
-    const value = await evaluate<unknown>(session.port, args.expression);
-    const page = await evaluate<{ title: string; url: string }>(session.port, `(() => ({ title: document.title, url: location.href }))()`);
+    const value = await evaluate<unknown>(session, args.expression);
+    const page = await evaluate<{ title: string; url: string }>(session, `(() => ({ title: document.title, url: location.href }))()`);
     return jsonResult({ ok: true, project_id: project.projectId, action: "browser.eval", port: session.port, result: value, ...page });
   } catch (err) {
     return jsonError("BROWSER_EVAL_FAILED", err instanceof Error ? err.message : String(err), { port: session.port });
@@ -1076,7 +1301,7 @@ export async function handleBrowserPress(ctx: AppContext, chatContextId: string,
   if (!args.key) return jsonError("MISSING_KEY", "browser.press requires key.");
   try {
     if (args.selector) {
-      const focused = await evaluate<{ selector: string; found: boolean }>(session.port, `(() => {
+      const focused = await evaluate<{ selector: string; found: boolean }>(session, `(() => {
         const selector = ${jsString(args.selector)};
         const element = document.querySelector(selector);
         if (!element) return { selector, found: false };
@@ -1087,12 +1312,12 @@ export async function handleBrowserPress(ctx: AppContext, chatContextId: string,
       if (!focused.found) return jsonError("SELECTOR_NOT_FOUND", `No element found for selector: ${args.selector}`, { selector: args.selector, port: session.port });
     }
     const event = keyEventFor(args.key);
-    await withPage(session.port, async (client) => {
+    await withPage(session, async (client) => {
       await client.send("Input.dispatchKeyEvent", { type: "keyDown", ...event });
       await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...event });
     });
     await sleep(Math.min(Math.max(args.wait_ms ?? 500, 0), 10_000));
-    const page = await evaluate<{ title: string; url: string }>(session.port, `(() => ({ title: document.title, url: location.href }))()`);
+    const page = await evaluate<{ title: string; url: string }>(session, `(() => ({ title: document.title, url: location.href }))()`);
     if (args.observe === "none") return jsonResult({ ok: true, project_id: project.projectId, action: "browser.press", port: session.port, key: args.key, selector: args.selector, ...page });
     return await captureCdpScreenshot(ctx, chatContextId, project, session, "browser.press", { key: args.key, selector: args.selector, ...page });
   } catch (err) {
@@ -1105,12 +1330,12 @@ export async function handleBrowserReload(ctx: AppContext, chatContextId: string
   if ("error" in selected) return selected.error;
   const { project, session } = selected;
   try {
-    await withPage(session.port, async (client) => {
+    await withPage(session, async (client) => {
       await client.send("Page.enable");
       await client.send("Page.reload", { ignoreCache: false });
     });
     await sleep(Math.min(Math.max(args.wait_ms ?? 1000, 0), 10_000));
-    const page = await evaluate<{ title: string; url: string }>(session.port, `(() => ({ title: document.title, url: location.href }))()`);
+    const page = await evaluate<{ title: string; url: string }>(session, `(() => ({ title: document.title, url: location.href }))()`);
     if (args.observe === "none") return jsonResult({ ok: true, project_id: project.projectId, action: "browser.reload", port: session.port, ...page });
     return await captureCdpScreenshot(ctx, chatContextId, project, session, "browser.reload", page);
   } catch (err) {
@@ -1129,7 +1354,7 @@ async function navigateHistory(ctx: AppContext, chatContextId: string, args: { s
       entries: Array<{ id: number; url: string; title: string }>;
       targetIndex: number;
       targetEntry?: { id: number; url: string; title: string };
-    }>(session.port, async (client) => {
+    }>(session, async (client) => {
       await client.send("Page.enable");
       const history = await client.send<{ currentIndex: number; entries: Array<{ id: number; url: string; title: string }> }>("Page.getNavigationHistory");
       const targetIndex = direction === "back" ? history.currentIndex - 1 : history.currentIndex + 1;
@@ -1144,7 +1369,7 @@ async function navigateHistory(ctx: AppContext, chatContextId: string, args: { s
       return jsonError("BROWSER_HISTORY_BOUNDARY", `No ${direction} history entry is available.`, { port: session.port, current_index: navigation.currentIndex, entries: navigation.entries.length });
     }
     await sleep(Math.min(Math.max(args.wait_ms ?? 1000, 0), 10_000));
-    const page = await evaluate<{ title: string; url: string }>(session.port, `(() => ({ title: document.title, url: location.href }))()`);
+    const page = await evaluate<{ title: string; url: string }>(session, `(() => ({ title: document.title, url: location.href }))()`);
     const action = direction === "back" ? "browser.back" : "browser.forward";
     const details = { from_index: navigation.currentIndex, to_index: navigation.targetIndex, target_entry: navigation.targetEntry, ...page };
     if (args.observe === "none") return jsonResult({ ok: true, project_id: project.projectId, action, port: session.port, ...details });

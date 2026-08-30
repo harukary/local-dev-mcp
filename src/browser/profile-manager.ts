@@ -21,7 +21,7 @@ export type AuthClaimInput = {
 type StoredAuthClaim = Omit<AuthClaimInput, "principal"> & { principalHash?: string };
 type SnapshotVerification = "structural_only" | "live_auth_reprobe";
 
-type BrowserLease = { instanceId: string; pid: number; port: number; startedAt: string };
+export type BrowserLease = { instanceId: string; pid: number; port: number; startedAt: string };
 
 type ChatProfileManifest = {
   schemaVersion: 1;
@@ -72,6 +72,7 @@ export type ChatProfile = {
   port?: number;
   pid?: number;
   instanceId?: string;
+  leaseStartedAt?: string;
   snapshotBytes: number;
   copyMode: SnapshotCopyMode;
   snapshotVerification: SnapshotVerification;
@@ -198,6 +199,48 @@ export class BrowserProfileManager {
     }
   }
 
+  async listManagedProfiles(): Promise<ChatProfile[]> {
+    const profiles: ChatProfile[] = [];
+    for (const entry of await readdir(this.chatRoot(), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const manifest = await this.readChatManifest(entry.name).catch((error) => {
+        if (error instanceof BrowserProfileError && error.code === "BROWSER_PROFILE_NOT_FOUND") return undefined;
+        throw error;
+      });
+      if (manifest) profiles.push(this.publicProfile(manifest));
+    }
+    return profiles.sort((left, right) => left.profileKey.localeCompare(right.profileKey));
+  }
+
+  async getManagedProfile(profileKey: string): Promise<ChatProfile> {
+    return this.publicProfile(await this.readChatManifest(profileKey));
+  }
+
+  async assertCheckpointLease(profileKey: string, expectedLease: BrowserLease): Promise<void> {
+    await this.withLock(`profile-${profileKey}`, async () => {
+      const manifest = await this.readChatManifest(profileKey);
+      if (manifest.state !== "checkpointing" || !sameLease(manifest.lease, expectedLease)) {
+        throw new BrowserProfileError("BROWSER_PROFILE_BUSY", "Browser profile checkpoint lease changed.");
+      }
+    });
+  }
+
+  async recoverStaleLease(profileKey: string, expectedLease: BrowserLease): Promise<boolean> {
+    return await this.withLock(`profile-${profileKey}`, async () => {
+      const manifest = await this.readChatManifest(profileKey);
+      if (!manifest.lease || !sameLease(manifest.lease, expectedLease)) return false;
+      if (manifest.state !== "running" && manifest.state !== "checkpointing") return false;
+      if (isPidAlive(expectedLease.pid)) return false;
+      const { lease: _lease, ...rest } = manifest;
+      await this.atomicWriteJson(this.chatManifestPath(profileKey), {
+        ...rest,
+        state: "idle",
+        revision: manifest.revision + 1,
+      });
+      return true;
+    });
+  }
+
   async touch(profileKey: string): Promise<void> {
     await this.updateChatManifest(profileKey, (manifest) => ({
       ...manifest,
@@ -208,7 +251,7 @@ export class BrowserProfileManager {
 
   async markRunning(profileKey: string, lease: Omit<BrowserLease, "startedAt">): Promise<void> {
     await this.updateChatManifest(profileKey, (manifest) => {
-      if (manifest.state !== "running" || !sameLease(manifest.lease, lease, true)) {
+      if (manifest.state !== "running" || !sameReservedLease(manifest.lease, lease)) {
         throw new BrowserProfileError("BROWSER_PROFILE_BUSY", "Browser profile lease changed while Chrome was starting.");
       }
       return {
@@ -220,16 +263,24 @@ export class BrowserProfileManager {
     });
   }
 
-  async beginCheckpoint(profileKey: string, lease: Omit<BrowserLease, "startedAt">): Promise<void> {
+  async beginCheckpoint(
+    profileKey: string,
+    lease: BrowserLease,
+    expectedLastUsedAt?: string,
+  ): Promise<boolean> {
+    let started = false;
     await this.updateChatManifest(profileKey, (manifest) => {
       if (manifest.state !== "running" || !sameLease(manifest.lease, lease)) {
         throw new BrowserProfileError("BROWSER_PROFILE_BUSY", "Browser profile lease changed before checkpointing.");
       }
+      if (expectedLastUsedAt !== undefined && manifest.lastUsedAt !== expectedLastUsedAt) return manifest;
+      started = true;
       return { ...manifest, state: "checkpointing", revision: manifest.revision + 1 };
     });
+    return started;
   }
 
-  async finishCheckpoint(profileKey: string, lease: Omit<BrowserLease, "startedAt">, claims: AuthClaimInput[]): Promise<void> {
+  async finishCheckpoint(profileKey: string, lease: BrowserLease, claims: AuthClaimInput[]): Promise<void> {
     const state = await this.readState();
     const stored = this.storeAuthClaims(state.principalSalt, claims);
     await this.updateChatManifest(profileKey, (manifest) => {
@@ -436,6 +487,7 @@ export class BrowserProfileManager {
       port: manifest.lease?.port,
       pid: manifest.lease?.pid,
       instanceId: manifest.lease?.instanceId,
+      leaseStartedAt: manifest.lease?.startedAt,
       snapshotBytes: manifest.snapshotBytes,
       copyMode: manifest.copyMode,
       snapshotVerification: manifest.baseVerification ?? "structural_only",
@@ -598,13 +650,23 @@ function isPidAlive(value: unknown): boolean {
 
 function sameLease(
   current: BrowserLease | undefined,
-  expected: Omit<BrowserLease, "startedAt">,
-  allowReservedPid = false,
+  expected: BrowserLease,
 ): current is BrowserLease {
   return Boolean(current
     && current.instanceId === expected.instanceId
     && current.port === expected.port
-    && (current.pid === expected.pid || (allowReservedPid && current.pid === 0)));
+    && current.startedAt === expected.startedAt
+    && current.pid === expected.pid);
+}
+
+function sameReservedLease(
+  current: BrowserLease | undefined,
+  expected: Omit<BrowserLease, "startedAt">,
+): current is BrowserLease {
+  return Boolean(current
+    && current.instanceId === expected.instanceId
+    && current.port === expected.port
+    && (current.pid === expected.pid || current.pid === 0));
 }
 
 function activeClaims(claims: StoredAuthClaim[], now: Date): StoredAuthClaim[] {

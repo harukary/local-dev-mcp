@@ -96,6 +96,8 @@ write_agent() {
   <true/>
   <key>ThrottleInterval</key>
   <integer>5</integer>
+  <key>ExitTimeOut</key>
+  <integer>60</integer>
   <key>ProcessType</key>
   <string>Background</string>
 </dict>

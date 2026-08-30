@@ -181,12 +181,48 @@ describe("BrowserProfileManager", () => {
     const lease = { instanceId: "test", pid: process.pid, port: 18300 };
     await manager.reservePort(profile.profileKey, { min: 18300, max: 18300 }, lease.instanceId, async () => true);
     await manager.markRunning(profile.profileKey, lease);
-    await manager.beginCheckpoint(profile.profileKey, lease);
+    const running = await manager.getOwnedProfile("chatgpt-session:checkpoint");
+    const fullLease = { ...lease, startedAt: running.leaseStartedAt! };
+    await manager.beginCheckpoint(profile.profileKey, fullLease);
 
     await expect(manager.reservePort(profile.profileKey, { min: 18301, max: 18301 }, "second", async () => true))
       .rejects.toMatchObject({ code: "BROWSER_PROFILE_BUSY" });
-    await manager.finishCheckpoint(profile.profileKey, lease, []);
+    await manager.finishCheckpoint(profile.profileKey, fullLease, []);
     await expect(manager.getOwnedProfile("chatgpt-session:checkpoint")).resolves.toMatchObject({ state: "idle", port: undefined });
+  });
+
+  it("does not checkpoint an idle candidate after a newer browser operation", async () => {
+    const home = await tempRoot("browser-checkpoint-activity-");
+    let now = new Date("2026-08-30T00:00:00.000Z");
+    const manager = new BrowserProfileManager({ home, now: () => now });
+    await manager.initialize();
+    const profile = await manager.ensureChatProfile("chatgpt-session:active-again");
+    const lease = { instanceId: "test", pid: process.pid, port: 18300 };
+    await manager.reservePort(profile.profileKey, { min: 18300, max: 18300 }, lease.instanceId, async () => true);
+    await manager.markRunning(profile.profileKey, lease);
+    const idleCandidate = await manager.getOwnedProfile("chatgpt-session:active-again");
+    const fullLease = { ...lease, startedAt: idleCandidate.leaseStartedAt! };
+    now = new Date("2026-08-30T00:31:00.000Z");
+    await manager.touch(profile.profileKey);
+
+    await expect(manager.beginCheckpoint(profile.profileKey, fullLease, idleCandidate.lastUsedAt)).resolves.toBe(false);
+    await expect(manager.getOwnedProfile("chatgpt-session:active-again")).resolves.toMatchObject({ state: "running" });
+  });
+
+  it("rejects a stale lease even when its instance, PID, and port were reused", async () => {
+    const home = await tempRoot("browser-checkpoint-lease-aba-");
+    const manager = new BrowserProfileManager({ home });
+    await manager.initialize();
+    const profile = await manager.ensureChatProfile("chatgpt-session:lease-aba");
+    const lease = { instanceId: "test", pid: process.pid, port: 18300 };
+    await manager.reservePort(profile.profileKey, { min: 18300, max: 18300 }, lease.instanceId, async () => true);
+    await manager.markRunning(profile.profileKey, lease);
+
+    await expect(manager.beginCheckpoint(profile.profileKey, {
+      ...lease,
+      startedAt: "2026-08-29T00:00:00.000Z",
+    })).rejects.toMatchObject({ code: "BROWSER_PROFILE_BUSY" });
+    await expect(manager.getOwnedProfile("chatgpt-session:lease-aba")).resolves.toMatchObject({ state: "running" });
   });
 
   it("requires snapshot validation when supplied and refreshes claims after six hours", async () => {
