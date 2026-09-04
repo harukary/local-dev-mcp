@@ -155,10 +155,23 @@ async function createAppContext(configPath: string): Promise<AppContext> {
   return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics };
 }
 
+export const SERVER_INSTRUCTIONS = `
+For substantive work on a project:
+1. Ensure the target project is selected before using project-scoped tools.
+2. Call skills.list once for the selected project near the start of the work.
+3. Inspect the returned skill names and descriptions.
+4. If a skill is relevant to the task, call skills.read for that exact SKILL.md before applying its workflow.
+5. Do not read unrelated skills.
+6. Do not call skills.list again unless the selected project changes, the Skills runtime is reloaded, or the available Skills may otherwise have changed.
+`.trim();
+
 export function createMcpServer(ctx: AppContext): Server {
   const server = new Server(
     { name: "local-dev-mcp", version: "0.1.0" },
-    { capabilities: { tools: { listChanged: true }, resources: {} } }
+    {
+      capabilities: { tools: { listChanged: true }, resources: {} },
+      instructions: SERVER_INSTRUCTIONS,
+    }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
