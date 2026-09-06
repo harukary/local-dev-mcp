@@ -14,13 +14,15 @@ Runs the official OpenAI tunnel-client against the loopback local-dev-mcp endpoi
 Configuration may be supplied through environment variables or private files.
 
 Required:
+  LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID or LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID_FILE
   LOCAL_DEV_MCP_OPENAI_TUNNEL_ID or LOCAL_DEV_MCP_OPENAI_TUNNEL_ID_FILE
   LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY or LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE
   LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN or LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE
 
-Defaults for file-backed service operation:
-  ~/.local-dev-mcp/openai-tunnel/tunnel-id
-  ~/.local-dev-mcp/openai-tunnel/runtime-api-key
+Defaults for Personal file-backed service operation:
+  ~/.local-dev-mcp/openai-tunnel-personal/organization-id
+  ~/.local-dev-mcp/openai-tunnel-personal/tunnel-id
+  ~/.openai-tunnels/personal/runtime-api-key
   ~/.local-dev-mcp/openai-tunnel/mcp-token
 
 Optional:
@@ -40,10 +42,11 @@ if [ "$#" -ne 0 ]; then
 fi
 
 PORT="${PORT:-3456}"
-STATE_DIR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR:-$HOME/.local-dev-mcp/openai-tunnel}"
+STATE_DIR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR:-$HOME/.local-dev-mcp/openai-tunnel-personal}"
+DEFAULT_ORGANIZATION_ID_FILE="$STATE_DIR/organization-id"
 DEFAULT_TUNNEL_ID_FILE="$STATE_DIR/tunnel-id"
-DEFAULT_API_KEY_FILE="$STATE_DIR/runtime-api-key"
-DEFAULT_MCP_TOKEN_FILE="$STATE_DIR/mcp-token"
+DEFAULT_API_KEY_FILE="$HOME/.openai-tunnels/personal/runtime-api-key"
+DEFAULT_MCP_TOKEN_FILE="$HOME/.local-dev-mcp/openai-tunnel/mcp-token"
 HEALTH_ADDR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR:-127.0.0.1:3460}"
 STARTUP_WAIT="${LOCAL_DEV_MCP_OPENAI_TUNNEL_STARTUP_WAIT:-30s}"
 LOG_LEVEL="${LOCAL_DEV_MCP_OPENAI_TUNNEL_LOG_LEVEL:-info}"
@@ -71,6 +74,16 @@ TUNNEL_ID="${LOCAL_DEV_MCP_OPENAI_TUNNEL_ID:-}"
 TUNNEL_ID_FILE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_ID_FILE:-$DEFAULT_TUNNEL_ID_FILE}"
 if [ -z "$TUNNEL_ID" ]; then
   TUNNEL_ID="$(read_trimmed_file "$TUNNEL_ID_FILE" || true)"
+fi
+
+ORGANIZATION_ID="${LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID:-}"
+ORGANIZATION_ID_FILE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID_FILE:-$DEFAULT_ORGANIZATION_ID_FILE}"
+if [ -z "$ORGANIZATION_ID" ]; then
+  ORGANIZATION_ID="$(read_trimmed_file "$ORGANIZATION_ID_FILE" || true)"
+fi
+if [[ ! "$ORGANIZATION_ID" =~ ^org-[A-Za-z0-9]+$ ]]; then
+  echo "[openai-tunnel] Organization ID is required and must start with org-." >&2
+  exit 1
 fi
 if [[ ! "$TUNNEL_ID" =~ ^tunnel_[0-9a-f]{32}$ ]]; then
   echo "[openai-tunnel] Tunnel ID is required and must match tunnel_<32 lowercase hex chars>." >&2
@@ -118,6 +131,7 @@ if [ -z "$TUNNEL_CLIENT_BIN" ] || [ ! -x "$TUNNEL_CLIENT_BIN" ]; then
 fi
 
 COMMON_ARGS=(
+  --control-plane.organization-id "$ORGANIZATION_ID"
   --control-plane.tunnel-id "$TUNNEL_ID"
   --control-plane.api-key "$API_KEY_REF"
   --mcp.server-url "http://127.0.0.1:$PORT/mcp"

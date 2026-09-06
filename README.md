@@ -180,41 +180,49 @@ Set `LOCAL_DEV_MCP_TUNNEL_CLIENT_VERSION` only when a release must be pinned exp
 
 ### Private state
 
-The canonical private state directory is:
+Tunnel state is split by ChatGPT context. Personal and Business Tunnel clients can point at the same loopback MCP server while keeping their OpenAI control-plane state separate:
 
 ```text
-~/.local-dev-mcp/openai-tunnel/
-├─ tunnel-id
-├─ runtime-api-key
-└─ mcp-token
+~/.local-dev-mcp/openai-tunnel-personal/
+├─ organization-id
+└─ tunnel-id
+
+~/.local-dev-mcp/openai-tunnel-business/
+├─ organization-id
+└─ tunnel-id
+
+~/.openai-tunnels/personal/runtime-api-key
+~/.openai-tunnels/business/runtime-api-key
+
+~/.local-dev-mcp/openai-tunnel/mcp-token
 ```
 
+- `organization-id` is the OpenAI organization that owns that Tunnel.
 - `tunnel-id` is the Tunnel ID created in OpenAI Platform.
-- `runtime-api-key` is the runtime key used by `tunnel-client`.
-- `mcp-token` is a random local-hop secret used only between `tunnel-client` and `local-dev-mcp`.
+- each `runtime-api-key` belongs to its corresponding Personal or Business control-plane context.
+- `mcp-token` is a shared local-hop secret used only between the Tunnel clients and `local-dev-mcp`. It is intentionally not duplicated per Tunnel.
 
-Recommended permissions:
-
-```bash
-chmod 700 ~/.local-dev-mcp/openai-tunnel
-chmod 600 ~/.local-dev-mcp/openai-tunnel/*
-```
-
-Generate the local-hop token with a cryptographically random value of at least 32 characters. Do not commit these files or paste their values into logs.
+Recommended permissions are `0700` for state directories and `0600` for the files they contain. Do not commit these files or paste secret values into logs.
 
 Environment-variable alternatives are supported for automation:
 
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_ID`
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_ID_FILE`
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY`
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE`
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN`
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_ID` / `_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID` / `_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY` / `_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR`
 - `LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_STARTUP_WAIT`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_LOG_LEVEL`
+
+The direct `scripts/tunnel.sh` defaults are the Personal profile. `scripts/install-launchd.sh` always writes the Personal LaunchAgent and can additionally write the Business LaunchAgent:
+
+```bash
+LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE=1 scripts/install-launchd.sh --install-only
+```
+
+Default health ports are `127.0.0.1:3460` for Personal and `127.0.0.1:3462` for Business.
 
 ### Start and diagnose
 
@@ -261,10 +269,12 @@ The default jobs are:
 
 ```text
 io.local-dev-mcp.server
-io.local-dev-mcp.openai-tunnel
+io.local-dev-mcp.openai-tunnel-personal
 ```
 
-They are separate processes so Tunnel reconnects do not restart the MCP server.
+When `LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE=1` is set during install, `io.local-dev-mcp.openai-tunnel-business` is added. Legacy `io.local-dev-mcp.openai-tunnel` and `io.local-dev-mcp.openai-tunnel-personal-mini` jobs are retired and removed during `--activate`.
+
+The server and Tunnel clients are separate processes, so Tunnel reconnects do not restart the MCP server.
 
 ## Add The Plugin In ChatGPT Developer Mode
 

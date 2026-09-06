@@ -22,6 +22,7 @@ describe("launchd installer", () => {
       cwd: path.resolve("."),
       env: {
         ...process.env,
+        HOME: tempDir,
         LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: tempDir,
         LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: labelPrefix,
         PORT: "13461",
@@ -31,12 +32,16 @@ describe("launchd installer", () => {
 
     expect(result.status).toBe(0);
     const server = readFileSync(path.join(tempDir, `${labelPrefix}.server.plist`), "utf8");
-    const tunnel = readFileSync(path.join(tempDir, `${labelPrefix}.openai-tunnel.plist`), "utf8");
+    const tunnel = readFileSync(path.join(tempDir, `${labelPrefix}.openai-tunnel-personal.plist`), "utf8");
 
     expect(server).toContain("scripts/server.sh");
     expect(server).toContain("logs/mcp-server.log");
     expect(tunnel).toContain("scripts/tunnel.sh");
-    expect(tunnel).toContain("logs/openai-tunnel.log");
+    expect(tunnel).toContain("logs/openai-tunnel-personal.log");
+    expect(tunnel).toContain("<key>LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR</key>");
+    expect(tunnel).toContain(`<string>${tempDir}/.local-dev-mcp/openai-tunnel-personal</string>`);
+    expect(tunnel).toContain(`<string>${tempDir}/.openai-tunnels/personal/runtime-api-key</string>`);
+    expect(tunnel).toContain("<string>127.0.0.1:3460</string>");
     expect(server).toContain("<key>PORT</key>");
     expect(server).toContain("<string>13461</string>");
     expect(tunnel).toContain("<key>PORT</key>");
@@ -44,8 +49,43 @@ describe("launchd installer", () => {
     expect(server).toContain("run-with-rotating-log.mjs");
     expect(tunnel).toContain("run-with-rotating-log.mjs");
     expect(tunnel).not.toContain("CONTROL_PLANE_API_KEY");
-    expect(tunnel).not.toContain("OPENAI_TUNNEL_TOKEN");
+    expect(tunnel).not.toContain("<key>LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN</key>");
     expect(server).toContain("<key>ExitTimeOut</key>");
     expect(server).toContain("<integer>60</integer>");
   });
+
+  it("generates an optional Business Secure MCP Tunnel LaunchAgent", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-launchd-business-"));
+    tempDirs.push(tempDir);
+    const launchAgentsDir = path.join(tempDir, "LaunchAgents");
+    const labelPrefix = "test.local-dev-mcp";
+
+    const result = spawnSync("/bin/bash", [path.resolve("scripts/install-launchd.sh"), "--install-only"], {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: launchAgentsDir,
+        LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: labelPrefix,
+        LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE: "1",
+        PORT: "13461",
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    const businessTunnel = readFileSync(path.join(launchAgentsDir, `${labelPrefix}.openai-tunnel-business.plist`), "utf8");
+
+    expect(businessTunnel).toContain("scripts/tunnel.sh");
+    expect(businessTunnel).toContain("logs/openai-tunnel-business.log");
+    expect(businessTunnel).toContain("<key>LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR</key>");
+    expect(businessTunnel).toContain(`<string>${tempDir}/.local-dev-mcp/openai-tunnel-business</string>`);
+    expect(businessTunnel).toContain("<key>LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE</key>");
+    expect(businessTunnel).toContain(`<string>${tempDir}/.openai-tunnels/business/runtime-api-key</string>`);
+    expect(businessTunnel).toContain("<key>LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE</key>");
+    expect(businessTunnel).toContain(`<string>${tempDir}/.local-dev-mcp/openai-tunnel/mcp-token</string>`);
+    expect(businessTunnel).toContain("<key>LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR</key>");
+    expect(businessTunnel).toContain("<string>127.0.0.1:3462</string>");
+  });
+
 });

@@ -5,7 +5,11 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LAUNCH_AGENTS_DIR="${LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 LABEL_PREFIX="${LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX:-io.local-dev-mcp}"
 SERVER_LABEL="$LABEL_PREFIX.server"
-TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel"
+PERSONAL_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel-personal"
+BUSINESS_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel-business"
+BUSINESS_TUNNEL_ENABLE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE:-0}"
+LEGACY_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel"
+LEGACY_PERSONAL_MINI_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel-personal-mini"
 DOMAIN="gui/$(id -u)"
 MODE="install-only"
 
@@ -37,6 +41,19 @@ xml_escape() {
   printf '%s' "$value"
 }
 
+env_entry() {
+  local key="$1"
+  local value="$2"
+  printf '    <key>%s</key>\n    <string>%s</string>\n' "$(xml_escape "$key")" "$(xml_escape "$value")"
+}
+
+is_enabled() {
+  case "$1" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 NODE_BIN="$(command -v node || true)"
 if [ -z "$NODE_BIN" ]; then
   echo "node is required but was not found in PATH." >&2
@@ -53,13 +70,15 @@ PATH_XML="$(xml_escape "$SERVICE_PATH")"
 NODE_XML="$(xml_escape "$NODE_BIN")"
 PORT_XML="$(xml_escape "$SERVICE_PORT")"
 SERVER_LABEL_XML="$(xml_escape "$SERVER_LABEL")"
-TUNNEL_LABEL_XML="$(xml_escape "$TUNNEL_LABEL")"
+PERSONAL_TUNNEL_LABEL_XML="$(xml_escape "$PERSONAL_TUNNEL_LABEL")"
+BUSINESS_TUNNEL_LABEL_XML="$(xml_escape "$BUSINESS_TUNNEL_LABEL")"
 
 write_agent() {
   local label="$1"
   local label_xml="$2"
   local service_script="$3"
   local log_name="$4"
+  local extra_env_xml="${5:-}"
   local plist="$LAUNCH_AGENTS_DIR/$label.plist"
   local script_xml log_xml
   script_xml="$(xml_escape "$PROJECT_DIR/scripts/$service_script")"
@@ -89,6 +108,7 @@ write_agent() {
     <string>$PATH_XML</string>
     <key>PORT</key>
     <string>$PORT_XML</string>
+$extra_env_xml
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -108,15 +128,38 @@ PLIST
   echo "Installed $plist"
 }
 
+TUNNEL_LABELS=("$PERSONAL_TUNNEL_LABEL")
 write_agent "$SERVER_LABEL" "$SERVER_LABEL_XML" "server.sh" "mcp-server.log"
-write_agent "$TUNNEL_LABEL" "$TUNNEL_LABEL_XML" "tunnel.sh" "openai-tunnel.log"
+
+PERSONAL_TUNNEL_STATE_DIR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_STATE_DIR:-$HOME/.local-dev-mcp/openai-tunnel-personal}"
+PERSONAL_TUNNEL_API_KEY_FILE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_API_KEY_FILE:-$HOME/.openai-tunnels/personal/runtime-api-key}"
+PERSONAL_TUNNEL_TOKEN_FILE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_TOKEN_FILE:-$HOME/.local-dev-mcp/openai-tunnel/mcp-token}"
+PERSONAL_TUNNEL_HEALTH_ADDR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_HEALTH_ADDR:-127.0.0.1:3460}"
+PERSONAL_TUNNEL_EXTRA_ENV="$(env_entry "LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR" "$PERSONAL_TUNNEL_STATE_DIR")"
+PERSONAL_TUNNEL_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE" "$PERSONAL_TUNNEL_API_KEY_FILE")"
+PERSONAL_TUNNEL_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE" "$PERSONAL_TUNNEL_TOKEN_FILE")"
+PERSONAL_TUNNEL_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR" "$PERSONAL_TUNNEL_HEALTH_ADDR")"
+write_agent "$PERSONAL_TUNNEL_LABEL" "$PERSONAL_TUNNEL_LABEL_XML" "tunnel.sh" "openai-tunnel-personal.log" "$PERSONAL_TUNNEL_EXTRA_ENV"
+
+if is_enabled "$BUSINESS_TUNNEL_ENABLE"; then
+  BUSINESS_TUNNEL_STATE_DIR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_STATE_DIR:-$HOME/.local-dev-mcp/openai-tunnel-business}"
+  BUSINESS_TUNNEL_API_KEY_FILE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_API_KEY_FILE:-$HOME/.openai-tunnels/business/runtime-api-key}"
+  BUSINESS_TUNNEL_TOKEN_FILE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_TOKEN_FILE:-$HOME/.local-dev-mcp/openai-tunnel/mcp-token}"
+  BUSINESS_TUNNEL_HEALTH_ADDR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_HEALTH_ADDR:-127.0.0.1:3462}"
+  BUSINESS_TUNNEL_EXTRA_ENV="$(env_entry "LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR" "$BUSINESS_TUNNEL_STATE_DIR")"
+  BUSINESS_TUNNEL_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE" "$BUSINESS_TUNNEL_API_KEY_FILE")"
+  BUSINESS_TUNNEL_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE" "$BUSINESS_TUNNEL_TOKEN_FILE")"
+  BUSINESS_TUNNEL_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR" "$BUSINESS_TUNNEL_HEALTH_ADDR")"
+  write_agent "$BUSINESS_TUNNEL_LABEL" "$BUSINESS_TUNNEL_LABEL_XML" "tunnel.sh" "openai-tunnel-business.log" "$BUSINESS_TUNNEL_EXTRA_ENV"
+  TUNNEL_LABELS+=("$BUSINESS_TUNNEL_LABEL")
+fi
 
 if [ "$MODE" != "activate" ]; then
   echo "LaunchAgents written but not activated."
   exit 0
 fi
 
-for label in "$SERVER_LABEL" "$TUNNEL_LABEL"; do
+for label in "$SERVER_LABEL" "$LEGACY_TUNNEL_LABEL" "$LEGACY_PERSONAL_MINI_TUNNEL_LABEL" "${TUNNEL_LABELS[@]}"; do
   launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
 done
 
@@ -135,5 +178,8 @@ if [ "$healthy" -ne 1 ]; then
   exit 1
 fi
 
-launchctl bootstrap "$DOMAIN" "$LAUNCH_AGENTS_DIR/$TUNNEL_LABEL.plist"
-echo "Activated $SERVER_LABEL and $TUNNEL_LABEL"
+for label in "${TUNNEL_LABELS[@]}"; do
+  launchctl bootstrap "$DOMAIN" "$LAUNCH_AGENTS_DIR/$label.plist"
+done
+rm -f "$LAUNCH_AGENTS_DIR/$LEGACY_TUNNEL_LABEL.plist" "$LAUNCH_AGENTS_DIR/$LEGACY_PERSONAL_MINI_TUNNEL_LABEL.plist"
+echo "Activated $SERVER_LABEL and ${TUNNEL_LABELS[*]}"

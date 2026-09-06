@@ -117,7 +117,7 @@ print(json.dumps(out))
 describe("haruclaw Todo MCP tools", () => {
   it("publishes the dedicated Todo tool surface", () => {
     const names = buildToolDefinitions().map((tool) => tool.name);
-    expect(TOOL_SCHEMA_VERSION).toBe("2026-08-30.1");
+    expect(TOOL_SCHEMA_VERSION).toBe("2026-09-06.1");
     expect(names).toEqual(expect.arrayContaining([
       "todo.projects",
       "todo.list",
@@ -134,7 +134,7 @@ describe("haruclaw Todo MCP tools", () => {
     const deletion = buildToolDefinitions().find((tool) => tool.name === "todo.delete");
     expect(deletion?.annotations).toMatchObject({ destructiveHint: true });
     const shellRun = buildToolDefinitions().find((tool) => tool.name === "shell.run");
-    expect(shellRun?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, openWorldHint: true });
+    expect(shellRun?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: true });
     expect(shellRun?.description).toContain("Fallback escape hatch");
     expect(names).toContain("tool.usage");
   });

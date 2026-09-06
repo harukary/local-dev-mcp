@@ -3,7 +3,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-08-30.1";
+export const TOOL_SCHEMA_VERSION = "2026-09-06.1";
 
 export function buildToolDefinitions() {
   return [
@@ -122,7 +122,7 @@ export function buildToolDefinitions() {
         },
         required: ["command"],
       },
-      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     {
       name: "shell.status",

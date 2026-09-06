@@ -148,41 +148,49 @@ releaseを明示固定する場合だけ`LOCAL_DEV_MCP_TUNNEL_CLIENT_VERSION`を
 
 ### Private state
 
-正規のprivate state directory:
+TunnelのstateはChatGPT側の利用コンテキストごとに分離します。Personal用とBusiness用のTunnel clientは同じloopback MCP serverへ向けつつ、OpenAI control planeのstateだけを分けます。
 
 ```text
-~/.local-dev-mcp/openai-tunnel/
-├─ tunnel-id
-├─ runtime-api-key
-└─ mcp-token
+~/.local-dev-mcp/openai-tunnel-personal/
+├─ organization-id
+└─ tunnel-id
+
+~/.local-dev-mcp/openai-tunnel-business/
+├─ organization-id
+└─ tunnel-id
+
+~/.openai-tunnels/personal/runtime-api-key
+~/.openai-tunnels/business/runtime-api-key
+
+~/.local-dev-mcp/openai-tunnel/mcp-token
 ```
 
+- `organization-id`: そのTunnelを所有するOpenAI organization ID
 - `tunnel-id`: OpenAI Platformで作成したTunnel ID
-- `runtime-api-key`: `tunnel-client`用runtime key
-- `mcp-token`: `tunnel-client`とlocal MCP間だけで使うrandom secret
+- `runtime-api-key`: Personal / Businessそれぞれのcontrol plane用runtime key
+- `mcp-token`: Tunnel clientと`local-dev-mcp`のlocal hopだけで共有するsecret。Tunnelごとには複製しません
 
-推奨permission:
-
-```bash
-chmod 700 ~/.local-dev-mcp/openai-tunnel
-chmod 600 ~/.local-dev-mcp/openai-tunnel/*
-```
-
-`mcp-token`は32文字以上のcryptographically randomな値にします。これらの値をGitやlogへ保存しません。
+state directoryは`0700`、中のfileは`0600`を推奨します。secretをGitやlogへ保存しません。
 
 automationでは次のenvironment variableも利用できます。
 
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_ID`
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_ID_FILE`
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY`
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE`
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN`
-- `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_ID` / `_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID` / `_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY` / `_FILE`
+- `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR`
 - `LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_STARTUP_WAIT`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_LOG_LEVEL`
+
+`scripts/tunnel.sh`を直接実行する場合の既定はPersonal profileです。`scripts/install-launchd.sh`はPersonal用LaunchAgentを常に生成し、Business用は次の指定で追加します。
+
+```bash
+LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE=1 scripts/install-launchd.sh --install-only
+```
+
+既定health portはPersonalが`127.0.0.1:3460`、Businessが`127.0.0.1:3462`です。
 
 ### 起動・診断
 
@@ -229,8 +237,10 @@ scripts/install-launchd.sh --activate
 
 ```text
 io.local-dev-mcp.server
-io.local-dev-mcp.openai-tunnel
+io.local-dev-mcp.openai-tunnel-personal
 ```
+
+`LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE=1`を付けると`io.local-dev-mcp.openai-tunnel-business`も生成します。旧`io.local-dev-mcp.openai-tunnel`と`io.local-dev-mcp.openai-tunnel-personal-mini`は廃止し、`--activate`時に停止・削除します。
 
 serverとTunnel clientは別processなので、Tunnel reconnectでMCP serverまで再起動しません。
 

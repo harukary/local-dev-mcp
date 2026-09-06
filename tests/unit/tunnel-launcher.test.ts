@@ -26,6 +26,7 @@ describe("Secure MCP Tunnel launcher", () => {
       cwd: path.resolve("."),
       env: {
         ...process.env,
+        LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID: "org-example123",
         LOCAL_DEV_MCP_OPENAI_TUNNEL_ID: "tunnel_0123456789abcdef0123456789abcdef",
         LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY: apiKey,
         LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN: mcpToken,
@@ -40,6 +41,7 @@ describe("Secure MCP Tunnel launcher", () => {
     expect(result.status).toBe(0);
     const args = readFileSync(argsFile, "utf8");
     expect(args).toContain("doctor");
+    expect(args).toContain("--control-plane.organization-id\norg-example123");
     expect(args).toContain("env:LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY");
     expect(args).toContain("X-Local-Dev-MCP-Tunnel-Token: env:LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN");
     expect(args).toContain("--mcp.discovery-extra-headers");
@@ -48,13 +50,14 @@ describe("Secure MCP Tunnel launcher", () => {
     expect(args).not.toContain(mcpToken);
   });
 
-  it("uses file references from the service state directory", () => {
+  it("uses configured file references for service credentials", () => {
     const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-openai-files-"));
     tempDirs.push(tempDir);
     const fakeBin = path.join(tempDir, "tunnel-client");
     const argsFile = path.join(tempDir, "args.txt");
     writeFileSync(fakeBin, `#!/bin/bash\nprintf '%s\\n' "$@" > "${argsFile}"\n`, { mode: 0o700 });
     writeFileSync(path.join(tempDir, "tunnel-id"), "tunnel_0123456789abcdef0123456789abcdef\n", { mode: 0o600 });
+    writeFileSync(path.join(tempDir, "organization-id"), "org-fileexample123\n", { mode: 0o600 });
     writeFileSync(path.join(tempDir, "runtime-api-key"), "runtime-key\n", { mode: 0o600 });
     writeFileSync(path.join(tempDir, "mcp-token"), "m".repeat(48), { mode: 0o600 });
 
@@ -65,17 +68,20 @@ describe("Secure MCP Tunnel launcher", () => {
         LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR: tempDir,
         LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN: fakeBin,
         LOCAL_DEV_MCP_OPENAI_TUNNEL_ID: "",
+        LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID: "",
         LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY: "",
         LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN: "",
         LOCAL_DEV_MCP_OPENAI_TUNNEL_ID_FILE: "",
-        LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE: "",
-        LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE: "",
+        LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID_FILE: "",
+        LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY_FILE: path.join(tempDir, "runtime-api-key"),
+        LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN_FILE: path.join(tempDir, "mcp-token"),
       },
       encoding: "utf8",
     });
 
     expect(result.status).toBe(0);
     const args = readFileSync(argsFile, "utf8");
+    expect(args).toContain("--control-plane.organization-id\norg-fileexample123");
     expect(args).toContain(`file:${path.join(tempDir, "runtime-api-key")}`);
     expect(args).toContain(`X-Local-Dev-MCP-Tunnel-Token: file:${path.join(tempDir, "mcp-token")}`);
   });
