@@ -19,11 +19,11 @@
     "launchd:install": "bash scripts/install-launchd.sh --install-only"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.28.0",
-    "agent-device": "0.20.10",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "agent-device": "0.21.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^5.4.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
