@@ -6,7 +6,7 @@ describe("credential environment resolver", () => {
     const readKeychainSecret = vi.fn().mockResolvedValue("keychain-token\n");
     const env = await resolveCredentialEnv("bitwarden", {
       env: {
-        HARUCLAW_HOME: "/private/haru",
+        LOCAL_DEV_MCP_HOME: "/private/local-dev-mcp",
         PATH: "/usr/bin:/bin:/Users/test/.local/bin",
       },
       homeDir: "/Users/test",
@@ -31,7 +31,7 @@ describe("credential environment resolver", () => {
 
   it("adds ~/.local/bin even when PATH is initially missing", async () => {
     const env = await resolveCredentialEnv("bitwarden", {
-      env: { HARUCLAW_HOME: "/private/haru" },
+      env: { LOCAL_DEV_MCP_HOME: "/private/local-dev-mcp" },
       homeDir: "/Users/test",
       readTextFile: vi.fn().mockResolvedValue(
         [
@@ -48,7 +48,7 @@ describe("credential environment resolver", () => {
   it("fails explicitly when the Keychain mapping is incomplete", async () => {
     await expect(
       resolveCredentialEnv("bitwarden", {
-        env: { HARUCLAW_HOME: "/private/haru" },
+        env: { LOCAL_DEV_MCP_HOME: "/private/local-dev-mcp" },
         readTextFile: vi.fn().mockResolvedValue("BITWARDEN_PROJECT_ID=project"),
       })
     ).rejects.toThrow("Keychain service/account is not configured");

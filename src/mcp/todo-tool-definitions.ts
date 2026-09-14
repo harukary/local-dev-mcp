@@ -1,7 +1,6 @@
 const RO = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 const WA = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
-const EXTERNAL_WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: true };
 
 const todoId = { type: "string", description: "Todo ID returned by todo.list, todo.get, or another todo tool." };
 const project = { type: "string", description: "Todo project ID or exact project name, such as recipie or Inbox." };
@@ -10,7 +9,7 @@ export function buildTodoToolDefinitions() {
   return [
     {
       name: "todo.projects",
-      description: "List haruclaw Todo projects and their Discord/repository bindings. Independent of the selected local-dev project.",
+      description: "List shared Todo projects. Independent of the selected local-dev project.",
       inputSchema: {
         type: "object",
         properties: {
@@ -21,7 +20,7 @@ export function buildTodoToolDefinitions() {
     },
     {
       name: "todo.list",
-      description: "List haruclaw Todos. Optionally filter by project and completed state.",
+      description: "List shared Todos. Optionally filter by project and completed state.",
       inputSchema: {
         type: "object",
         properties: {
@@ -33,7 +32,7 @@ export function buildTodoToolDefinitions() {
     },
     {
       name: "todo.get",
-      description: "Read one haruclaw Todo by ID.",
+      description: "Read one shared Todo by ID.",
       inputSchema: {
         type: "object",
         properties: { todo_id: todoId },
@@ -43,7 +42,7 @@ export function buildTodoToolDefinitions() {
     },
     {
       name: "todo.create",
-      description: "Create a human-facing haruclaw Todo, optionally as a child of an existing Todo.",
+      description: "Create a shared human-facing Todo, optionally as a child of an existing Todo.",
       inputSchema: {
         type: "object",
         properties: {
@@ -58,7 +57,7 @@ export function buildTodoToolDefinitions() {
     },
     {
       name: "todo.update",
-      description: "Update the title and/or note of an existing haruclaw Todo.",
+      description: "Update the title and/or note of an existing Todo.",
       inputSchema: {
         type: "object",
         properties: {
@@ -97,7 +96,7 @@ export function buildTodoToolDefinitions() {
     },
     {
       name: "todo.set_completed",
-      description: "Complete or reopen a haruclaw Todo. Completing a parent also completes its children.",
+      description: "Complete or reopen a Todo. Completing a parent also completes its children.",
       inputSchema: {
         type: "object",
         properties: {
@@ -110,7 +109,7 @@ export function buildTodoToolDefinitions() {
     },
     {
       name: "todo.move",
-      description: "Move or reorder a haruclaw Todo. Moving a child to another project makes it a top-level Todo unless parent_id is supplied.",
+      description: "Move or reorder a Todo. Moving a child to another project makes it a top-level Todo unless parent_id is supplied.",
       inputSchema: {
         type: "object",
         properties: {
@@ -125,23 +124,13 @@ export function buildTodoToolDefinitions() {
     },
     {
       name: "todo.delete",
-      description: "Delete a haruclaw Todo. Deleting a parent also deletes its children.",
+      description: "Delete a Todo. Deleting a parent also deletes its children.",
       inputSchema: {
         type: "object",
         properties: { todo_id: todoId },
         required: ["todo_id"],
       },
       annotations: DESTRUCTIVE,
-    },
-    {
-      name: "todo.discord",
-      description: "Create or return the Discord thread linked to a haruclaw Todo.",
-      inputSchema: {
-        type: "object",
-        properties: { todo_id: todoId },
-        required: ["todo_id"],
-      },
-      annotations: EXTERNAL_WRITE,
     },
   ];
 }

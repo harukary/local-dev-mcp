@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -14,7 +13,6 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import express from "express";
-import cors from "cors";
 import type { ProjectRegistry } from "../project/registry.js";
 import type { ChatContextStore } from "../project/context-store.js";
 import type { ShellRunner } from "../shell/runner.js";
@@ -40,12 +38,16 @@ import { handleWorkspaceRead } from "./tools/dev/workspace-read.js";
 import { handleWorkspaceList } from "./tools/dev/workspace-list.js";
 import { handleWorkspaceSearch } from "./tools/dev/workspace-search.js";
 import { handleWorkspacePatch } from "./tools/dev/workspace-patch.js";
+import { handleWorkspaceBatch, type ReadBatchItem } from "./tools/dev/batch.js";
+import { runMobileToolOperation } from "./tools/mobile.js";
+import { validateToolInput } from "./input-validation.js";
+import { withRequestSignal } from "./request-context.js";
+import { jsonError } from "./tools/dev/common.js";
+import { handleBrowserInteract } from "./tools/browser.js";
 import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleGitDiff } from "./tools/dev/git.js";
-import { handleNotesCreate, handleNotesGuidelines, handleNotesValidate } from "./tools/notes/index.js";
-import { handlePrivateNotesCreate, handlePrivateNotesGuidelines, handlePrivateNotesValidate } from "./tools/private-notes/index.js";
 import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserToolOperation, handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserTabOpen, handleBrowserTabUse, handleBrowserTabClose, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
-import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete, handleTodoDiscord } from "./tools/todo.js";
+import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete } from "./tools/todo.js";
 import { OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiTunnelAuthConfig, verifyOpenAiTunnelToken, type OpenAiTunnelAuthConfig } from "./auth.js";
 
 export interface AppContext {
@@ -163,6 +165,8 @@ For substantive work on a project:
 4. If a skill is relevant to the task, call skills.read for that exact SKILL.md before applying its workflow.
 5. Do not read unrelated skills.
 6. Do not call skills.list again unless the selected project changes, the Skills runtime is reloaded, or the available Skills may otherwise have changed.
+7. When two or more independent workspace.read, workspace.search, or workspace.list operations are needed, prefer one workspace.batch call.
+8. For long shell jobs, reuse shell.status cursors; use output=none when only completion matters and keep max_bytes small unless output is needed.
 `.trim();
 
 export function createMcpServer(ctx: AppContext): Server {
@@ -178,20 +182,25 @@ export function createMcpServer(ctx: AppContext): Server {
     tools: buildToolDefinitions(),
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => withRequestSignal(extra.signal, async () => {
+    const { name, arguments: providedArgs } = request.params;
+    const args = { ...(providedArgs ?? {}) };
     const chatContextId = resolveChatContextId(request.params._meta as CallToolMeta | undefined);
     const usageStartedAt = performance.now();
+    const requestBytes = Buffer.byteLength(JSON.stringify(providedArgs ?? {}));
 
     try {
       debugMcpLog(`[CallTool] ${name} chatContextId=${chatContextId} store=${ctx.contextStore.getAll().size}ctxs`);
       const invokeTool = async () => {
+        extra.signal.throwIfAborted();
         switch (name) {
+        case "workspace.batch":
+          return await handleWorkspaceBatch(ctx, chatContextId, args as { requests?: ReadBatchItem[]; max_bytes?: number; detail?: "compact" | "full" });
         case "project.list":
           return await handleProjectList(ctx, chatContextId);
 
         case "project.select":
-          return await handleProjectSelect(ctx, chatContextId, args as { project_id: string });
+          return await handleProjectSelect(ctx, chatContextId, args as { project_id: string; working_dir?: string });
 
         case "project.current":
           return await handleProjectCurrent(ctx, chatContextId);
@@ -200,7 +209,7 @@ export function createMcpServer(ctx: AppContext): Server {
           return await handleProjectReload(ctx, reloadProjectRegistry);
 
         case "skills.list":
-          return await handleSkillsList(ctx, chatContextId, args as { path?: string });
+          return await handleSkillsList(ctx, chatContextId, args as { path?: string; query?: string; scope?: "project" | "user" | "system"; detail?: "summary" | "full" });
 
         case "skills.read":
           return await handleSkillsRead(ctx, args as { path?: string; max_bytes?: number });
@@ -220,24 +229,6 @@ export function createMcpServer(ctx: AppContext): Server {
         case "workspace.patch":
           return await handleWorkspacePatch(ctx, chatContextId, args as { patches?: Array<{ path?: string; expected_sha256?: string; replacement?: string }>; dry_run?: boolean });
 
-
-        case "notes.guidelines":
-          return await handleNotesGuidelines();
-
-        case "notes.create":
-          return await handleNotesCreate(ctx, chatContextId, args as { title?: string; description?: string; tags?: string[]; source_urls?: string[]; body?: string; slug?: string; overwrite?: boolean });
-
-        case "notes.validate":
-          return await handleNotesValidate(ctx, chatContextId, args as { path?: string });
-
-        case "private_notes.guidelines":
-          return await handlePrivateNotesGuidelines();
-
-        case "private_notes.create":
-          return await handlePrivateNotesCreate(ctx, chatContextId, args as { title?: string; body_html?: string; slug?: string; date?: string; overwrite?: boolean });
-
-        case "private_notes.validate":
-          return await handlePrivateNotesValidate(ctx, chatContextId, args as { path?: string });
 
         case "git.inspect":
           return await handleGitInspect(ctx, chatContextId, args as { include_untracked?: boolean; recent_commits?: number; include_worktrees?: boolean; include_diff_stat?: boolean });
@@ -285,6 +276,8 @@ export function createMcpServer(ctx: AppContext): Server {
         case "browser.selectors":
           return await handleBrowserSelectors(ctx, chatContextId, args as { session_id?: string; limit?: number; query?: string });
 
+        case "browser.interact":
+          return await handleBrowserInteract(ctx, chatContextId, args);
         case "browser.click":
           return await handleBrowserClick(ctx, chatContextId, args as { session_id?: string; selector?: string; observe?: "none" | "after"; wait_ms?: number; wait_for?: { selector?: string; text?: string; url_contains?: string; title_contains?: string; timeout_ms?: number } });
 
@@ -393,9 +386,6 @@ export function createMcpServer(ctx: AppContext): Server {
         case "todo.delete":
           return await handleTodoDelete(ctx, chatContextId, args as { todo_id?: string });
 
-        case "todo.discord":
-          return await handleTodoDiscord(ctx, chatContextId, args as { todo_id?: string });
-
         case "shell.run":
           return await handleShellRun(
             ctx,
@@ -404,7 +394,7 @@ export function createMcpServer(ctx: AppContext): Server {
           );
 
         case "shell.status":
-          return await handleShellStatus(args as { job_id: string; cursor?: string; wait_ms?: number });
+          return await handleShellStatus(args as { job_id: string; cursor?: string; wait_ms?: number; max_bytes?: number; output?: "all" | "none" | "tail" });
 
         case "shell.cancel":
           return await handleShellCancel(args as { job_id?: string; pid?: number });
@@ -447,19 +437,21 @@ export function createMcpServer(ctx: AppContext): Server {
           );
 
         case "tool.usage": {
-          const usage = ctx.toolUsageMetrics.snapshot();
+          const usage = ctx.toolUsageMetrics.view(args as { detail?: "summary" | "full"; project_id?: string; prefix?: string; limit?: number; recent_days?: number });
           return {
             structuredContent: usage,
-            content: [{ type: "text", text: JSON.stringify(usage, null, 2) }],
+            content: [{ type: "text", text: JSON.stringify(usage) }],
           };
         }
 
-        case "tool.schema":
+        case "tool.schema": {
           await server.sendToolListChanged().catch(() => undefined);
+          const schema = buildToolSchemaSnapshot(args as { prefix?: string; detail?: "summary" | "full" });
           return {
-            structuredContent: buildToolSchemaSnapshot(),
-            content: [{ type: "text", text: JSON.stringify(buildToolSchemaSnapshot(), null, 2) }],
+            structuredContent: schema,
+            content: [{ type: "text", text: JSON.stringify(schema) }],
           };
+        }
 
         default:
           return {
@@ -468,14 +460,32 @@ export function createMcpServer(ctx: AppContext): Server {
           };
         }
       };
-      const result: any = name.startsWith("browser.")
+      const invalid = validateToolInput(name, args);
+      const result: any = invalid ? jsonError("INVALID_ARGUMENT", invalid) : name.startsWith("browser.")
         ? await runBrowserToolOperation(chatContextId, invokeTool)
-        : await invokeTool();
+        : name.startsWith("mobile.")
+          ? await runMobileToolOperation(ctx, chatContextId, name, args, invokeTool)
+          : await invokeTool();
+      let payload = result?.structuredContent;
+      if (!payload) {
+        try { payload = JSON.parse(result?.content?.find((item: { type: string }) => item.type === "text")?.text ?? "null"); } catch { /* Text-only tools need no JSON result. */ }
+      }
+      const failedJob = name === "shell.status" && ["failed", "timeout", "interrupted"].includes(payload?.status);
+      const failed = result?.isError === true || failedJob || (name === "shell.run" && payload?.exit_code !== undefined && payload.exit_code !== 0);
+      const textResponseBytes = Array.isArray(result?.content)
+        ? result.content.reduce((sum: number, item: { type?: string; text?: string }) => sum + (item?.type === "text" && typeof item.text === "string" ? Buffer.byteLength(item.text) : 0), 0)
+        : 0;
+      const structuredResponseBytes = result?.structuredContent ? Buffer.byteLength(JSON.stringify(result.structuredContent)) : 0;
       ctx.toolUsageMetrics.record({
         tool: name,
         project_id: ctx.contextStore.getCurrentProject(chatContextId),
         duration_ms: performance.now() - usageStartedAt,
-        failed: result?.isError === true,
+        failed,
+        response_bytes: Buffer.byteLength(JSON.stringify(result)),
+        request_bytes: requestBytes,
+        structured_response_bytes: structuredResponseBytes,
+        text_response_bytes: textResponseBytes,
+        error_code: failed ? payload?.error?.code ?? payload?.observation?.error?.code ?? (failedJob ? `JOB_${String(payload.status).toUpperCase()}` : name === "shell.run" ? "SHELL_EXIT_NONZERO" : "TOOL_FAILED") : undefined,
       });
       return result;
     } catch (err) {
@@ -484,6 +494,11 @@ export function createMcpServer(ctx: AppContext): Server {
         project_id: ctx.contextStore.getCurrentProject(chatContextId),
         duration_ms: performance.now() - usageStartedAt,
         failed: true,
+        response_bytes: 0,
+        request_bytes: requestBytes,
+        structured_response_bytes: 0,
+        text_response_bytes: 0,
+        error_code: "UNHANDLED_EXCEPTION",
       });
       const message = err instanceof Error ? err.message : String(err);
       await ctx.auditLogger.log({
@@ -497,7 +512,7 @@ export function createMcpServer(ctx: AppContext): Server {
         isError: true,
       };
     }
-  });
+  }));
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     const projects = ctx.registry.getAll();
@@ -607,7 +622,9 @@ export async function startMcpServer(configPath: string): Promise<void> {
       })(), 55_000);
       if (result === "timeout") console.error("[BrowserLifecycle] shutdown drain timed out");
       else console.error("[BrowserLifecycle] shutdown drain", result);
-    })().catch((error) => console.error("[BrowserLifecycle] shutdown drain failed", error)).finally(() => process.exit(0));
+    })().catch((error) => console.error("[BrowserLifecycle] shutdown drain failed", error)).finally(() => {
+      try { ctx.toolUsageMetrics.flush(); } finally { process.exit(0); }
+    });
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
@@ -682,8 +699,6 @@ export async function startHttpServer(configPath: string, port: number): Promise
   const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig);
   const ctx = await createAppContext(configPath);
   const browserLifecycle = await createBrowserLifecycleService();
-  const rateLimitMap = new Map<string, { count: number; reset: number }>();
-
   const app = express();
   app.use(requireLoopbackHost);
   app.use((req, _res, next) => {
@@ -695,43 +710,31 @@ export async function startHttpServer(configPath: string, port: number): Promise
     next();
   });
 
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  app.use("/ui", (req, res, next) => {
-    if (!isLocalhostRequest(req)) {
-      return res.status(403).json({ error: "forbidden", message: "UI only accessible from localhost" });
-    }
-    express.static(join(__dirname, "../ui/public"))(req, res, next);
-  });
+  let inFlight = 0;
 
-  app.get("/debug/tools", requireHttpAuth, (_req, res) => {
-    res.json(buildToolSchemaSnapshot());
-  });
-
-
-  app.use(cors({
-    origin: [/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/],
-    credentials: false,
-  }));
-
-  function simpleRateLimit(req: express.Request, res: express.Response, next: express.NextFunction): void {
-    const ip = req.ip || req.socket.remoteAddress || "unknown";
-    const now = Date.now();
-    const entry = rateLimitMap.get(ip);
-    if (entry && entry.count >= 100 && now - entry.reset < 60 * 1000) {
-      res.status(429).json({ error: "too_many_requests", message: "Rate limit exceeded." });
+  function parseAndLimitMcpRequest(req: express.Request, res: express.Response, next: express.NextFunction): void {
+    let parsed: unknown;
+    try { parsed = parseRawBody(req); }
+    catch { res.status(400).json({ error: "invalid_json" }); return; }
+    res.locals.mcpParsed = parsed;
+    if (inFlight >= 64) {
+      res.setHeader("Retry-After", "1");
+      res.status(429).json({ error: "concurrency_limit", message: "Too many in-flight MCP requests." });
       return;
     }
-    if (!entry || now - entry.reset >= 60 * 1000) {
-      rateLimitMap.set(ip, { count: 1, reset: now });
-    } else {
-      entry.count++;
-    }
+    inFlight++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      inFlight--;
+    };
+    res.once("finish", release);
+    res.once("close", release);
     next();
   }
-  app.use(simpleRateLimit);
 
-
-  app.post("/mcp", requireHttpAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
+  app.post("/mcp", requireHttpAuth, express.raw({ type: "*/*", limit: "1mb" }), parseAndLimitMcpRequest, (req, res) => {
     handleMcpRequest(req, res, ctx).catch((err) => {
       console.error("MCP POST handler error:", err);
       if (!res.headersSent) {
@@ -744,32 +747,12 @@ export async function startHttpServer(configPath: string, port: number): Promise
     sendStatelessMcpMethodNotAllowed(res);
   });
 
-  app.get("/", (_req, res) => {
-    res.type("text/plain").send("local-dev-mcp MCP server running via OpenAI Secure MCP Tunnel.");
-  });
 
   app.get("/healthz", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json(buildHealthStatus());
   });
 
-  app.post("/", requireHttpAuth, express.raw({ type: "*/*", limit: "1mb" }), (req, res) => {
-    handleMcpRequest(req, res, ctx).catch((err) => {
-      console.error("MCP POST (root) error:", err);
-      if (!res.headersSent) res.status(500).json({ error: "internal_error", message: String(err) });
-    });
-  });
-
-  app.post("/reload", requireHttpAuth, async (_req, res) => {
-    try {
-      const projectIds = await reloadProjectRegistry(ctx);
-      console.error(`[Registry] Reloaded: ${projectIds.join(", ")}`);
-      res.json({ ok: true, projects: projectIds });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ ok: false, error: message });
-    }
-  });
 
   console.error(`[OpenAI Tunnel] Local MCP authentication enabled via ${OPENAI_TUNNEL_HEADER_NAME}.`);
 
@@ -801,7 +784,9 @@ export async function startHttpServer(configPath: string, port: number): Promise
     })().then((result) => {
       if (result === "timeout") console.error("[BrowserLifecycle] shutdown drain timed out");
       else console.error("[BrowserLifecycle] shutdown drain", result);
-    }).catch((error) => console.error("[BrowserLifecycle] shutdown drain failed", error)).finally(() => process.exit(0));
+    }).catch((error) => console.error("[BrowserLifecycle] shutdown drain failed", error)).finally(() => {
+      try { ctx.toolUsageMetrics.flush(); } finally { process.exit(0); }
+    });
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
@@ -825,7 +810,7 @@ async function handleMcpRequest(
   ctx: AppContext
 ): Promise<void> {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  const parsed = req.method === "POST" ? parseRawBody(req) : undefined;
+  const parsed = req.method === "POST" ? res.locals.mcpParsed : undefined;
   debugMcpLog(`[MCP] stateless request sessionId=${sessionId ?? "(none)"} isInit=${isInitializeRequest(parsed)}`);
 
   const transport = new StreamableHTTPServerTransport({

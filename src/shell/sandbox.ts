@@ -61,7 +61,7 @@ export class HostSandbox implements Sandbox {
     return new Promise((resolve) => {
       const child = spawn(this.shell, ["-lc", options.command], {
         cwd: workdir,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe"],
         detached: true,
         env: options.env ? { ...process.env, ...options.env } : process.env,
       });

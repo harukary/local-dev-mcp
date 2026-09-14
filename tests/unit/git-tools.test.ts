@@ -64,6 +64,15 @@ function body(result: { content: Array<{ text?: string }> }) {
 }
 
 describe("typed git tools", () => {
+  it("inspects an unborn repository and preserves unusual filenames", async () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "local-dev-mcp-git-")));
+    run("init", "-q");
+    const filename = "space and\ttab\nnewline.txt";
+    writeFileSync(join(root, filename), "text");
+    const value = body(await handleGitInspect(context(), "chat-a", {}));
+    expect(value.recent_commits).toEqual([]);
+    expect(value.files).toContainEqual(expect.objectContaining({ path: filename }));
+  });
   it("returns status with one porcelain-v2 read", async () => {
     setupRepo();
     writeFileSync(join(root, "a.txt"), "one\ntwo\n");
@@ -92,6 +101,14 @@ describe("typed git tools", () => {
     expect(value.recent_commits[0]).toMatchObject({ author: "Test User", subject: "initial" });
     expect(value.worktrees[0]).toMatchObject({ path: root, branch: "main" });
     expect(value.diff_stat).toContain("a.txt");
+  });
+
+  it("preserves newlines in worktree paths", async () => {
+    setupRepo();
+    const worktree = join(root, "nested\nworktree");
+    run("worktree", "add", "--detach", worktree, "HEAD");
+    const value = body(await handleGitInspect(context(), "chat-a", { include_diff_stat: false }));
+    expect(value.worktrees).toContainEqual(expect.objectContaining({ path: worktree, detached: true }));
   });
 
   it("returns bounded log and show output without shell composition", async () => {

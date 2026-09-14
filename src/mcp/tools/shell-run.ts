@@ -5,6 +5,7 @@ import { evaluateApproval } from "../../shell/approval.js";
 import { startJob } from "../../shell/job-manager.js";
 import { resolveCredentialEnv } from "../../shell/credential-env.js";
 import type { CredentialScope } from "../../types.js";
+import { applyWorkingDirectory } from "../../project/working-directory.js";
 
 const MAX_SYNC_TIMEOUT_SECONDS = 240;
 
@@ -58,8 +59,8 @@ export async function handleShellRun(
     };
   }
 
-  const project = ctx.registry.get(currentProjectId);
-  if (!project) {
+  const baseProject = ctx.registry.get(currentProjectId);
+  if (!baseProject) {
     ctx.contextStore.clearCurrentProject(chatContextId);
     return {
       content: [
@@ -77,6 +78,11 @@ export async function handleShellRun(
       isError: true,
     };
   }
+
+  const project = applyWorkingDirectory(
+    baseProject,
+    ctx.contextStore.getWorkingDirectory?.(chatContextId)
+  );
 
   const effectiveTimeoutSeconds = args.timeout_seconds ?? project.defaultTimeoutSeconds;
   if (!args.async && effectiveTimeoutSeconds > MAX_SYNC_TIMEOUT_SECONDS) {

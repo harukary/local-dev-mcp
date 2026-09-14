@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -163,6 +163,28 @@ describe("typed development tools", () => {
     expect(body.applied).toBe(true);
     expect(body.changed_files).toEqual(["file.txt"]);
     expect(body.files[0].mode).toBe("replacement");
+  });
+
+  it("applies exact text replacement patches and rejects ambiguous matches", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-typed-"));
+    writeFileSync(join(tmpRoot, "file.txt"), "alpha\nbeta\nalpha\n");
+    const ctx = createContext(createProject(tmpRoot));
+
+    const ambiguous = payload(await handleWorkspacePatch(ctx, "chat-a", {
+      patches: [{ path: "file.txt", old_text: "alpha", new_text: "omega" }],
+    }));
+    expect(ambiguous.applied).toBe(false);
+    expect(ambiguous.conflicts[0]).toMatchObject({
+      reason: "old_text is ambiguous; set replace_all=true to replace all occurrences",
+      occurrences: 2,
+    });
+
+    const applied = payload(await handleWorkspacePatch(ctx, "chat-a", {
+      patches: [{ path: "file.txt", old_text: "alpha", new_text: "omega", replace_all: true }],
+    }));
+    expect(applied.applied).toBe(true);
+    expect(applied.files[0]).toMatchObject({ mode: "text_replace", occurrences_replaced: 2 });
+    expect(readFileSync(join(tmpRoot, "file.txt"), "utf8")).toBe("omega\nbeta\nomega\n");
   });
 
   it("checks unified diff patches in dry-run mode", async () => {

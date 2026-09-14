@@ -1,12 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CredentialScope, ProjectConfig, RiskLevel } from "../types.js";
 import { classifyRisk, isCatastrophicCommand } from "./risk-classifier.js";
 import { redactOutput } from "./redactor.js";
 
-export type JobStatus = "running" | "succeeded" | "failed" | "canceled" | "timeout";
+export type JobStatus = "running" | "succeeded" | "failed" | "canceled" | "timeout" | "interrupted" | "unknown";
 
 export interface Job {
   id: string;
@@ -25,16 +26,19 @@ export interface Job {
   durationMs?: number;
   stdout: string;
   stderr: string;
+  stdoutTail?: string;
+  stderrTail?: string;
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
   redactions: Array<{ type: string; count: number }>;
   process?: ChildProcess;
+  recoveryReason?: string;
 }
 
-const STDOUT_MAX_BYTES = 100 * 1024;
-const STDERR_MAX_BYTES = 100 * 1024;
+const STDOUT_MAX_BYTES = 8 * 1024 * 1024;
+const STDERR_MAX_BYTES = 8 * 1024 * 1024;
 const MAX_CONCURRENT_JOBS = 10;
-const JOB_STORE_DIR = join(process.cwd(), ".local-dev-mcp", "jobs");
+const JOB_STORE_DIR = process.env.LOCAL_DEV_MCP_JOB_STORE_DIR || join(process.cwd(), ".local-dev-mcp", "jobs");
 const DEFAULT_PERSISTED_JOB_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 let JOB_RETENTION_TTL_MS = 5 * 60 * 1000;
 let PERSISTED_JOB_RETENTION_MS = DEFAULT_PERSISTED_JOB_RETENTION_MS;
@@ -42,10 +46,12 @@ let PERSISTED_JOB_RETENTION_MS = DEFAULT_PERSISTED_JOB_RETENTION_MS;
 const jobs = new Map<string, Job>();
 const isCanceling = new Set<string>();
 const jobCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const refreshers = new Map<string, () => void>();
 
 cleanupOldPersistedJobs();
 
 export function getJob(jobId: string): Job | undefined {
+  refreshers.get(jobId)?.();
   return jobs.get(jobId) ?? readPersistedJob(jobId);
 }
 
@@ -85,7 +91,7 @@ export function startJob(
 
   const child = spawn(project.defaultShell, ["-lc", command], {
     cwd: project.hostRoot,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
     detached: true,
     env: env ? { ...process.env, ...env } : process.env,
   });
@@ -112,35 +118,52 @@ export function startJob(
   };
 
   jobs.set(jobId, job);
-  if (longRunning) persistJob(job, true);
+  persistJob(job, true);
 
   let stdout = "";
   let stderr = "";
   let stdoutTruncated = false;
   let stderrTruncated = false;
+  let outputDirty = false;
+  const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
+  const tails = { stdout: "", stderr: "" };
+  const retainedBytes = { stdout: 0, stderr: 0 };
 
   function appendOutput(buf: Buffer, target: "stdout" | "stderr"): void {
+    const decoded = decoders[target].write(buf);
+    tails[target] += decoded;
+    if (Buffer.byteLength(tails[target]) > 128 * 1024) {
+      const suffix = Buffer.from(tails[target]).subarray(-64 * 1024).toString("utf8");
+      const newline = suffix.indexOf("\n");
+      // Do not expose a partially retained first line, which may split credentials.
+      tails[target] = newline < 0 ? "" : suffix.slice(newline + 1);
+    }
     const maxBytes = target === "stdout" ? STDOUT_MAX_BYTES : STDERR_MAX_BYTES;
-    const current = target === "stdout" ? stdout : stderr;
-    const currentBytes = Buffer.byteLength(current, "utf-8");
+    const currentBytes = retainedBytes[target];
     if (currentBytes >= maxBytes) {
       if (target === "stdout") stdoutTruncated = true;
       else stderrTruncated = true;
-      refreshJobView();
+      outputDirty = true;
       return;
     }
     const allowed = maxBytes - currentBytes;
-    const text = buf.toString("utf-8", 0, Math.min(buf.byteLength, allowed));
+    const encoded = Buffer.from(decoded);
+    let end = Math.min(encoded.length, allowed);
+    while (end > 0 && end < encoded.length && (encoded[end] & 0xc0) === 0x80) end--;
+    const text = encoded.subarray(0, end).toString("utf8");
+    retainedBytes[target] += end;
     if (target === "stdout") stdout += text;
     else stderr += text;
-    if (buf.byteLength > allowed) {
+    if (encoded.byteLength > allowed) {
       if (target === "stdout") stdoutTruncated = true;
       else stderrTruncated = true;
     }
-    refreshJobView();
+    outputDirty = true;
   }
 
   function refreshJobView(): void {
+    if (!outputDirty) return;
+    outputDirty = false;
     const sensitiveValues = Object.values(env ?? {});
     const redactedStdout = redactOutput(stdout, project.redactionProfile, sensitiveValues);
     const redactedStderr = redactOutput(stderr, project.redactionProfile, sensitiveValues);
@@ -148,10 +171,13 @@ export function startJob(
 
     job.stdout = redactedStdout.text;
     job.stderr = redactedStderr.text;
+    job.stdoutTail = redactOutput(tails.stdout, project.redactionProfile, sensitiveValues).text;
+    job.stderrTail = redactOutput(tails.stderr, project.redactionProfile, sensitiveValues).text;
     job.stdoutTruncated = stdoutTruncated;
     job.stderrTruncated = stderrTruncated;
     job.redactions = mergeRedactions(allRedactions);
   }
+  refreshers.set(jobId, refreshJobView);
 
   child.stdout?.on("data", (data: Buffer) => {
     appendOutput(data, "stdout");
@@ -185,6 +211,7 @@ export function startJob(
       }
     }
     refreshJobView();
+    refreshers.delete(jobId);
     persistJob(job);
     scheduleJobCleanup(jobId);
   }
@@ -205,6 +232,7 @@ export function startJob(
     job.finishedAt = new Date().toISOString();
     job.process = undefined;
     refreshJobView();
+    refreshers.delete(jobId);
     persistJob(job);
     scheduleJobCleanup(jobId);
   });
@@ -257,6 +285,7 @@ function terminateProcessGroup(pid: number): void {
 }
 
 function persistedJobPath(jobId: string): string {
+  if (!/^[a-zA-Z0-9_-]+$/.test(jobId)) throw new Error("Invalid job ID");
   return join(JOB_STORE_DIR, `${jobId}.json`);
 }
 
@@ -282,6 +311,18 @@ function readPersistedJob(jobId: string): Job | undefined {
   try {
     const raw = readFileSync(persistedJobPath(jobId), "utf-8");
     const parsed = JSON.parse(raw) as Job;
+    if (parsed.status === "running") {
+      let exists = false;
+      try {
+        if (Number.isSafeInteger(parsed.pid) && parsed.pid! > 0) {
+          process.kill(parsed.pid!, 0);
+          exists = true;
+        }
+      } catch (error) { exists = (error as NodeJS.ErrnoException).code === "EPERM"; }
+      // A live PID alone cannot establish ownership or recover its exit status.
+      parsed.status = exists ? "unknown" : "interrupted";
+      parsed.recoveryReason = exists ? "Process ownership and completion cannot be recovered after restart." : "Persisted running job has no live process; exit status is unavailable.";
+    }
     return { ...parsed, process: undefined };
   } catch {
     return undefined;
@@ -332,11 +373,13 @@ export function cleanupOldPersistedJobsForTests(now?: number): void {
 }
 
 export function clearJobsForTests(): void {
+  if (process.env.VITEST !== "true" || !process.env.LOCAL_DEV_MCP_JOB_STORE_DIR) throw new Error("Test cleanup requires an isolated job store.");
   for (const timer of jobCleanupTimers.values()) {
     clearTimeout(timer);
   }
   jobCleanupTimers.clear();
   jobs.clear();
+  refreshers.clear();
   isCanceling.clear();
   rmSync(JOB_STORE_DIR, { recursive: true, force: true });
 }

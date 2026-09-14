@@ -24,8 +24,8 @@ export async function resolveCredentialEnv(
 
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? homedir();
-  const haruclawHome = env.HARUCLAW_HOME?.trim() || join(homeDir, ".haru");
-  const configPath = join(haruclawHome, ".bitwarden.env");
+  const localDevHome = env.LOCAL_DEV_MCP_HOME?.trim() || join(homeDir, ".local-dev-mcp");
+  const configPath = join(localDevHome, ".bitwarden.env");
   const readTextFile = options.readTextFile ?? ((path) => readFile(path, "utf-8"));
   const config = parseEnvConfig(await readTextFile(configPath));
   const service = config.BITWARDEN_ACCESS_TOKEN_KEYCHAIN_SERVICE?.trim();

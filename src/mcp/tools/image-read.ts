@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import type { AppContext } from "../server.js";
 import type { ProjectConfig } from "../../types.js";
+import { applyWorkingDirectory } from "../../project/working-directory.js";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_PREVIEW_MAX_EDGE = 900;
@@ -36,13 +37,15 @@ export async function handleImageRead(
     });
   }
 
-  const project = ctx.registry.get(currentProjectId);
-  if (!project) {
+  const baseProject = ctx.registry.get(currentProjectId);
+  if (!baseProject) {
     ctx.contextStore.clearCurrentProject(chatContextId);
     return errorResult("PROJECT_NOT_SELECTED", "No project is selected for this chat. Call project.select first.", {
       available_projects: ctx.registry.getAll().map((p) => p.projectId),
     });
   }
+
+  const project = applyWorkingDirectory(baseProject, ctx.contextStore.getWorkingDirectory?.(chatContextId));
 
   const resolved = resolveImagePath(project, args.path);
   if (!resolved.ok) {

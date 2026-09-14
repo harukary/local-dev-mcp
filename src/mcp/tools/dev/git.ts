@@ -1,6 +1,6 @@
 import type { AppContext } from "../../server.js";
 import { getActiveProject, jsonError, jsonResult, resolveProjectPath } from "./common.js";
-import { git } from "./git-core.js";
+import { git, boundedGit } from "./git-core.js";
 
 const DIFF_MAX_BYTES = 512 * 1024;
 const SHOW_MAX_BYTES = 512 * 1024;
@@ -30,7 +30,9 @@ function parsePorcelainV2(output: string): GitStatusSummary {
   let behind = 0;
   const files: GitFileStatus[] = [];
 
-  for (const line of output.split(/\r?\n/)) {
+  const records = output.split("\0");
+  for (let index = 0; index < records.length; index++) {
+    const line = records[index];
     if (!line) continue;
     if (line.startsWith("# branch.oid ")) {
       const oid = line.slice("# branch.oid ".length).trim();
@@ -67,7 +69,7 @@ function parsePorcelainV2(output: string): GitStatusSummary {
     const xy = parts[1] ?? "..";
     const pathIndex = kind === "1" ? 8 : kind === "2" ? 9 : 10;
     let path = parts.slice(pathIndex).join(" ");
-    if (kind === "2") path = path.split("\t", 1)[0];
+    if (kind === "2") index++;
     files.push({
       status: xy.replace(/\./g, " "),
       path,
@@ -80,7 +82,7 @@ function parsePorcelainV2(output: string): GitStatusSummary {
 }
 
 async function readStatus(project: Parameters<typeof git>[0], includeUntracked = true): Promise<GitStatusSummary> {
-  const args = ["status", "--porcelain=v2", "--branch", includeUntracked ? "--untracked-files=all" : "--untracked-files=no"];
+  const args = ["status", "--porcelain=v2", "-z", "--branch", includeUntracked ? "--untracked-files=all" : "--untracked-files=no"];
   const { stdout } = await git(project, args);
   return parsePorcelainV2(String(stdout));
 }
@@ -104,12 +106,11 @@ function parseLog(output: string) {
 
 function parseWorktrees(output: string) {
   return output
-    .split(/\n\s*\n/)
-    .map((block) => block.trim())
+    .split("\0\0")
     .filter(Boolean)
     .map((block) => {
       const result: Record<string, unknown> = {};
-      for (const line of block.split(/\r?\n/)) {
+      for (const line of block.split("\0")) {
         const [key, ...rest] = line.split(" ");
         const value = rest.join(" ");
         if (key === "worktree") result.path = value;
@@ -144,12 +145,12 @@ export async function handleGitInspect(
   const recentCommits = Math.min(Math.max(args.recent_commits ?? 5, 0), 20);
   try {
     const statusPromise = readStatus(project, args.include_untracked !== false);
-    const logPromise = recentCommits > 0
+    const logPromise = statusPromise.then(status => recentCommits > 0 && status.head
       ? git(project, ["log", `-n${recentCommits}`, "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1e"])
-      : Promise.resolve({ stdout: "", stderr: "" });
+      : { stdout: "", stderr: "" });
     const worktreesPromise = args.include_worktrees === false
       ? Promise.resolve({ stdout: "", stderr: "" })
-      : git(project, ["worktree", "list", "--porcelain"]);
+      : git(project, ["worktree", "list", "--porcelain", "-z"]);
     const diffStatPromise = args.include_diff_stat === false
       ? Promise.resolve({ stdout: "", stderr: "" })
       : git(project, ["diff", "--stat"]);
@@ -219,16 +220,14 @@ export async function handleGitShow(
     gitArgs.push("--", path);
   }
   try {
-    const { stdout } = await git(project, gitArgs);
-    const text = String(stdout);
     const max = Math.min(Math.max(args.max_bytes ?? SHOW_MAX_BYTES, 1024), 2 * 1024 * 1024);
+    const bounded = await boundedGit(project, gitArgs, max);
     return jsonResult({
       project_id: project.projectId,
       ref,
       path,
       mode,
-      output: text.slice(0, max),
-      truncated: text.length > max,
+      ...bounded,
     });
   } catch (err) {
     return jsonError("GIT_SHOW_FAILED", err instanceof Error ? err.message : String(err));
@@ -239,7 +238,7 @@ export async function handleGitDiff(ctx: AppContext, chatContextId: string, args
   const project = getActiveProject(ctx, chatContextId);
   if ("error" in project) return project.error;
   try {
-    const gitArgs = ["diff"];
+    const gitArgs = ["diff", "--no-ext-diff"];
     if (args?.staged) gitArgs.push("--staged");
     if (args?.stat) gitArgs.push("--stat");
     if (args?.path) {
@@ -247,9 +246,9 @@ export async function handleGitDiff(ctx: AppContext, chatContextId: string, args
       if (!resolved.ok) return jsonError(resolved.code, resolved.message);
       gitArgs.push("--", resolved.relativePath);
     }
-    const { stdout } = await git(project, gitArgs);
     const max = Math.min(Math.max(args?.max_bytes ?? DIFF_MAX_BYTES, 1024), 2 * 1024 * 1024);
-    return jsonResult({ project_id: project.projectId, diff: String(stdout).slice(0, max), truncated: String(stdout).length > max });
+    const bounded = await boundedGit(project, gitArgs, max);
+    return jsonResult({ project_id: project.projectId, diff: bounded.output, truncated: bounded.truncated });
   } catch (err) {
     return jsonError("GIT_DIFF_FAILED", err instanceof Error ? err.message : String(err));
   }

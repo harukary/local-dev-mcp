@@ -8,6 +8,8 @@ ChatGPT との正規接続経路は **OpenAI Secure MCP Tunnel** です。HTTP M
 
 ## 主な用途
 
+実装中の汎用性能・出力効率改善と検証範囲は [改善台帳](docs/improvement-tracker.md) を参照してください。ソースの実装と、稼働中サーバー・ChatGPTへの反映は別段階です。
+
 - source repository の調査・編集
 - test / build / deploy / custom script の実行
 - browser session や mobile device の操作
@@ -59,7 +61,7 @@ MCP server側でもproject policyとshell risk policyを適用します。ChatGP
 - `shell.*` — shell実行、approval、background job、cancel
 - `browser.*` — Chrome DevTools Protocol browser automation
 - `mobile.*` — iOS/Android確認・操作
-- `todo.*` — haruclaw Todo操作
+- `todo.*` — shared Todo Service操作
 - `skills.*` — project/user/system Skillsの読み取り
 - `image.read` — public URLやcustom viewerを使わないinline画像確認
 - `artifact.read` — local fileをMCP embedded resourceとしてChatGPTへ送信

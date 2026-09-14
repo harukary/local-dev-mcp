@@ -7,7 +7,7 @@ export class ShellRunner {
   private sandboxCache: Map<string, Sandbox> = new Map();
 
   getSandbox(config: ProjectConfig): Sandbox {
-    const key = `${config.sandboxType}:${config.projectId}`;
+    const key = JSON.stringify([config.sandboxType, config.projectId, config.hostRoot, config.defaultShell]);
     let sandbox = this.sandboxCache.get(key);
     if (!sandbox) {
       sandbox = createSandbox(config);

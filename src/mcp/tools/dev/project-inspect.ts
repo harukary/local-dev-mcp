@@ -26,6 +26,14 @@ export async function handleProjectInspect(ctx: AppContext, chatContextId: strin
     ...(packageJson?.devDependencies && typeof packageJson.devDependencies === "object" ? packageJson.devDependencies as Record<string, unknown> : {}),
   };
   const knownFrameworks = ["next", "react", "react-native", "expo", "vite", "svelte", "vue", "nuxt", "astro", "fastify", "express", "vitest", "jest", "playwright"];
+  const manifests = ["pyproject.toml", "requirements.txt", "Cargo.toml", "go.mod", "Package.swift", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "pnpm-workspace.yaml", "Makefile", "CMakeLists.txt", "Gemfile", "composer.json"].filter(path => existsSync(join(root, path)));
+  const toolchains = [
+    ...(manifests.includes("pyproject.toml") || manifests.includes("requirements.txt") ? [{ language: "python", manifest: manifests.includes("pyproject.toml") ? "pyproject.toml" : "requirements.txt" }] : []),
+    ...(manifests.includes("Cargo.toml") ? [{ language: "rust", manifest: "Cargo.toml", test: "cargo test", build: "cargo build" }] : []),
+    ...(manifests.includes("go.mod") ? [{ language: "go", manifest: "go.mod", test: "go test ./...", build: "go build ./..." }] : []),
+    ...(manifests.includes("Package.swift") ? [{ language: "swift", manifest: "Package.swift", test: "swift test", build: "swift build" }] : []),
+    ...(manifests.some(path => path.startsWith("build.gradle")) ? [{ language: "jvm", manifest: manifests.find(path => path.startsWith("build.gradle")), wrapper: existsSync(join(root, "gradlew")) }] : []),
+  ];
   const frameworks = Object.keys(deps).filter((name) => knownFrameworks.includes(name));
   const packageManager = files.pnpm_lock ? "pnpm" : files.package_lock ? "npm" : files.yarn_lock ? "yarn" : files.bun_lock ? "bun" : "unknown";
   return jsonResult({
@@ -36,11 +44,13 @@ export async function handleProjectInspect(ctx: AppContext, chatContextId: strin
     files,
     scripts,
     frameworks,
+    manifests,
+    toolchains,
     likely_commands: {
       install: packageManager === "unknown" ? undefined : `${packageManager} install`,
-      test: scripts.test ? `${packageManager} test` : undefined,
-      typecheck: scripts.typecheck ? `${packageManager} run typecheck` : undefined,
-      dev: scripts.dev ? `${packageManager} run dev` : undefined,
+      test: scripts.test && packageManager !== "unknown" ? `${packageManager} test` : undefined,
+      typecheck: scripts.typecheck && packageManager !== "unknown" ? `${packageManager} run typecheck` : undefined,
+      dev: scripts.dev && packageManager !== "unknown" ? `${packageManager} run dev` : undefined,
     },
     policies: {
       denied_paths: project.deniedPaths,

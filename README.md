@@ -8,6 +8,8 @@ For ChatGPT, the canonical transport is **OpenAI Secure MCP Tunnel**. The HTTP M
 
 ## Intended Uses
 
+See the [improvement tracker](docs/improvement-tracker.md) for capability and output-efficiency changes, verification, and remaining gates. Source implementation is separate from running-server and ChatGPT rollout.
+
 - inspect and edit source repositories
 - run tests, builds, deploy commands, and custom scripts
 - operate browser sessions and mobile devices
@@ -59,7 +61,7 @@ Core tool families include:
 - `shell.*` — managed shell execution, approvals, background jobs, and cancellation
 - `browser.*` — Chrome DevTools Protocol browser automation
 - `mobile.*` — iOS/Android inspection and interaction
-- `todo.*` — haruclaw Todo operations
+- `todo.*` — shared Todo Service operations
 - `skills.*` — readable project/user/system Skills
 - `image.read` — inline image inspection without a custom viewer or public URL
 - `artifact.read` — send a local file to ChatGPT as an MCP embedded resource

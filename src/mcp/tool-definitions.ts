@@ -3,7 +3,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-09-06.1";
+export const TOOL_SCHEMA_VERSION = "2026-09-14.2";
 
 export function buildToolDefinitions() {
   return [
@@ -16,13 +16,17 @@ export function buildToolDefinitions() {
     {
       name: "project.select",
       description:
-        "Select the current project for all project-scoped tools in this chat context. The selection persists; call this again only when switching projects.",
+        "Select the current project and optional project-relative working directory for all project-scoped tools in this chat context. Use working_dir for a git worktree (for example .worktree/feature-x) instead of wrapping typed tools in cd or pnpm worktree:run. The selection persists; call this again only when switching project or working directory.",
       inputSchema: {
         type: "object",
         properties: {
           project_id: {
             type: "string",
             description: "Project identifier from project.list",
+          },
+          working_dir: {
+            type: "string",
+            description: "Optional project-relative working directory. Must resolve to a real directory inside the selected project root; use this for git worktrees.",
           },
         },
         required: ["project_id"],
@@ -44,7 +48,7 @@ export function buildToolDefinitions() {
     {
       name: "skills.list",
       description:
-        "List readable Codex skill files for ChatGPT. Optional path selects the project cwd whose .agents/skills should be included; CODEX_HOME runtime user and system Skills are always included. Results include source origin (common, private_user, project, system, or unmanaged).",
+        "List readable Codex skill files for ChatGPT. The default summary keeps name, description, path, scope, and origin; use detail=full only when extra metadata is needed. Optional query/scope filters reduce output for follow-up discovery.",
       inputSchema: {
         type: "object",
         properties: {
@@ -52,20 +56,35 @@ export function buildToolDefinitions() {
             type: "string",
             description: "Optional project cwd/path inside a registered project. Defaults to the selected project cwd, or the server cwd.",
           },
+          query: {
+            type: "string",
+            description: "Optional case-insensitive filter over skill name and description.",
+          },
+          scope: {
+            type: "string",
+            enum: ["project", "user", "system"],
+            description: "Optional scope filter.",
+          },
+          detail: {
+            type: "string",
+            enum: ["summary", "full"],
+            description: "Summary is the compact default; full includes relative_path and enabled.",
+          },
         },
+        additionalProperties: false,
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     {
       name: "skills.read",
       description:
-        "Read a real, non-symlink SKILL.md path inside a registered project Skill root or CODEX_HOME/skills. Results include runtime scope and source origin.",
+        "Read SKILL.md or a text reference belonging to a Skill inside a registered project or CODEX_HOME/skills. Results include scope and origin.",
       inputSchema: {
         type: "object",
         properties: {
           path: {
             type: "string",
-            description: "Absolute real, non-symlink SKILL.md path inside a registered project Skill root or CODEX_HOME/skills. Prefer a path returned by skills.list.",
+            description: "Absolute non-symlink SKILL.md or text reference path beneath an allowed Skill root. Prefer paths returned by skills.list or referenced by that Skill.",
           },
           max_bytes: {
             type: "integer",
@@ -85,7 +104,7 @@ export function buildToolDefinitions() {
     {
       name: "shell.run",
       description:
-        "Fallback escape hatch for operations not covered by typed tools. Prefer workspace.*, git.*, browser.*, mobile.*, and todo.* when they support the task. Use shell.run for builds, tests, deploys, installs, custom scripts, or unsupported operations. For work that may exceed about 30 seconds, use async=true and poll shell.status.",
+        "Fallback escape hatch for operations not covered by typed tools. Prefer workspace.*, git.*, browser.*, mobile.*, and todo.* when they support the task. For file edits, prefer workspace.patch over Python/Node/Ruby heredocs or text-replacement scripts. If work is in a git worktree, select it once with project.select working_dir and keep using typed tools. Use shell.run for builds, tests, deploys, installs, custom scripts, or unsupported operations. For any command likely to exceed about 30 seconds, use async=true and poll shell.status with wait_ms. When only completion matters, use shell.status output=none; when output matters, reuse cursor. Do not create repeated sleep + ps polling commands.",
       inputSchema: {
         type: "object",
         properties: {
@@ -126,10 +145,12 @@ export function buildToolDefinitions() {
     },
     {
       name: "shell.status",
-      description: "Return background-job status and output. Reuse the returned cursor on later polls to receive only new stdout/stderr; wait_ms can long-poll server-side for output or completion.",
+      description: "Return background-job status and optional bounded output. If only completion matters, prefer output=none with wait_ms. If output matters, reuse the returned cursor so later polls receive only new stdout/stderr; increase max_bytes only when needed.",
       inputSchema: {
         type: "object",
         properties: {
+          max_bytes: { type: "integer", minimum: 4, maximum: 262144, description: "Combined output byte budget; defaults to 16384. Continue with cursor when has_more is true." },
+          output: { type: "string", enum: ["all", "none", "tail"], description: "all returns bounded cursor output (default); none returns status only and is preferred for completion polling; tail returns retained output tail." },
           job_id: {
             type: "string",
             description: "The job ID returned by shell.run with async=true.",
@@ -209,7 +230,7 @@ export function buildToolDefinitions() {
     {
       name: "image.read",
       description:
-        "Read an image file from the selected project for model inspection and return inline MCP image content plus metadata. Use artifact.read when the user needs the image file as a downloadable attachment. Path must stay inside the project root.",
+        "Read an image file from the selected project for model inspection and return inline MCP image content plus metadata. This does not create a user-visible chat attachment. If the user asks to send, show, display, or attach the image in chat, call artifact.read with the same path. Path must stay inside the project root.",
       inputSchema: {
         type: "object",
         properties: {
@@ -254,7 +275,7 @@ export function buildToolDefinitions() {
     {
       name: "artifact.read",
       description:
-        "Transfer a local project file intact through the MCP response as an embedded resource. Use this when the user asks to receive, download, or attach a generated file. Prefer workspace.read for inspecting text and image.read for inspecting images. Files are base64-encoded inside MCP and limited to 8 MiB per call.",
+        "Transfer a local project file intact through the MCP response as a user-visible embedded attachment. Use this when the user asks to receive, download, send, show, display, or attach a generated file or screenshot in chat. Prefer workspace.read for model-only text inspection and image.read for model-only image inspection. Files are base64-encoded inside MCP and limited to 8 MiB per call.",
       inputSchema: {
         type: "object",
         properties: {
@@ -332,23 +353,33 @@ export function buildToolDefinitions() {
     },
     {
       name: "tool.usage",
-      description: "Return compact aggregated MCP tool usage metrics: call counts, failures, durations, per-project counts, and shell.run share. No tool arguments or outputs are recorded.",
-      inputSchema: { type: "object", properties: {} },
+      description: "Return aggregated MCP tool usage metrics without recording tool arguments or outputs. Defaults to a compact top-30 lifetime summary; use recent_days (1-31 UTC calendar days), project_id, prefix, and limit for recent analysis, or detail=full for the complete aggregate.",
+      inputSchema: { type: "object", properties: {
+        detail: { type: "string", enum: ["summary", "full"], description: "Compact summary is the default; full returns the complete aggregate." },
+        project_id: { type: "string", description: "Optional project filter for summary mode." },
+        prefix: { type: "string", description: "Optional tool-name prefix filter for summary mode, e.g. workspace. or mobile." },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "Maximum tools in summary mode. Defaults to 30." },
+        recent_days: { type: "integer", minimum: 1, maximum: 31, description: "Aggregate only the most recent UTC calendar days, including today. Daily buckets are retained for up to 31 days." },
+      }, additionalProperties: false },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: "tool.schema",
       description: "Return the current runtime tool schema and schema version for debugging ChatGPT tool cache.",
-      inputSchema: { type: "object", properties: {} },
+      inputSchema: { type: "object", properties: {
+        prefix: { type: "string", description: "Filter tools by name prefix, such as browser. or workspace.read." },
+        detail: { type: "string", enum: ["summary", "full"], description: "Summary returns names and descriptions; full includes input schemas (default)." },
+      } },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
   ];
 }
 
-export function buildToolSchemaSnapshot() {
+export function buildToolSchemaSnapshot(options: { prefix?: string; detail?: "summary" | "full" } = {}) {
+  const tools = buildToolDefinitions().filter(tool => !options.prefix || tool.name.startsWith(options.prefix));
   return {
     schema_version: TOOL_SCHEMA_VERSION,
     generated_at: new Date().toISOString(),
-    tools: buildToolDefinitions(),
+    tools: options.detail === "summary" ? tools.map(tool => ({ name: tool.name, description: tool.description })) : tools,
   };
 }

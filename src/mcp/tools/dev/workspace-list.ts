@@ -20,7 +20,7 @@ type WalkOptions = {
 
 async function walk(root: string, dir: string, project: ProjectConfig, options: WalkOptions, out: Entry[]): Promise<boolean> {
   if (options.depth < 0 || out.length >= options.maxEntries) return out.length >= options.maxEntries;
-  const entries = await readdir(dir, { withFileTypes: true });
+  const entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
   for (const entry of entries) {
     if (out.length >= options.maxEntries) return true;
     if (!options.includeHidden && entry.name.startsWith(".")) continue;

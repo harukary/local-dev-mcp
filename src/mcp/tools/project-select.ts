@@ -1,5 +1,6 @@
 import type { AppContext } from "../server.js";
 import type { AuditLogEntry } from "../../types.js";
+import { resolveWorkingDirectory } from "../../project/working-directory.js";
 
 function jsonResult(value: Record<string, unknown>) {
   return {
@@ -20,7 +21,7 @@ function jsonError(code: string, message: string, details?: Record<string, unkno
 export async function handleProjectSelect(
   ctx: AppContext,
   chatContextId: string,
-  args: { project_id: string }
+  args: { project_id: string; working_dir?: string }
 ) {
   const projectId = args?.project_id;
   if (!projectId) return jsonError("PROJECT_ID_REQUIRED", "Missing required argument: project_id");
@@ -32,9 +33,16 @@ export async function handleProjectSelect(
     });
   }
 
-  const changed = ctx.contextStore.getCurrentProject(chatContextId) !== projectId;
+  const working = resolveWorkingDirectory(project, args.working_dir);
+  if (!working.ok) return jsonError(working.code, working.message);
+
+  const previousProjectId = ctx.contextStore.getCurrentProject(chatContextId);
+  const previousWorkingDir = ctx.contextStore.getWorkingDirectory?.(chatContextId);
+  const nextWorkingDir = working.relativePath === "." ? undefined : working.relativePath;
+  const changed = previousProjectId !== projectId || previousWorkingDir !== nextWorkingDir;
   if (changed) {
     ctx.contextStore.setCurrentProject(chatContextId, projectId);
+    ctx.contextStore.setWorkingDirectory?.(chatContextId, nextWorkingDir);
     await ctx.contextStore.save();
 
     const entry: AuditLogEntry = {
@@ -42,6 +50,7 @@ export async function handleProjectSelect(
       chatContextId,
       tool: "project.select",
       projectId,
+      cwd: working.hostRoot,
     };
     await ctx.auditLogger.log(entry);
   }
@@ -51,7 +60,9 @@ export async function handleProjectSelect(
     changed,
     project_id: project.projectId,
     display_name: project.displayName,
-    cwd: project.hostRoot,
+    project_root: project.hostRoot,
+    working_dir: working.relativePath,
+    cwd: working.hostRoot,
     sandbox_type: project.sandboxType,
   });
 }

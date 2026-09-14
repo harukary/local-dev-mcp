@@ -45,6 +45,21 @@ async function waitForJobCompletion(jobId: string): Promise<void> {
 }
 
 describe("job retention", () => {
+  it("retains final diagnostics after the main output cap and pages UTF-8 without stalling", async () => {
+    const result = startJob(project, `node -e 'process.stdout.write("x".repeat(9*1024*1024)+"\\nFINAL-DIAGNOSTIC\\n")'`);
+    if ("error" in result) throw new Error(result.error);
+    await waitForJobCompletion(result.id);
+    const tail = JSON.parse((await handleShellStatus({ job_id: result.id, output: "tail", max_bytes: 128 })).content[0].text);
+    expect(tail.stdout).toContain("FINAL-DIAGNOSTIC");
+    expect(tail.stdout_truncated).toBe(true);
+    const unicode = startJob(project, `printf '\u65e5\u672c\u8a9e'`);
+    if ("error" in unicode) throw new Error(unicode.error);
+    await waitForJobCompletion(unicode.id);
+    const first = JSON.parse((await handleShellStatus({ job_id: unicode.id, max_bytes: 4 })).content[0].text);
+    expect(first.stdout).toBe("\u65e5");
+    const second = JSON.parse((await handleShellStatus({ job_id: unicode.id, max_bytes: 4, cursor: first.cursor })).content[0].text);
+    expect(second.stdout_delta).toBe("\u672c");
+  });
   beforeEach(() => {
     projectRoot = mkdtempSync(join(tmpdir(), "job-manager-test-"));
     project.hostRoot = projectRoot;
@@ -116,7 +131,7 @@ describe("job retention", () => {
   });
 
   it("cleans up persisted jobs older than seven days", () => {
-    const jobsDir = join(process.cwd(), ".local-dev-mcp", "jobs");
+    const jobsDir = process.env.LOCAL_DEV_MCP_JOB_STORE_DIR!;
     const oldPath = join(jobsDir, "old.json");
     const freshPath = join(jobsDir, "fresh.json");
     const now = Date.now();

@@ -45,6 +45,16 @@ describe("ChatContextStore", () => {
     expect(store.getCurrentProject("chat_1")).toBe("frontend");
   });
 
+  it("tracks a working directory and clears it when the project changes", () => {
+    const store = new ChatContextStore();
+    store.setCurrentProject("chat_1", "frontend");
+    store.setWorkingDirectory("chat_1", ".worktree/feature-x");
+    expect(store.getWorkingDirectory("chat_1")).toBe(".worktree/feature-x");
+
+    store.setCurrentProject("chat_1", "backend");
+    expect(store.getWorkingDirectory("chat_1")).toBeUndefined();
+  });
+
   it("returns undefined for unknown chat", () => {
     const store = new ChatContextStore();
     expect(store.getCurrentProject("nonexistent")).toBeUndefined();

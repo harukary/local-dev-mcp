@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { requestSignal } from "../request-context.js";
 import { X509Certificate } from "node:crypto";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -85,6 +86,7 @@ async function runJson(args: string[], timeoutMs = 120_000, options: RunJsonOpti
     const { stdout } = await execFileAsync(agentDeviceBin(), cliArgs, {
       maxBuffer: 64 * 1024 * 1024,
       timeout: timeoutMs,
+      signal: requestSignal(),
       env: options.env ? { ...process.env, ...options.env } : process.env,
     });
     const payload = parseJson(stdout);
@@ -110,7 +112,7 @@ export async function isAgentDeviceAvailable(): Promise<boolean> {
 }
 
 export async function listAgentIosPhysicalDevices(): Promise<AgentIosPhysicalDevice[]> {
-  if (!(await isAgentDeviceAvailable())) return [];
+  if (!(await isAgentDeviceAvailable())) throw new Error("agent-device is not available.");
   try {
     const payload = await runJson(["devices", "--platform", "ios", "--json"], 30_000);
     const devices = Array.isArray(payload.data?.devices) ? payload.data?.devices : [];
@@ -123,9 +125,7 @@ export async function listAgentIosPhysicalDevices(): Promise<AgentIosPhysicalDev
         if (!id) return [];
         return [{ id, name, booted: device.booted === true }];
       });
-  } catch {
-    return [];
-  }
+  } catch (error) { throw new Error(`iOS physical device discovery failed: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
 function iosSessionName(udid: string): string {

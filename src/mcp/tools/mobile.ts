@@ -1,11 +1,15 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import type { AppContext } from "../server.js";
 import type { ProjectConfig } from "../../types.js";
+import { applyWorkingDirectory } from "../../project/working-directory.js";
 import { handleImageRead } from "./image-read.js";
+import { observeAfterAction } from "../observation.js";
+import { requestSignal } from "../request-context.js";
 import {
   AgentDeviceCommandError,
   agentAndroidSnapshot,
@@ -26,7 +30,8 @@ import {
   type AgentDeviceNode,
 } from "./mobile-agent-device.js";
 
-const execFileAsync = promisify(execFile);
+const execFileBase = promisify(execFile);
+const execFileAsync: typeof execFileBase = ((file: string, args: string[], options: Record<string, unknown> = {}) => execFileBase(file, args, { timeout: 30_000, signal: requestSignal(), ...options })) as typeof execFileBase;
 
 type MobileDevice = {
   id: string;
@@ -43,13 +48,13 @@ type JsonResult = {
   content: [{ type: "text"; text: string }, ...ImageContent[]];
 };
 
-type MobileObserve = "none" | "after";
+type MobileObserve = "none" | "after" | "snapshot";
 type MobileWaitFor = { target: string; timeout_ms?: number };
 
 function jsonResult(value: unknown, imageContent: ImageContent[] = []): JsonResult {
   return {
     structuredContent: value,
-    content: [{ type: "text", text: JSON.stringify(value, null, 2) }, ...imageContent],
+    content: [{ type: "text", text: JSON.stringify(value) }, ...imageContent],
   };
 }
 
@@ -62,12 +67,14 @@ function extractImageContent(result: { content: Array<{ type: string; data?: str
 
 function jsonError(code: string, message: string, details?: unknown) {
   return {
-    content: [{ type: "text", text: JSON.stringify({ error: { code, message, details } }, null, 2) }],
+    structuredContent: { error: { code, message, details } },
+    content: [{ type: "text", text: JSON.stringify({ error: { code, message, details } }) }],
     isError: true,
   };
 }
 
 function mobileError(code: string, err: unknown, details?: unknown) {
+  deviceCache = undefined;
   if (err instanceof AgentDeviceCommandError) {
     return jsonError(code, err.message, {
       ...((details && typeof details === "object") ? details : {}),
@@ -100,7 +107,7 @@ function getProject(ctx: AppContext, chatContextId: string): ProjectConfig | { e
     ctx.contextStore.clearCurrentProject(chatContextId);
     return { error: jsonError("PROJECT_NOT_SELECTED", "The selected project is no longer available. Call project.select first.", { available_projects: ctx.registry.getAll().map((p) => p.projectId) }) };
   }
-  return project;
+  return applyWorkingDirectory(project, ctx.contextStore.getWorkingDirectory?.(chatContextId));
 }
 
 async function commandExists(command: string): Promise<boolean> {
@@ -158,9 +165,7 @@ async function listIosSimulators(): Promise<MobileDevice[]> {
       }
     }
     return devices;
-  } catch {
-    return [];
-  }
+  } catch (error) { throw new Error(`iOS simulator discovery failed: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
 async function listIosPhysicalDevices(): Promise<MobileDevice[]> {
@@ -178,7 +183,7 @@ async function listIosPhysicalDevices(): Promise<MobileDevice[]> {
 async function listAndroidDevices(): Promise<MobileDevice[]> {
   try {
     const adb = await resolveAdbPath();
-    if (!adb) return [];
+    if (!adb) throw new Error("ADB is not installed or configured.");
     const { stdout } = await execFileAsync(adb, ["devices", "-l"], { maxBuffer: 2 * 1024 * 1024 });
     const devices: MobileDevice[] = [];
     for (const line of stdout.split(/\r?\n/).slice(1)) {
@@ -197,32 +202,72 @@ async function listAndroidDevices(): Promise<MobileDevice[]> {
       });
     }
     return devices;
-  } catch {
-    return [];
-  }
+  } catch (error) { throw new Error(`Android discovery failed: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
-async function listDevices(): Promise<MobileDevice[]> {
-  const [iosSimulators, iosPhysical, android] = await Promise.all([
+async function listDevices() {
+  const sources = ["ios_simctl", "ios_agent_device", "android_adb"];
+  const results = await Promise.allSettled([
     listIosSimulators(),
     listIosPhysicalDevices(),
     listAndroidDevices(),
   ]);
-  return [...iosSimulators, ...iosPhysical, ...android];
+  return {
+    devices: results.flatMap(result => result.status === "fulfilled" ? result.value : []),
+    discovery: results.map((result, index) => ({ backend: sources[index], ok: result.status === "fulfilled", ...(result.status === "rejected" ? { error: result.reason instanceof Error ? result.reason.message : String(result.reason) } : {}) })),
+  };
 }
 
+let deviceCache: { devices: MobileDevice[]; expires: number } | undefined;
+const mobileQueues = new Map<string, Promise<unknown>>();
+const mobileSnapshots = new Map<string, { id: string; chat: string; capturedAt: number }>();
+const MOBILE_READ_ACTIONS = new Set(["mobile.snapshot", "mobile.screenshot", "mobile.current_app", "mobile.logs", "mobile.wait"]);
+
 async function resolveDevice(deviceIdOrName?: string): Promise<MobileDevice | null> {
-  const devices = await listDevices();
+  const cached = deviceCache && deviceCache.expires > Date.now() ? deviceCache.devices : undefined;
+  const exactCached = deviceIdOrName ? cached?.find(device => device.id === deviceIdOrName) : undefined;
+  if (exactCached) return exactCached;
+  const devices = cached ?? (await listDevices()).devices;
+  deviceCache = { devices, expires: Date.now() + 10_000 };
   if (!deviceIdOrName) {
-    return devices.find((device) => device.state === "Booted")
-      ?? devices.find((device) => device.type === "device" && device.state !== "Unavailable")
-      ?? devices[0]
-      ?? null;
+    const ready = devices.filter(device => device.state === "Booted" || device.state === "device" || device.state === "Connected");
+    if (ready.length > 1) throw new Error("Multiple mobile devices are ready. Specify device by exact ID.");
+    return ready[0] ?? (devices.length === 1 ? devices[0] : null);
   }
+  const exact = devices.filter(device => device.id === deviceIdOrName || device.name === deviceIdOrName);
+  if (exact.length === 1) return exact[0];
   const needle = deviceIdOrName.toLowerCase();
-  return devices.find((device) => device.id === deviceIdOrName || device.name === deviceIdOrName)
-    ?? devices.find((device) => device.id.toLowerCase().includes(needle) || device.name.toLowerCase().includes(needle))
-    ?? null;
+  const candidates = exact.length ? exact : devices.filter(device => device.id.toLowerCase().includes(needle) || device.name.toLowerCase().includes(needle));
+  if (candidates.length > 1) throw new Error("Mobile device name is ambiguous. Specify an exact device ID.");
+  return candidates[0] ?? null;
+}
+
+export async function runMobileToolOperation<T>(ctx: AppContext, chat: string, name: string, args: Record<string, unknown>, operation: () => Promise<T>): Promise<T | ReturnType<typeof jsonError>> {
+  if (name === "mobile.status" || name === "mobile.list_devices") return await operation();
+  const previousDevice = ctx.contextStore.get(chat)?.mobileDeviceId;
+  const device = await resolveDevice(typeof args.device === "string" ? args.device : previousDevice);
+  if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No matching mobile device is available.");
+  const previous = mobileQueues.get(device.id) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(async () => {
+    requestSignal()?.throwIfAborted();
+    const snapshot = mobileSnapshots.get(device.id);
+    if (name === "mobile.tap_element" && typeof args.target === "string" && /^@?e\d+$/.test(args.target.trim())) {
+      if (!snapshot || snapshot.chat !== chat || Date.now() - snapshot.capturedAt > 60_000 || (args.snapshot_id !== undefined && args.snapshot_id !== snapshot.id)) {
+        return jsonError("STALE_SNAPSHOT", "Capture a new mobile.snapshot before using an element ref. Device actions and other chats invalidate prior refs.");
+      }
+    }
+    if (!MOBILE_READ_ACTIONS.has(name) || name === "mobile.wait") mobileSnapshots.delete(device.id);
+    args.device = device.id;
+    const context = ctx.contextStore.getOrCreate(chat);
+    if (context.mobileDeviceId !== device.id) {
+      context.mobileDeviceId = device.id;
+      await ctx.contextStore.save();
+    }
+    return await operation();
+  });
+  mobileQueues.set(device.id, current);
+  try { return await current; }
+  finally { if (mobileQueues.get(device.id) === current) mobileQueues.delete(device.id); }
 }
 
 function isPhysicalIos(device: MobileDevice): boolean {
@@ -263,7 +308,7 @@ async function screenshotDevice(project: ProjectConfig, device: MobileDevice) {
 export async function handleMobileStatus(ctx: AppContext, chatContextId: string) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
-  const [xcrunAvailable, adbPath, agentDeviceAvailable, devices] = await Promise.all([
+  const [xcrunAvailable, adbPath, agentDeviceAvailable, discovery] = await Promise.all([
     commandExists("xcrun"),
     resolveAdbPath(),
     isAgentDeviceAvailable(),
@@ -277,7 +322,7 @@ export async function handleMobileStatus(ctx: AppContext, chatContextId: string)
       android_adb: { available: !!adbPath, path: adbPath },
       android_agent_device: { available: agentDeviceAvailable && !!adbPath, adb_path: adbPath },
     },
-    devices,
+    ...discovery,
     artifact_dir: "generated/local-dev-mcp/mobile",
   });
 }
@@ -285,7 +330,7 @@ export async function handleMobileStatus(ctx: AppContext, chatContextId: string)
 export async function handleMobileListDevices(ctx: AppContext, chatContextId: string) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
-  return jsonResult({ project_id: project.projectId, devices: await listDevices() });
+  return jsonResult({ project_id: project.projectId, ...await listDevices() });
 }
 
 export async function handleMobileScreenshot(ctx: AppContext, chatContextId: string, args: { device?: string } = {}) {
@@ -326,6 +371,7 @@ async function screenshotPayload(ctx: AppContext, chatContextId: string, project
   const screenshot = await screenshotDevice(project, device);
   const imageResult = await handleImageRead(ctx, chatContextId, { path: screenshot.relativePath });
   const imageText = imageResult.content[0]?.type === "text" ? imageResult.content[0].text : "{}";
+  if (imageResult.isError) throw new Error(`Screenshot saved but image inspection failed: ${imageText}`);
   const screenshotMetadata = JSON.parse(String(imageText || "{}"));
   const imageContent = extractImageContent(imageResult);
   return jsonResult({
@@ -340,12 +386,20 @@ async function screenshotPayload(ctx: AppContext, chatContextId: string, project
 }
 
 async function observeOrJson(ctx: AppContext, chatContextId: string, project: ProjectConfig, device: MobileDevice, action: string, observe: MobileObserve | undefined, payload: Record<string, unknown>, waitFor?: MobileWaitFor) {
-  const waited = waitFor ? await handleMobileWait(ctx, chatContextId, { device: device.id, target: waitFor.target, timeout_ms: waitFor.timeout_ms }) : undefined;
-  if (waited && "isError" in waited && waited.isError) return waited;
-  const wait = waited && "structuredContent" in waited ? waited.structuredContent : undefined;
-  const details = wait === undefined ? payload : { ...payload, wait };
-  if (observe === "none" || (observe === undefined && waitFor)) return jsonResult({ ok: true, project_id: project.projectId, action, device, ...details });
-  return await screenshotPayload(ctx, chatContextId, project, device, action, details);
+  return await observeAfterAction(action, async () => {
+    const waited = waitFor ? await handleMobileWait(ctx, chatContextId, { device: device.id, target: waitFor.target, timeout_ms: waitFor.timeout_ms }) : undefined;
+    if (waited && "isError" in waited && waited.isError) return waited;
+    const wait = waited && "structuredContent" in waited ? waited.structuredContent : undefined;
+    const details = { ...payload, action_applied: true, ...(wait === undefined ? {} : { wait }) };
+    if (observe === "none" || (observe === undefined && waitFor)) return jsonResult({ ok: true, project_id: project.projectId, action, device, ...details });
+    if (observe === "snapshot") {
+      const snapshot = await handleMobileSnapshot(ctx, chatContextId, { device: device.id, limit: 100 });
+      if ("isError" in snapshot && snapshot.isError) return snapshot;
+      const data = "structuredContent" in snapshot ? snapshot.structuredContent : {};
+      return jsonResult({ ...(data && typeof data === "object" ? data : {}), ...details, action });
+    }
+    return await screenshotPayload(ctx, chatContextId, project, device, action, details);
+  });
 }
 
 export async function handleMobileBoot(ctx: AppContext, chatContextId: string, args: { device?: string } = {}) {
@@ -463,10 +517,14 @@ export async function handleMobileSnapshot(ctx: AppContext, chatContextId: strin
     }
     const filtered = args.query ? nodes.filter((node) => nodeMatchesQuery(node, args.query!)) : nodes;
     const limit = Math.min(1000, Math.max(1, Math.round(args.limit ?? 250)));
+    const snapshotId = randomUUID();
+    if (mobileSnapshots.size >= 100) mobileSnapshots.delete(mobileSnapshots.keys().next().value!);
+    mobileSnapshots.set(device.id, { id: snapshotId, chat: chatContextId, capturedAt: Date.now() });
     return jsonResult({
       ok: true,
       project_id: project.projectId,
       action: "mobile.snapshot",
+      snapshot_id: snapshotId,
       device,
       total_nodes: nodes.length,
       matched_nodes: filtered.length,

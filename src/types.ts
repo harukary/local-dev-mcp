@@ -16,6 +16,7 @@ export interface ProjectConfig {
   projectId: ProjectId;
   displayName: string;
   hostRoot: string;
+  policyRoot?: string;
   sandboxRoot: string;
   sandboxType: SandboxType;
   defaultShell: string;
@@ -32,6 +33,8 @@ export interface ProjectConfig {
 export interface ChatContext {
   chatContextId: string;
   currentProjectId?: ProjectId;
+  workingDirectory?: string;
+  mobileDeviceId?: string;
   selectedAt?: string;
   selectedBy?: string;
   lastShellRunAt?: string;

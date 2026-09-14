@@ -89,11 +89,13 @@ describe("tool schema snapshot", () => {
     const snapshot = buildToolSchemaSnapshot();
     const names = snapshot.tools.map((tool) => tool.name);
     const shellRun = snapshot.tools.find((tool) => tool.name === "shell.run");
+    const workspacePatch = snapshot.tools.find((tool) => tool.name === "workspace.patch");
     const imageRead = snapshot.tools.find((tool) => tool.name === "image.read");
     const artifactRead = snapshot.tools.find((tool) => tool.name === "artifact.read");
     const artifactReceive = snapshot.tools.find((tool) => tool.name === "artifact.receive");
+    const mobileScreenshot = snapshot.tools.find((tool) => tool.name === "mobile.screenshot");
 
-    expect(snapshot.schema_version).toBe("2026-09-06.1");
+    expect(snapshot.schema_version).toBe("2026-09-14.2");
     expect(names).toContain("tool.schema");
     expect(names).toContain("image.read");
     expect(names).toContain("artifact.read");
@@ -101,21 +103,45 @@ describe("tool schema snapshot", () => {
     expect(names).toEqual(expect.arrayContaining(["browser.tab.open", "browser.tab.use", "browser.tab.close"]));
     expect(names).not.toContain("image.show");
     expect(names).not.toContain("download.link");
+    expect(names.some((name) => name.startsWith("notes."))).toBe(false);
+    expect(names.some((name) => name.startsWith("private_notes."))).toBe(false);
 
     expect(imageRead?._meta).toBeUndefined();
     expect(imageRead?.outputSchema).toMatchObject({
       required: expect.arrayContaining(["project_id", "path", "returned_image_mode"]),
     });
     expect(imageRead?.outputSchema).not.toHaveProperty("properties.display_url");
+    expect(imageRead?.description).toContain("does not create a user-visible chat attachment");
+    expect(imageRead?.description).toContain("artifact.read");
 
     expect(artifactRead?.annotations).toMatchObject({ readOnlyHint: true });
+    expect(artifactRead?.description).toContain("user-visible embedded attachment");
+    expect(artifactRead?.description).toContain("screenshot");
     expect(artifactReceive?._meta).toEqual({ "openai/fileParams": ["file"] });
     expect(artifactReceive?.annotations).toMatchObject({ readOnlyHint: false });
+    expect(mobileScreenshot?.description).toContain("does not create a user-visible chat attachment");
+    expect(mobileScreenshot?.description).toContain("artifact.read");
 
     expect(shellRun?.annotations).toMatchObject({
       readOnlyHint: false,
       destructiveHint: false,
       openWorldHint: true,
+    });
+    expect(shellRun?.description).toContain("Do not create repeated sleep + ps polling commands");
+    expect(workspacePatch?.inputSchema).toMatchObject({
+      properties: {
+        patches: {
+          minItems: 1,
+          maxItems: 100,
+          items: {
+            oneOf: expect.arrayContaining([
+              expect.objectContaining({ required: ["path", "replacement"], additionalProperties: false }),
+              expect.objectContaining({ required: ["path", "old_text", "new_text"], additionalProperties: false }),
+              expect.objectContaining({ required: ["unified_diff"], additionalProperties: false }),
+            ]),
+          },
+        },
+      },
     });
     for (const name of ["browser.click", "browser.open", "mobile.screenshot", "mobile.tap"]) {
       expect(snapshot.tools.find((tool) => tool.name === name)?._meta).toBeUndefined();

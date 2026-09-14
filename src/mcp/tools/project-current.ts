@@ -1,4 +1,5 @@
 import type { AppContext } from "../server.js";
+import { applyWorkingDirectory } from "../../project/working-directory.js";
 
 function jsonResult(value: Record<string, unknown>) {
   return {
@@ -31,11 +32,15 @@ export async function handleProjectCurrent(
     });
   }
 
+  const workingDirectory = ctx.contextStore.getWorkingDirectory?.(chatContextId);
+  const effectiveProject = applyWorkingDirectory(project, workingDirectory);
   return jsonResult({
     selected: true,
     project_id: project.projectId,
     display_name: project.displayName,
-    cwd: project.hostRoot,
+    project_root: project.hostRoot,
+    working_dir: workingDirectory ?? ".",
+    cwd: effectiveProject.hostRoot,
     sandbox_type: project.sandboxType,
     network_policy: project.networkPolicy,
     write_policy: project.writePolicy,

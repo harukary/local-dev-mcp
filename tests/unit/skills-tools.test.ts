@@ -67,6 +67,21 @@ function writeSkill(path: string, name: string, description: string) {
 }
 
 describe("skills tools", () => {
+  it("uses the selected nested cwd and reads its folded YAML metadata and references", async () => {
+    tmpRoot = realpathSync(mkdtempSync(join(tmpdir(), "local-dev-mcp-skills-")));
+    process.env.CODEX_HOME = join(tmpRoot, ".codex");
+    const directory = join(tmpRoot, "nested/.agents/skills/example");
+    writeSkill(directory, "example", ">-\n  first line\n  second line");
+    mkdirSync(join(directory, "references"));
+    const reference = join(directory, "references/guide.md");
+    writeFileSync(reference, "reference body");
+    const ctx = createContext(createProject(tmpRoot));
+    ctx.contextStore.setWorkingDirectory("chat-a", "nested");
+    const listed = payload(await handleSkillsList(ctx, "chat-a", {}));
+    expect(listed.cwd).toBe(join(tmpRoot, "nested"));
+    expect(listed.skills).toContainEqual(expect.objectContaining({ name: "example", description: "first line second line" }));
+    expect(payload(await handleSkillsRead(ctx, { path: reference })).content).toBe("reference body");
+  });
   it("lists project-local, CODEX_HOME user, and system skills with readable paths", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-skills-"));
     const projectRoot = join(tmpRoot, "project");
@@ -95,6 +110,16 @@ describe("skills tools", () => {
       ])
     );
     expect(body.read_hint).toContain("skills.read");
+    expect(body.skills.find((skill: { name: string }) => skill.name === "project-skill")).not.toHaveProperty("relative_path");
+    expect(body.skills.find((skill: { name: string }) => skill.name === "project-skill")).not.toHaveProperty("enabled");
+
+    const filtered = payload(await handleSkillsList(ctx, "chat-a", { path: projectRoot, query: "Project", scope: "project" }));
+    expect(filtered.count).toBe(1);
+    expect(filtered.total_count).toBe(3);
+    expect(filtered.skills.map((skill: { name: string }) => skill.name)).toEqual(["project-skill"]);
+
+    const full = payload(await handleSkillsList(ctx, "chat-a", { path: projectRoot, detail: "full", scope: "project" }));
+    expect(full.skills[0]).toMatchObject({ name: "project-skill", relative_path: "project-skill/SKILL.md", enabled: true });
   });
 
   it("reads only SKILL.md files under allowed skill roots", async () => {
@@ -124,7 +149,7 @@ describe("skills tools", () => {
 
     const outside = await handleSkillsRead(ctx, { path: join(tmpRoot, "outside.md") });
     expect(outside.isError).toBe(true);
-    expect(payload(outside).error.code).toBe("NOT_SKILL_FILE");
+    expect(payload(outside).error.code).toBe("PATH_OUTSIDE_SKILLS_ROOTS");
   });
 
   it("rejects a SKILL.md symlink that points outside an allowed root", async () => {

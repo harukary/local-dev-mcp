@@ -1,12 +1,6 @@
-import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { promisify } from "node:util";
-
 import type { AppContext } from "../server.js";
 import { jsonError, jsonResult } from "./dev/common.js";
-
-const execFileAsync = promisify(execFile);
+import { operationSignal } from "../request-context.js";
 
 type TodoItem = {
   id: string;
@@ -27,37 +21,48 @@ function required(value: unknown, label: string): string {
   return value.trim();
 }
 
-function resolveHaruclaw(ctx: AppContext) {
-  const project = ctx.registry.get("haruclaw");
-  if (!project) {
-    throw new Error("The haruclaw project is not registered in local-dev-mcp.");
-  }
-  const executable = join(project.hostRoot, "bin", "haruclaw");
-  if (!existsSync(executable)) {
-    throw new Error(`haruclaw CLI not found: ${executable}`);
-  }
-  return { project, executable };
+function baseUrl(): string {
+  return (process.env.TODO_SERVICE_URL?.trim() || "http://127.0.0.1:3457").replace(/\/+$/, "");
 }
 
-export async function runTodoCli(ctx: AppContext, args: string[]): Promise<any> {
-  const { project, executable } = resolveHaruclaw(ctx);
+async function requestTodo(path: string, init: RequestInit = {}): Promise<any> {
+  let response: Response;
   try {
-    const result = await execFileAsync(executable, ["todo", ...args, "--json"], {
-      cwd: project.hostRoot,
-      env: process.env,
-      timeout: 45_000,
-      maxBuffer: 8 * 1024 * 1024,
-      encoding: "utf8",
+    response = await fetch(`${baseUrl()}${path}`, {
+      ...init,
+      signal: init.signal ?? operationSignal(30_000),
+      headers: {
+        "content-type": "application/json",
+        ...(init.headers ?? {}),
+      },
     });
-    const raw = result.stdout.trim();
-    if (!raw) return null;
-    return JSON.parse(raw);
   } catch (error) {
-    const failure = error as Error & { stdout?: string; stderr?: string; code?: number | string };
-    const stderr = failure.stderr?.trim();
-    const stdout = failure.stdout?.trim();
-    throw new Error(stderr || stdout || failure.message || "haruclaw todo command failed");
+    throw new Error(`Todo service unavailable: ${error instanceof Error ? error.message : String(error)}`);
   }
+  const raw = await response.text();
+  let payload: any = null;
+  if (raw) {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      throw new Error(`Todo service returned invalid JSON (HTTP ${response.status}).`);
+    }
+  }
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.error || `Todo service request failed (HTTP ${response.status}).`);
+  }
+  return payload;
+}
+
+async function resolveProject(value: string, includeArchived = true): Promise<{ id: string; name: string }> {
+  const data = await requestTodo(`/api/todos/projects?includeArchived=${includeArchived ? "true" : "false"}`);
+  const normalized = value.trim().toLocaleLowerCase("ja");
+  const matches = (data.projects as Array<{ id: string; name: string }>).filter(
+    (project) => project.id === value || project.name.toLocaleLowerCase("ja") === normalized,
+  );
+  if (matches.length === 0) throw new Error(`Todo project not found: ${value}`);
+  if (matches.length > 1) throw new Error(`Todo project name is ambiguous: ${value}`);
+  return matches[0] as { id: string; name: string };
 }
 
 async function audit(ctx: AppContext, chatContextId: string, tool: string, event: string): Promise<void> {
@@ -66,26 +71,32 @@ async function audit(ctx: AppContext, chatContextId: string, tool: string, event
     chatContextId,
     tool,
     event,
-    projectId: "haruclaw",
   });
 }
 
-export async function handleTodoProjects(ctx: AppContext, args: { include_archived?: boolean }) {
-  return jsonResult(await runTodoCli(ctx, ["projects", ...(args.include_archived ? ["--all"] : [])]));
+export async function handleTodoProjects(_ctx: AppContext, args: { include_archived?: boolean }) {
+  const data = await requestTodo(`/api/todos/projects?includeArchived=${args.include_archived ? "true" : "false"}`);
+  return jsonResult(data.projects);
 }
 
-export async function handleTodoList(ctx: AppContext, args: { project?: string; completed?: boolean }) {
+export async function handleTodoList(_ctx: AppContext, args: { project?: string; completed?: boolean }) {
   if (args.completed && !args.project) {
     return jsonError("PROJECT_REQUIRED", "todo.list with completed=true requires project.");
   }
-  const cliArgs = ["list"];
-  if (args.project) cliArgs.push("--project", required(args.project, "project"));
-  if (args.completed) cliArgs.push("--completed");
-  return jsonResult(await runTodoCli(ctx, cliArgs));
+  if (args.completed) {
+    const project = await resolveProject(required(args.project, "project"));
+    const data = await requestTodo(`/api/todos/completed?projectId=${encodeURIComponent(project.id)}&limit=500`);
+    return jsonResult(data.items);
+  }
+  const data = await requestTodo("/api/todos/bootstrap");
+  if (!args.project) return jsonResult(data.items);
+  const project = await resolveProject(required(args.project, "project"));
+  return jsonResult((data.items as TodoItem[]).filter((item) => item.projectId === project.id));
 }
 
-export async function handleTodoGet(ctx: AppContext, args: { todo_id?: string }) {
-  return jsonResult(await runTodoCli(ctx, ["show", required(args.todo_id, "todo_id")]));
+export async function handleTodoGet(_ctx: AppContext, args: { todo_id?: string }) {
+  const data = await requestTodo(`/api/todos/items/${encodeURIComponent(required(args.todo_id, "todo_id"))}`);
+  return jsonResult(data.item);
 }
 
 export async function handleTodoCreate(
@@ -93,22 +104,19 @@ export async function handleTodoCreate(
   chatContextId: string,
   args: { project?: string; title?: string; note?: string; parent_id?: string },
 ) {
-  const project = required(args.project, "project");
+  const project = await resolveProject(required(args.project, "project"));
   const title = required(args.title, "title");
-  const cliArgs = ["add", "--project", project];
-  if (args.parent_id) cliArgs.push("--parent", required(args.parent_id, "parent_id"));
-  cliArgs.push(title);
-  const created = (await runTodoCli(ctx, cliArgs)) as TodoItem;
-  try {
-    const result = args.note !== undefined
-      ? await runTodoCli(ctx, ["note", created.id, args.note])
-      : created;
-    await audit(ctx, chatContextId, "todo.create", "todo_created");
-    return jsonResult(result);
-  } catch (error) {
-    await runTodoCli(ctx, ["delete", created.id]).catch(() => undefined);
-    throw error;
-  }
+  const data = await requestTodo("/api/todos/items", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: project.id,
+      title,
+      ...(args.note !== undefined ? { note: args.note } : {}),
+      ...(args.parent_id ? { parentId: required(args.parent_id, "parent_id") } : {}),
+    }),
+  });
+  await audit(ctx, chatContextId, "todo.create", "todo_created");
+  return jsonResult(data.item);
 }
 
 export async function handleTodoUpdate(
@@ -120,19 +128,15 @@ export async function handleTodoUpdate(
   if (args.title === undefined && args.note === undefined) {
     return jsonError("NO_CHANGES", "Provide title and/or note.");
   }
-  const before = (await runTodoCli(ctx, ["show", id])) as TodoItem;
-  try {
-    if (args.title !== undefined) await runTodoCli(ctx, ["edit", id, "--title", required(args.title, "title")]);
-    const result = args.note !== undefined
-      ? await runTodoCli(ctx, ["note", id, args.note])
-      : await runTodoCli(ctx, ["show", id]);
-    await audit(ctx, chatContextId, "todo.update", "todo_updated");
-    return jsonResult(result);
-  } catch (error) {
-    if (args.title !== undefined) await runTodoCli(ctx, ["edit", id, "--title", before.title]).catch(() => undefined);
-    if (args.note !== undefined) await runTodoCli(ctx, ["note", id, before.note]).catch(() => undefined);
-    throw error;
-  }
+  const data = await requestTodo(`/api/todos/items/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      ...(args.title !== undefined ? { title: required(args.title, "title") } : {}),
+      ...(args.note !== undefined ? { note: args.note } : {}),
+    }),
+  });
+  await audit(ctx, chatContextId, "todo.update", "todo_updated");
+  return jsonResult(data.item);
 }
 
 export async function handleTodoDecompose(
@@ -147,30 +151,33 @@ export async function handleTodoDecompose(
   if (args.children.length > 50) {
     return jsonError("TOO_MANY_CHILDREN", "At most 50 children can be created at once.");
   }
-  const parent = (await runTodoCli(ctx, ["show", parentId])) as TodoItem;
+  const children = args.children.map(child => ({ title: required(child.title, "child.title"), note: child.note }));
+  const parentData = await requestTodo(`/api/todos/items/${encodeURIComponent(parentId)}`);
+  const parent = parentData.item as TodoItem;
   if (parent.parentId) {
     return jsonError("PARENT_MUST_BE_TOP_LEVEL", "A child Todo cannot be decomposed further.");
   }
   const created: TodoItem[] = [];
   try {
-    for (const child of args.children) {
-      const title = required(child.title, "child.title");
-      let item = (await runTodoCli(ctx, [
-        "add", "--project", parent.projectId, "--parent", parentId, title,
-      ])) as TodoItem;
-      created.push(item);
-      if (child.note !== undefined) {
-        item = (await runTodoCli(ctx, ["note", item.id, child.note])) as TodoItem;
-        created[created.length - 1] = item;
-      }
+    for (const child of children) {
+      const data = await requestTodo("/api/todos/items", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: parent.projectId,
+          parentId,
+          title: required(child.title, "child.title"),
+          ...(child.note !== undefined ? { note: child.note } : {}),
+        }),
+      });
+      created.push(data.item as TodoItem);
     }
     await audit(ctx, chatContextId, "todo.decompose", "todo_decomposed");
     return jsonResult({ parent, children: created });
   } catch (error) {
-    for (const item of [...created].reverse()) {
-      await runTodoCli(ctx, ["delete", item.id]).catch(() => undefined);
-    }
-    throw error;
+    return jsonError("TODO_DECOMPOSE_PARTIAL", error instanceof Error ? error.message : String(error), {
+      parent_id: parentId, created_ids: created.map(item => item.id),
+      next_child_index: created.length, failed_child_outcome: "unknown", retry_entire_request: false,
+    });
   }
 }
 
@@ -183,9 +190,12 @@ export async function handleTodoSetCompleted(
   if (typeof args.completed !== "boolean") {
     return jsonError("COMPLETED_REQUIRED", "completed must be a boolean.");
   }
-  const result = await runTodoCli(ctx, [args.completed ? "done" : "reopen", id]);
+  const data = await requestTodo(`/api/todos/items/${encodeURIComponent(id)}/${args.completed ? "complete" : "reopen"}`, {
+    method: "POST",
+    body: "{}",
+  });
   await audit(ctx, chatContextId, "todo.set_completed", args.completed ? "todo_completed" : "todo_reopened");
-  return jsonResult(result);
+  return jsonResult(data.items);
 }
 
 export async function handleTodoMove(
@@ -193,30 +203,25 @@ export async function handleTodoMove(
   chatContextId: string,
   args: { todo_id?: string; project?: string; parent_id?: string; index?: number },
 ) {
-  const cliArgs = [
-    "move",
-    required(args.todo_id, "todo_id"),
-    "--project",
-    required(args.project, "project"),
-  ];
-  if (args.parent_id) cliArgs.push("--parent", required(args.parent_id, "parent_id"));
-  if (args.index !== undefined) {
-    if (!Number.isInteger(args.index) || args.index < 0) return jsonError("INVALID_INDEX", "index must be a non-negative integer.");
-    cliArgs.push("--index", String(args.index));
+  const id = required(args.todo_id, "todo_id");
+  const project = await resolveProject(required(args.project, "project"));
+  if (args.index !== undefined && (!Number.isInteger(args.index) || args.index < 0)) {
+    return jsonError("INVALID_INDEX", "index must be a non-negative integer.");
   }
-  const result = await runTodoCli(ctx, cliArgs);
+  const data = await requestTodo(`/api/todos/items/${encodeURIComponent(id)}/move`, {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: project.id,
+      ...(args.parent_id ? { parentId: required(args.parent_id, "parent_id") } : { parentId: null }),
+      targetIndex: args.index ?? 999999,
+    }),
+  });
   await audit(ctx, chatContextId, "todo.move", "todo_moved");
-  return jsonResult(result);
+  return jsonResult(data.items);
 }
 
 export async function handleTodoDelete(ctx: AppContext, chatContextId: string, args: { todo_id?: string }) {
-  const result = await runTodoCli(ctx, ["delete", required(args.todo_id, "todo_id")]);
+  const data = await requestTodo(`/api/todos/items/${encodeURIComponent(required(args.todo_id, "todo_id"))}`, { method: "DELETE" });
   await audit(ctx, chatContextId, "todo.delete", "todo_deleted");
-  return jsonResult(result);
-}
-
-export async function handleTodoDiscord(ctx: AppContext, chatContextId: string, args: { todo_id?: string }) {
-  const result = await runTodoCli(ctx, ["discord", required(args.todo_id, "todo_id")]);
-  await audit(ctx, chatContextId, "todo.discord", "todo_discord_thread_ensured");
-  return jsonResult(result);
+  return jsonResult(data.items);
 }

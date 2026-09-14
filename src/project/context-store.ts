@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { ChatContext, ProjectId } from "../types.js";
 
@@ -9,6 +10,7 @@ export interface ContextStoreData {
 export class ChatContextStore {
   private contexts: Map<string, ChatContext> = new Map();
   private persistencePath: string | null = null;
+  private pendingSave: Promise<void> = Promise.resolve();
 
   constructor(persistencePath?: string) {
     this.persistencePath = persistencePath ?? null;
@@ -32,7 +34,19 @@ export class ChatContextStore {
     const data: ContextStoreData = {
       chatContexts: Object.fromEntries(this.contexts),
     };
-    await writeFile(this.persistencePath, JSON.stringify(data, null, 2), "utf-8");
+    const path = this.persistencePath;
+    const content = JSON.stringify(data);
+    const operation = this.pendingSave.catch(() => undefined).then(async () => {
+      const temp = `${path}.tmp-${randomUUID()}`;
+      try {
+        await writeFile(temp, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        await rename(temp, path);
+      } finally {
+        await rm(temp, { force: true });
+      }
+    });
+    this.pendingSave = operation;
+    await operation;
   }
 
   getOrCreate(chatContextId: string): ChatContext {
@@ -50,16 +64,34 @@ export class ChatContextStore {
 
   setCurrentProject(chatContextId: string, projectId: ProjectId, selectedBy: string = "user"): ChatContext {
     const ctx = this.getOrCreate(chatContextId);
+    if (ctx.currentProjectId !== projectId) {
+      delete ctx.workingDirectory;
+    }
     ctx.currentProjectId = projectId;
     ctx.selectedAt = new Date().toISOString();
     ctx.selectedBy = selectedBy;
     return ctx;
   }
 
+  setWorkingDirectory(chatContextId: string, workingDirectory: string | undefined, selectedBy: string = "user"): ChatContext {
+    const ctx = this.getOrCreate(chatContextId);
+    const normalized = workingDirectory?.trim();
+    if (!normalized || normalized === ".") delete ctx.workingDirectory;
+    else ctx.workingDirectory = normalized;
+    ctx.selectedAt = new Date().toISOString();
+    ctx.selectedBy = selectedBy;
+    return ctx;
+  }
+
+  getWorkingDirectory(chatContextId: string): string | undefined {
+    return this.contexts.get(chatContextId)?.workingDirectory;
+  }
+
   clearCurrentProject(chatContextId: string): void {
     const ctx = this.contexts.get(chatContextId);
     if (!ctx) return;
     delete ctx.currentProjectId;
+    delete ctx.workingDirectory;
     delete ctx.selectedAt;
     delete ctx.selectedBy;
   }

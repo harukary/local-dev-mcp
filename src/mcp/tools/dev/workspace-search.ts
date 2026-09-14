@@ -1,12 +1,13 @@
-import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { promisify } from "node:util";
+import { createInterface } from "node:readline";
+import { utf8Prefix } from "../../output.js";
+import { requestSignal } from "../../request-context.js";
 import type { AppContext } from "../../server.js";
 import { getActiveProject, jsonError, jsonResult, matchesDeniedPath, resolveProjectPath } from "./common.js";
 
-const execFileAsync = promisify(execFile);
-const DEFAULT_MAX_RESULTS = 100;
+const DEFAULT_MAX_RESULTS = 50;
 const MAX_RESULTS = 500;
 const MAX_RG_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_CONTEXT_FILE_BYTES = 4 * 1024 * 1024;
@@ -30,25 +31,27 @@ function deniedGlobs(pattern: string): string[] {
 
 async function addContext(projectRoot: string, matches: Array<{ path: string; line: number; text: string }>, contextLines: number) {
   if (contextLines <= 0) return matches;
-  const cache = new Map<string, string[] | null>();
+  const cache = new Map<string, Promise<string[] | null>>();
+  let remainingContextBytes = 16 * 1024 * 1024;
   return await Promise.all(matches.map(async (match) => {
-    let lines = cache.get(match.path);
-    if (lines === undefined) {
-      try {
+    if (!cache.has(match.path)) {
+      const pending = (async () => { try {
         const absolutePath = join(projectRoot, match.path);
+        const size = (await stat(absolutePath)).size;
+        if (size > MAX_CONTEXT_FILE_BYTES || size > remainingContextBytes) return null;
+        remainingContextBytes -= size;
         const content = await readFile(absolutePath);
-        lines = content.byteLength <= MAX_CONTEXT_FILE_BYTES ? content.toString("utf8").split(/\r?\n/) : null;
-      } catch {
-        lines = null;
-      }
-      cache.set(match.path, lines);
+        return content.byteLength <= MAX_CONTEXT_FILE_BYTES ? content.toString("utf8").split(/\r?\n/) : null;
+      } catch { return null; } })();
+      cache.set(match.path, pending);
     }
+    const lines = await cache.get(match.path);
     if (!lines) return match;
     const index = match.line - 1;
     return {
       ...match,
-      before: lines.slice(Math.max(0, index - contextLines), index),
-      after: lines.slice(index + 1, index + 1 + contextLines),
+      before: lines.slice(Math.max(0, index - contextLines), index).map(line => utf8Prefix(line, 2048)),
+      after: lines.slice(index + 1, index + 1 + contextLines).map(line => utf8Prefix(line, 2048)),
     };
   }));
 }
@@ -66,6 +69,7 @@ export async function handleWorkspaceSearch(
     case_sensitive?: boolean;
     include_hidden?: boolean;
     include_artifacts?: boolean;
+    offset?: number;
   }
 ) {
   const project = getActiveProject(ctx, chatContextId);
@@ -78,7 +82,8 @@ export async function handleWorkspaceSearch(
   const contextLines = Math.min(Math.max(args?.context_lines ?? 0, 0), 5);
   const maxResults = Math.min(Math.max(args?.max_results ?? DEFAULT_MAX_RESULTS, 1), MAX_RESULTS);
 
-  const rgArgs = ["--json", "--no-messages"];
+  const offset = Math.min(100_000, Math.max(0, args?.offset ?? 0));
+  const rgArgs = ["--json", "--no-messages", "--sort", "path"];
   if (args?.regex !== true) rgArgs.push("--fixed-strings");
   if (args?.case_sensitive === false) rgArgs.push("--ignore-case");
   if (args?.include_hidden === true) rgArgs.push("--hidden");
@@ -94,14 +99,37 @@ export async function handleWorkspaceSearch(
   rgArgs.push("--", query, resolved.relativePath === "." ? "." : resolved.relativePath);
 
   try {
-    const { stdout } = await execFileAsync("rg", rgArgs, {
+    const signal = requestSignal();
+    signal?.throwIfAborted();
+    const child = spawn("rg", rgArgs, {
       cwd: project.hostRoot,
-      encoding: "utf8",
-      maxBuffer: MAX_RG_BUFFER_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    let error: Error | undefined;
+    let stderr = "";
+    child.stderr.on("data", chunk => { stderr = utf8Prefix(stderr + chunk.toString(), 4096); });
+    const closed = new Promise<number | null>(resolve => {
+      child.once("error", err => { error = err; resolve(null); });
+      child.once("close", resolve);
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 30_000);
+    const cancel = () => { child.kill("SIGKILL"); };
+    signal?.addEventListener("abort", cancel, { once: true });
     const rawMatches: Array<{ path: string; line: number; text: string }> = [];
     let truncated = false;
-    for (const line of stdout.split(/\r?\n/)) {
+    let streamedBytes = 0;
+    child.stdout.on("data", (chunk: Buffer) => {
+      streamedBytes += chunk.length;
+      if (streamedBytes > MAX_RG_BUFFER_BYTES) { truncated = true; child.kill("SIGKILL"); }
+    });
+    let seen = 0;
+    let bytes = 0;
+    const reader = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    let code: number | null = null;
+    try { for await (const line of reader) {
+      bytes += Buffer.byteLength(line);
+      if (bytes > MAX_RG_BUFFER_BYTES) { truncated = true; child.kill("SIGKILL"); break; }
       if (!line) continue;
       let event: RgMatch | { type?: string };
       try { event = JSON.parse(line) as RgMatch | { type?: string }; } catch { continue; }
@@ -113,18 +141,31 @@ export async function handleWorkspaceSearch(
       const absolutePath = join(project.hostRoot, rawPath);
       const relativePath = relative(project.hostRoot, absolutePath).replace(/\\/g, "/");
       if (relativePath.startsWith("../") || matchesDeniedPath(relativePath, project)) continue;
+      if (seen++ < offset) continue;
       if (rawMatches.length >= maxResults) {
         truncated = true;
+        child.kill("SIGKILL");
         break;
       }
       rawMatches.push({
         path: relativePath,
         line: lineNumber,
-        text: (match.data.lines.text ?? "").replace(/\r?\n$/, ""),
+        text: utf8Prefix((match.data.lines.text ?? "").replace(/\r?\n$/, ""), 4096),
       });
+    } } catch (error) { child.kill("SIGKILL"); throw error; }
+    finally {
+      reader.close();
+      child.stdout.resume();
+      code = await closed;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
     }
+    if (error) throw error;
+    if (signal?.aborted) return jsonError("REQUEST_CANCELED", "Search canceled.");
+    if (timedOut) return jsonError("SEARCH_TIMEOUT", "Search exceeded 30 seconds; narrow path or glob.");
+    if (!truncated && code !== 0 && code !== 1) return jsonError("SEARCH_FAILED", stderr || `ripgrep exited with ${code}`);
     const matches = await addContext(project.hostRoot, rawMatches, contextLines);
-    return jsonResult({ project_id: project.projectId, query, root: resolved.relativePath, matches, truncated, max_results: maxResults });
+    return jsonResult({ project_id: project.projectId, query, root: resolved.relativePath, matches, truncated, max_results: maxResults, offset, next_offset: truncated && matches.length ? offset + matches.length : null, line_preview_max_bytes: 4096, context_preview_max_bytes: 2048 });
   } catch (err) {
     const failure = err as Error & { code?: number | string; stdout?: string; stderr?: string };
     if (failure.code === 1 || (!failure.stdout && !failure.stderr && String(failure.message).includes("code 1"))) {

@@ -5,6 +5,8 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { AppContext } from "../server.js";
 import type { ProjectConfig } from "../../types.js";
 import { jsonError, jsonResult, sha256 } from "./dev/common.js";
+import { load as loadYaml } from "js-yaml";
+import { applyWorkingDirectory } from "../../project/working-directory.js";
 
 const DEFAULT_MAX_BYTES = 512 * 1024;
 
@@ -30,7 +32,7 @@ interface SkillEntry {
 export async function handleSkillsList(
   ctx: AppContext,
   chatContextId: string,
-  args: { path?: string }
+  args: { path?: string; query?: string; scope?: SkillScope; detail?: "summary" | "full" }
 ) {
   const cwd = resolveSkillsCwd(ctx, chatContextId, args?.path);
   if (!cwd.ok) return jsonError(cwd.code, cwd.message, cwd.details);
@@ -61,12 +63,21 @@ export async function handleSkillsList(
   }
 
   skills.sort((a, b) => a.scope.localeCompare(b.scope) || a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+  const query = args?.query?.trim().toLowerCase();
+  const filtered = skills.filter((skill) => {
+    if (args?.scope && skill.scope !== args.scope) return false;
+    return !query || skill.name.toLowerCase().includes(query) || skill.description.toLowerCase().includes(query);
+  });
+  const listed = args?.detail === "full"
+    ? filtered
+    : filtered.map(({ name, description, path, scope, origin }) => ({ name, description, path, scope, origin }));
 
   return jsonResult({
     cwd: cwd.cwd,
     roots,
-    count: skills.length,
-    skills,
+    count: filtered.length,
+    total_count: skills.length,
+    skills: listed,
     errors,
     read_hint: "Call skills.read with the exact SKILL.md path returned by skills.list before applying a skill contract.",
   });
@@ -80,9 +91,7 @@ export async function handleSkillsRead(
   if (!rawPath) return jsonError("MISSING_PATH", "skills.read requires a SKILL.md path returned by skills.list.");
 
   const requestedPath = resolve(rawPath);
-  if (basename(requestedPath) !== "SKILL.md") {
-    return jsonError("NOT_SKILL_FILE", "skills.read only reads exact SKILL.md files.");
-  }
+  if (!/\.(md|txt|json|yaml|yml|toml)$/i.test(requestedPath)) return jsonError("NOT_SKILL_FILE", "skills.read supports SKILL.md and text reference files inside a Skill directory.");
 
   try {
     const linkStat = await lstat(requestedPath);
@@ -92,6 +101,11 @@ export async function handleSkillsRead(
     const filePath = await realpath(requestedPath);
     const allowed = await resolveAllowedSkillFile(ctx, filePath);
     if (!allowed.ok) return jsonError(allowed.code, allowed.message, allowed.details);
+    if (basename(filePath) !== "SKILL.md") {
+      let directory = resolve(filePath, "..");
+      while (directory !== allowed.root && isInside(allowed.root, directory) && !existsSync(join(directory, "SKILL.md"))) directory = resolve(directory, "..");
+      if (!existsSync(join(directory, "SKILL.md"))) return jsonError("NOT_SKILL_FILE", "Reference must belong to a directory containing SKILL.md.");
+    }
     const fileStat = await stat(filePath);
     if (!fileStat.isFile()) return jsonError("NOT_A_FILE", "Path is not a regular file.");
 
@@ -123,7 +137,7 @@ function resolveSkillsCwd(ctx: AppContext, chatContextId: string, inputPath?: st
     const currentProjectId = ctx.contextStore.getActiveProject?.(chatContextId, (projectId) => ctx.registry.has(projectId))
       ?? ctx.contextStore.getCurrentProject?.(chatContextId);
     const currentProject = currentProjectId ? ctx.registry.get(currentProjectId) : undefined;
-    return { ok: true as const, cwd: resolve(currentProject?.hostRoot ?? process.cwd()) };
+    return { ok: true as const, cwd: resolve(currentProject ? applyWorkingDirectory(currentProject, ctx.contextStore.getWorkingDirectory?.(chatContextId)).hostRoot : process.cwd()) };
   }
 
   const base = activeProjectRoot(ctx, chatContextId) ?? process.cwd();
@@ -143,7 +157,8 @@ function resolveSkillsCwd(ctx: AppContext, chatContextId: string, inputPath?: st
 function activeProjectRoot(ctx: AppContext, chatContextId: string): string | undefined {
   const projectId = ctx.contextStore.getActiveProject?.(chatContextId, (candidate) => ctx.registry.has(candidate))
     ?? ctx.contextStore.getCurrentProject?.(chatContextId);
-  return projectId ? ctx.registry.get(projectId)?.hostRoot : undefined;
+  const project = projectId ? ctx.registry.get(projectId) : undefined;
+  return project ? applyWorkingDirectory(project, ctx.contextStore.getWorkingDirectory?.(chatContextId)).hostRoot : undefined;
 }
 
 function findContainingProject(ctx: AppContext, targetPath: string): ProjectConfig | undefined {
@@ -151,7 +166,12 @@ function findContainingProject(ctx: AppContext, targetPath: string): ProjectConf
 }
 
 async function resolveAllowedSkillFile(ctx: AppContext, filePath: string) {
+  const containing = findContainingProject(ctx, filePath);
+  const marker = `${process.platform === "win32" ? "\\" : "/"}.agents${process.platform === "win32" ? "\\" : "/"}skills${process.platform === "win32" ? "\\" : "/"}`;
+  const markerIndex = filePath.lastIndexOf(marker);
+  const nestedRoot = containing && markerIndex >= 0 ? filePath.slice(0, markerIndex + marker.length - 1) : undefined;
   const roots = [
+    ...(nestedRoot ? [{ scope: "project" as const, root: nestedRoot }] : []),
     ...ctx.registry.getAll().map((project) => ({ scope: "project" as const, root: join(resolve(project.hostRoot), ".agents", "skills") })),
     { scope: "system" as const, root: codexSystemSkillsRoot() },
     { scope: "user" as const, root: codexSkillsRoot() },
@@ -249,24 +269,27 @@ function resolveOrigin(root: { scope: SkillScope; root: string }, filePath: stri
 }
 
 async function readSkillMetadata(filePath: string): Promise<{ name: string; description: string }> {
+  const info = await stat(filePath);
+  const key = `${info.mtimeMs}:${info.size}`;
+  const cached = metadataCache.get(filePath);
+  if (cached?.key === key) return cached.metadata;
   const content = await readFile(filePath, "utf8");
-  return parseSkillMetadata(content);
+  const metadata = parseSkillMetadata(content);
+  if (metadataCache.size >= 1000) metadataCache.clear();
+  metadataCache.set(filePath, { key, metadata });
+  return metadata;
 }
+const metadataCache = new Map<string, { key: string; metadata: { name: string; description: string } }>();
 
 function parseSkillMetadata(content: string): { name: string; description: string } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return { name: "", description: "" };
-  const frontmatter = match[1];
+  const parsed = loadYaml(match[1]);
+  const frontmatter = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
   return {
-    name: readFrontmatterString(frontmatter, "name"),
-    description: readFrontmatterString(frontmatter, "description"),
+    name: typeof frontmatter.name === "string" ? frontmatter.name : "",
+    description: typeof frontmatter.description === "string" ? frontmatter.description.trim() : "",
   };
-}
-
-function readFrontmatterString(frontmatter: string, key: string): string {
-  const match = frontmatter.match(new RegExp(`^${key}:\\s*(.*)$`, "m"));
-  if (!match) return "";
-  return match[1].trim().replace(/^["']|["']$/g, "");
 }
 
 function inferSkillName(root: string, filePath: string): string {
