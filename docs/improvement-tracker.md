@@ -61,7 +61,7 @@
 - `shell.status`: output=noneで状態のみ、tailで保持済み末尾、既定はcursor付きのbounded出力。stdout_truncated/stderr_truncatedは保持上限による欠落を示す。
 - `browser.click/type/press/interact`: CSSに加えてPlaywrightのtext/role locator、任意iframe。複数一致は暗黙に最初を操作しない。
 - `mobile.tap_element`: refは同じ会話の直近snapshotに限る。device操作や他会話のsnapshotで無効化する。画面自体の非同期変更まで完全検出する保証ではない。
-- `tool.schema(prefix,detail)`で対象だけ取得できる。tool追加時はChatGPT Plugin Refreshが必要。
+- `tool.schema(prefix,detail)`で対象だけ取得できる。tool追加・input schema変更時は、MCP runtime反映 → ChatGPT Plugin Refresh → Branch chat（または新規chat）でconversation側のtool bindingを再解決する。公式に十分書かれていない観測仕様と切り分け手順は`docs/chatgpt-user-plugin-schema-refresh.md`を参照。
 - `skills.list(query,scope,detail)`は既定summary。特定Skillを探す追跡呼出しではquery/scopeで絞り、追加metadataが必要な場合だけdetail=fullを使う。
 - `tool.usage(detail,project_id,prefix,limit,recent_days)`は既定lifetime summary。`recent_days=1..31`でUTC日次bucketを集約し、project/tool単位のrecent calls・failures・duration・request/response bytesを返せる。引数や出力本文は記録しない。wire bytesとmodel tokenは同一ではない。
 
@@ -72,10 +72,10 @@
 - `jsonResult`はstructuredContentと同一JSON textを現在も併記している。MCP SDK 1.29.0ではstructuredContent単独相当もschema上は受理できることを確認したが、ChatGPT Android/Webを含む実client互換を推測で変更しない。先にstructured/text別byte計測を追加し、実測後に判断する。
 - `tool.usage`自体が大きなaggregateを返していたため既定をtop-30 summaryへ変更。full snapshotは明示`detail=full`時のみ。今後の「最近の利用」分析用に、tool/project別のUTC日次bucketを31日だけ保持し`recent_days`で直接絞れるようにした。
 - `skills.list`は既定summary、`workspace.read`既定64KiB、`workspace.search`既定50件へ縮小。`workspace.batch`の代表4操作ではcompact化単体でstructured resultを27,405Bから26,800Bへ約2.2%削減し、主効果はmetadata削減よりcall consolidation側と判断。
-- source schemaは`2026-09-14.1`。`pnpm typecheck && pnpm test`は50 files / 235 tests pass、`pnpm build`と`git diff --check`も成功。
+- 利用ログ改善の初期実装はsource schema `2026-09-14.1` で検証し、その後のcleanupで `2026-09-14.2` へ更新した。初期実装時は`pnpm typecheck && pnpm test` 50 files / 235 tests pass、`pnpm build`と`git diff --check`も成功。
 - 2026-09-14.2 cleanup: `notes.*` / `private_notes.*` 7 tools、未参照`external-browser.ts`、未使用`/ui`・`/debug/tools`・root POST/GET・HTTP `/reload`、CORS direct dependency、会話別rate limiterを削除。`workspace.patch`のqueue keyを`policyRoot ?? hostRoot`へ修正。Bitwarden mappingを`~/.local-dev-mcp/.bitwarden.env`へ移行し、`HARUCLAW_HOME`コード依存を削除。
 - cleanup後のbuilt schemaは75 tools / 45,774 bytes、`notes.*` / `private_notes.*`なし。full verificationは47 files / 224 tests pass、typecheck/build/diff-check成功。
-- 2026-09-14のlive server再起動は未実施。再起動前確認でvlog / playstay / llm-pricing / hundred-year-diaryに複数の生存long-running shell jobがあり、2026-09-08にMCP再起動と同時期にMetro jobが消失した記録があるため、利用中processを推測で中断しない。
+- 2026-09-14にcommit `6bfa118` を`origin/main`へpush後、live MCPを再起動してschema `2026-09-14.2` / 75 toolsを確認した。再起動時は既存long-running processの生存もread-backした。ChatGPT側ではPlugin Refresh後にBranch chatすると新しいtool bindingへ切り替わる運用知見を確認した。
 
 ## 検証・反映の境界
 
