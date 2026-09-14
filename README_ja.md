@@ -1,5 +1,7 @@
 # local-dev-mcp
 
+![local-dev-mcp システム構成](docs/local-dev-mcp-system-overview-ja.png)
+
 `local-dev-mcp` は、信頼した開発用PCを ChatGPT から操作するための private MCP server です。登録した project に対して、project / workspace / git / browser / mobile / Todo / artifact / controlled shell の typed tool を提供します。
 
 ChatGPT との正規接続経路は **OpenAI Secure MCP Tunnel** です。HTTP MCP server は loopback のみで待ち受け、public な MCP endpoint は公開しません。

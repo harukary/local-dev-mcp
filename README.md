@@ -1,5 +1,7 @@
 # local-dev-mcp
 
+![local-dev-mcp System Architecture](docs/local-dev-mcp-system-overview-en.png)
+
 `local-dev-mcp` is a private MCP server for operating a trusted development workstation from ChatGPT. It exposes registered projects through typed project, workspace, git, browser, mobile, Todo, artifact, and controlled shell tools.
 
 For ChatGPT, the canonical transport is **OpenAI Secure MCP Tunnel**. The HTTP MCP server listens on loopback only and does not expose a public MCP endpoint.
