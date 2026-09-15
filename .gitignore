@@ -1,4 +1,7 @@
 node_modules/
+/data/received-files/
+/data/release-archive/
+/scripts/archive/generated-20260915/
 dist/
 logs/audit.jsonl
 logs/audit.jsonl.*
