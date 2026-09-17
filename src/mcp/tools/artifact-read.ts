@@ -53,6 +53,120 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   ".webm": "video/webm",
 };
 
+export async function handleArtifactLink(
+  ctx: AppContext,
+  chatContextId: string,
+  args: { path?: string }
+) {
+  const project = getActiveProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+
+  if (!args?.path || !args.path.trim()) {
+    return jsonError("MISSING_PATH", "Missing required argument: path.");
+  }
+
+  const resolved = await resolveArtifactPath(project, args.path);
+  if (!resolved.ok) {
+    await logArtifactFailure(ctx, chatContextId, project, args.path, resolved.message, "artifact.link", "artifact_link_failed");
+    return jsonError(resolved.code, resolved.message);
+  }
+
+  let fileStat;
+  try {
+    fileStat = await stat(resolved.absolutePath);
+  } catch {
+    await logArtifactFailure(ctx, chatContextId, project, args.path, "File not found.", "artifact.link", "artifact_link_failed");
+    return jsonError("FILE_NOT_FOUND", "File not found.");
+  }
+
+  if (!fileStat.isFile()) {
+    await logArtifactFailure(ctx, chatContextId, project, args.path, "Path is not a regular file.", "artifact.link", "artifact_link_failed");
+    return jsonError("NOT_A_FILE", "Path is not a regular file.");
+  }
+
+  const fileName = basename(resolved.relativePath) || "artifact";
+  const mimeType = detectMimeType(resolved.absolutePath);
+  const uri = buildArtifactUri(project.projectId, resolved.relativePath);
+  const metadata = {
+    project_id: project.projectId,
+    path: resolved.relativePath,
+    filename: fileName,
+    mime_type: mimeType,
+    size_bytes: fileStat.size,
+    transport: "mcp_resource_link",
+    uri,
+  };
+
+  await ctx.auditLogger.log({
+    timestamp: new Date().toISOString(),
+    chatContextId,
+    tool: "artifact.link",
+    event: "artifact_link",
+    projectId: project.projectId,
+    cwd: project.hostRoot,
+    command: resolved.relativePath,
+    enforcement: "audit_only",
+  });
+
+  return {
+    structuredContent: metadata,
+    content: [
+      { type: "text" as const, text: JSON.stringify(metadata, null, 2) },
+      {
+        type: "resource_link" as const,
+        uri,
+        name: fileName,
+        description: `Local project artifact: ${resolved.relativePath}`,
+        mimeType,
+        size: fileStat.size,
+      },
+    ],
+  };
+}
+
+export async function handleArtifactResourceRead(
+  ctx: AppContext,
+  chatContextId: string,
+  uri: string
+) {
+  const parsed = parseArtifactUri(uri);
+  if (!parsed.ok) {
+    throw new Error(parsed.message);
+  }
+
+  const project = ctx.registry.get(parsed.projectId);
+  if (!project) {
+    throw new Error(`Project not found: ${parsed.projectId}`);
+  }
+
+  const resolved = await resolveArtifactPath(project, parsed.path);
+  if (!resolved.ok) {
+    throw new Error(resolved.message);
+  }
+
+  const fileStat = await stat(resolved.absolutePath).catch(() => null);
+  if (!fileStat) throw new Error("File not found.");
+  if (!fileStat.isFile()) throw new Error("Path is not a regular file.");
+
+  const bytes = await readFile(resolved.absolutePath);
+  const mimeType = detectMimeType(resolved.absolutePath, bytes);
+
+  await ctx.auditLogger.log({
+    timestamp: new Date().toISOString(),
+    chatContextId,
+    tool: "resources/read",
+    event: "artifact_resource_read",
+    projectId: project.projectId,
+    cwd: project.hostRoot,
+    command: resolved.relativePath,
+    enforcement: "audit_only",
+  });
+
+  return {
+    contents: [{ uri, mimeType, blob: bytes.toString("base64") }],
+  };
+}
+
 export async function handleArtifactRead(
   ctx: AppContext,
   chatContextId: string,
@@ -178,12 +292,28 @@ function buildArtifactUri(projectId: string, relativePath: string): string {
   return `local-dev-artifact://${encodedProject}/${encodedPath}`;
 }
 
-function detectMimeType(filePath: string, bytes: Buffer): string {
+function detectMimeType(filePath: string, bytes?: Buffer): string {
   const byExtension = MIME_BY_EXTENSION[extname(filePath).toLowerCase()];
   if (byExtension) return byExtension;
-  if (bytes.subarray(0, 5).toString("ascii") === "%PDF-") return "application/pdf";
-  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) return "application/zip";
+  if (bytes?.subarray(0, 5).toString("ascii") === "%PDF-") return "application/pdf";
+  if (bytes && bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) return "application/zip";
   return "application/octet-stream";
+}
+
+function parseArtifactUri(uri: string):
+  | { ok: true; projectId: string; path: string }
+  | { ok: false; message: string } {
+  const match = uri.match(/^local-dev-artifact:\/\/([^/]+)\/(.+)$/);
+  if (!match) return { ok: false, message: `Unknown resource: ${uri}` };
+
+  try {
+    const projectId = decodeURIComponent(match[1]);
+    const path = match[2].split("/").map((segment) => decodeURIComponent(segment)).join("/");
+    if (!projectId || !path) return { ok: false, message: `Unknown resource: ${uri}` };
+    return { ok: true, projectId, path };
+  } catch {
+    return { ok: false, message: `Malformed artifact resource URI: ${uri}` };
+  }
 }
 
 async function logArtifactFailure(
@@ -191,13 +321,15 @@ async function logArtifactFailure(
   chatContextId: string,
   project: ProjectConfig,
   path: string,
-  error: string
+  error: string,
+  tool = "artifact.read",
+  event = "artifact_read_failed"
 ): Promise<void> {
   await ctx.auditLogger.log({
     timestamp: new Date().toISOString(),
     chatContextId,
-    tool: "artifact.read",
-    event: "artifact_read_failed",
+    tool,
+    event,
     projectId: project.projectId,
     cwd: project.hostRoot,
     command: path,

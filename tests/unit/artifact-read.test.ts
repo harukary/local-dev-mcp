@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { handleArtifactRead } from "../../src/mcp/tools/artifact-read.js";
+import { handleArtifactLink, handleArtifactRead, handleArtifactResourceRead } from "../../src/mcp/tools/artifact-read.js";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
@@ -16,6 +16,53 @@ afterEach(() => {
   if (tmpOutside) rmSync(tmpOutside, { recursive: true, force: true });
   tmpRoot = "";
   tmpOutside = "";
+});
+
+describe("artifact.link", () => {
+  it("returns a resource link without embedding file bytes in the tool result", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-artifact-link-"));
+    mkdirSync(join(tmpRoot, "dist"));
+    const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]);
+    writeFileSync(join(tmpRoot, "dist", "bundle.zip"), bytes);
+    const { ctx } = createContext(createProject(tmpRoot));
+
+    const result = await handleArtifactLink(ctx, "chat-a", { path: "dist/bundle.zip" });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent).toMatchObject({
+      project_id: "alpha",
+      path: "dist/bundle.zip",
+      filename: "bundle.zip",
+      mime_type: "application/zip",
+      size_bytes: bytes.length,
+      transport: "mcp_resource_link",
+      uri: "local-dev-artifact://alpha/dist/bundle.zip",
+    });
+    expect(result.content[1]).toEqual(expect.objectContaining({
+      type: "resource_link",
+      uri: "local-dev-artifact://alpha/dist/bundle.zip",
+      name: "bundle.zip",
+      mimeType: "application/zip",
+      size: bytes.length,
+    }));
+    expect(JSON.stringify(result)).not.toContain(bytes.toString("base64"));
+    expect(CallToolResultSchema.safeParse(result).success).toBe(true);
+  });
+
+  it("serves linked bytes only when the MCP client reads the resource URI", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-artifact-resource-"));
+    const bytes = Buffer.from("resource-body");
+    writeFileSync(join(tmpRoot, "artifact.bin"), bytes);
+    const { ctx } = createContext(createProject(tmpRoot));
+
+    const result = await handleArtifactResourceRead(ctx, "chat-a", "local-dev-artifact://alpha/artifact.bin");
+
+    expect(result.contents).toEqual([{
+      uri: "local-dev-artifact://alpha/artifact.bin",
+      mimeType: "application/octet-stream",
+      blob: bytes.toString("base64"),
+    }]);
+  });
 });
 
 describe("artifact.read", () => {

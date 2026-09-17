@@ -23,7 +23,7 @@ import { handleProjectSelect } from "./tools/project-select.js";
 import { handleProjectCurrent } from "./tools/project-current.js";
 import { handleShellRun } from "./tools/shell-run.js";
 import { handleImageRead } from "./tools/image-read.js";
-import { handleArtifactRead } from "./tools/artifact-read.js";
+import { handleArtifactLink, handleArtifactRead, handleArtifactResourceRead } from "./tools/artifact-read.js";
 import { handleArtifactReceive, type OpenAiProvidedFile } from "./tools/artifact-receive.js";
 import { handleShellApprove, handleShellReject } from "./tools/shell-approval.js";
 import { handleShellStatus } from "./tools/shell-status.js";
@@ -48,7 +48,7 @@ import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleG
 import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserToolOperation, handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserTabOpen, handleBrowserTabUse, handleBrowserTabClose, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete } from "./tools/todo.js";
-import { OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiTunnelAuthConfig, verifyOpenAiTunnelToken, type OpenAiTunnelAuthConfig } from "./auth.js";
+import { OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiSubjectAuthConfig, resolveOpenAiTunnelAuthConfig, verifyOpenAiSubject, verifyOpenAiTunnelToken, type OpenAiTunnelAuthConfig } from "./auth.js";
 
 export interface AppContext {
   configPath: string;
@@ -57,6 +57,7 @@ export interface AppContext {
   shellRunner: ShellRunner;
   auditLogger: AuditLogger;
   toolUsageMetrics: ToolUsageMetrics;
+  allowedOpenAiSubject?: string;
 }
 
 type CallToolMeta = {
@@ -76,6 +77,16 @@ export function resolveChatContextId(meta: CallToolMeta | undefined): string {
   }
 
   return "default";
+}
+
+export function isAuthorizedOpenAiSubject(meta: CallToolMeta | undefined, expectedSubject: string | undefined): boolean {
+  if (!expectedSubject) return true;
+  return verifyOpenAiSubject(meta?.["openai/subject"], expectedSubject);
+}
+
+function requireAuthorizedOpenAiSubject(ctx: AppContext, meta: CallToolMeta | undefined): void {
+  if (isAuthorizedOpenAiSubject(meta, ctx.allowedOpenAiSubject)) return;
+  throw new Error("Forbidden: this ChatGPT user is not authorized to use local-dev.");
 }
 
 export function isMcpDebugEnabled(): boolean {
@@ -138,7 +149,7 @@ export function sanitizeRequestUrlForLog(url: string): string {
   }
 }
 
-async function createAppContext(configPath: string): Promise<AppContext> {
+async function createAppContext(configPath: string, allowedOpenAiSubject?: string): Promise<AppContext> {
   const { ProjectRegistry } = await import("../project/registry.js");
   const { ChatContextStore } = await import("../project/context-store.js");
   const { ShellRunner } = await import("../shell/runner.js");
@@ -154,7 +165,7 @@ async function createAppContext(configPath: string): Promise<AppContext> {
   const auditLogger = new AuditLogger("./logs/audit.jsonl");
   const toolUsageMetrics = new ToolUsageMetrics("./logs/tool-usage.json");
 
-  return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics };
+  return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics, allowedOpenAiSubject };
 }
 
 export const SERVER_INSTRUCTIONS = `
@@ -185,11 +196,13 @@ export function createMcpServer(ctx: AppContext): Server {
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => withRequestSignal(extra.signal, async () => {
     const { name, arguments: providedArgs } = request.params;
     const args = { ...(providedArgs ?? {}) };
-    const chatContextId = resolveChatContextId(request.params._meta as CallToolMeta | undefined);
+    const meta = request.params._meta as CallToolMeta | undefined;
+    const chatContextId = resolveChatContextId(meta);
     const usageStartedAt = performance.now();
     const requestBytes = Buffer.byteLength(JSON.stringify(providedArgs ?? {}));
 
     try {
+      requireAuthorizedOpenAiSubject(ctx, meta);
       debugMcpLog(`[CallTool] ${name} chatContextId=${chatContextId} store=${ctx.contextStore.getAll().size}ctxs`);
       const invokeTool = async () => {
         extra.signal.throwIfAborted();
@@ -426,6 +439,9 @@ export function createMcpServer(ctx: AppContext): Server {
             args as { path?: string; mode?: "preview" | "full" | "metadata"; max_preview_edge?: number }
           );
 
+        case "artifact.link":
+          return await handleArtifactLink(ctx, chatContextId, args as { path?: string });
+
         case "artifact.read":
           return await handleArtifactRead(ctx, chatContextId, args as { path?: string; max_bytes?: number });
 
@@ -514,7 +530,9 @@ export function createMcpServer(ctx: AppContext): Server {
     }
   }));
 
-  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+  server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+    const meta = request.params?._meta as CallToolMeta | undefined;
+    if (!isAuthorizedOpenAiSubject(meta, ctx.allowedOpenAiSubject)) return { resources: [] };
     const projects = ctx.registry.getAll();
     const resources: Array<{ uri: string; name: string; mimeType: string }> = [];
     for (const p of projects) {
@@ -537,7 +555,14 @@ export function createMcpServer(ctx: AppContext): Server {
   }));
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const meta = request.params._meta as CallToolMeta | undefined;
+    requireAuthorizedOpenAiSubject(ctx, meta);
     const uri = request.params.uri;
+    if (uri.startsWith("local-dev-artifact://")) {
+      const chatContextId = resolveChatContextId(request.params._meta as CallToolMeta | undefined);
+      return await handleArtifactResourceRead(ctx, chatContextId, uri);
+    }
+
     const match = uri.match(/^project:\/\/([^/]+)\/(status|config)$/);
     if (!match) {
       throw new Error(`Unknown resource: ${uri}`);
@@ -696,8 +721,9 @@ function parseRawBody(req: express.Request): unknown | undefined {
 
 export async function startHttpServer(configPath: string, port: number): Promise<void> {
   const httpAuthConfig = resolveOpenAiTunnelAuthConfig();
+  const subjectAuthConfig = resolveOpenAiSubjectAuthConfig();
   const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig);
-  const ctx = await createAppContext(configPath);
+  const ctx = await createAppContext(configPath, subjectAuthConfig.subject);
   const browserLifecycle = await createBrowserLifecycleService();
   const app = express();
   app.use(requireLoopbackHost);
@@ -755,6 +781,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
 
 
   console.error(`[OpenAI Tunnel] Local MCP authentication enabled via ${OPENAI_TUNNEL_HEADER_NAME}.`);
+  console.error("[OpenAI Tunnel] ChatGPT subject allowlist enabled for HTTP MCP tool and resource access.");
 
   const startupResult = await browserLifecycle.start();
   if (startupResult.recoveredProfileKeys.length || startupResult.stoppedProfileKeys.length || startupResult.failedProfileKeys.length) {

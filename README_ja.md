@@ -37,6 +37,7 @@ runtime の重要ルール:
 - HTTP MCP は `127.0.0.1` のみに bind する
 - HTTP request の `Host` は loopback だけを許可する
 - protected HTTP request では `X-Local-Dev-MCP-Tunnel-Token` を必須にする
+- HTTPのtool callとresource readはChatGPTの`openai/subject`がlocal allowlistと一致する場合だけ許可する
 - local tunnel token は `tunnel-client` と `local-dev-mcp` の間だけで共有する
 - Tunnel runtime API key と local tunnel token を launchd plist に埋め込まない
 - `shell.run` は fallback escape hatch とし、可能な限り typed tool を優先する
@@ -64,7 +65,8 @@ MCP server側でもproject policyとshell risk policyを適用します。ChatGP
 - `todo.*` — shared Todo Service操作
 - `skills.*` — project/user/system Skillsの読み取り
 - `image.read` — public URLやcustom viewerを使わないinline画像確認
-- `artifact.read` — local fileをMCP embedded resourceとしてChatGPTへ送信
+- `artifact.link` — file本体をtool historyへ埋め込まず、local fileへのMCP resource linkを返す
+- `artifact.read` — local fileをtool resultへ直接埋め込む互換fallback
 - `artifact.receive` — ChatGPT通常添付を1回のMCP callで受信
 - `tool.schema` / `tool.usage` — tool schema refreshとusage diagnostics
 
@@ -167,14 +169,16 @@ TunnelのstateはChatGPT側の利用コンテキストごとに分離します�
 ~/.openai-tunnels/business/runtime-api-key
 
 ~/.local-dev-mcp/openai-tunnel/mcp-token
+~/.local-dev-mcp/allowed-openai-subject
 ```
 
 - `organization-id`: そのTunnelを所有するOpenAI organization ID
 - `tunnel-id`: OpenAI Platformで作成したTunnel ID
 - `runtime-api-key`: Personal / Businessそれぞれのcontrol plane用runtime key
 - `mcp-token`: Tunnel clientと`local-dev-mcp`のlocal hopだけで共有するsecret。Tunnelごとには複製しません
+- `allowed-openai-subject`: HTTP tool/resource accessを許可する単一の匿名化ChatGPT user subject。別subjectまたはsubject欠落はfail-closedで拒否します
 
-state directoryは`0700`、中のfileは`0600`を推奨します。secretをGitやlogへ保存しません。
+state directoryは`0700`、中のfileは`0600`を推奨します。secretやuser identifierをGitやlogへ保存しません。
 
 automationでは次のenvironment variableも利用できます。
 
@@ -182,6 +186,7 @@ automationでは次のenvironment variableも利用できます。
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN` / `_FILE`
+- `LOCAL_DEV_MCP_ALLOWED_OPENAI_SUBJECT` / `_FILE`（既定は`~/.local-dev-mcp/allowed-openai-subject`）
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR`
 - `LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR`
@@ -265,19 +270,19 @@ serverとTunnel clientは別processなので、Tunnel reconnectでMCP serverま�
 
 ### 開発ホスト → ChatGPT
 
-ユーザーへfileそのものを渡すときは`artifact.read`を使います。
+ユーザーへfileそのものを渡すときは、既定で`artifact.link`を使います。
 
 ```text
 local file
-  → artifact.read
-  → MCP EmbeddedResource / BlobResourceContents
+  → artifact.link
+  → MCP ResourceLink (`local-dev-artifact://...`)
   → Secure MCP Tunnel
-  → ChatGPT file materialization
+  → 必要時だけclientが`resources/read`でoriginal fileを取得
 ```
 
-現在のraw file上限は1 callあたり8 MiBです。MIME type、byte size、SHA-256も返します。
+`artifact.link`のtool resultにはmetadataとresource URIだけを返すため、大きなbase64 payloadを通常のtool-call履歴へ蓄積しません。original fileはclientが必要と判断した場合だけMCP `resources/read`で解決します。
 
-custom pluginから初めてembedded fileを返す場合、ChatGPTが **Allow file materialization?** を表示することがあります。許可後は通常のfile attachment cardになります。
+`artifact.read`はembedded resourceが明示的に必要な場合の互換fallbackとして残します。こちらはfileをbase64でtool resultへ直接埋め込み、1 callあたり8 MiB上限です。
 
 内容確認だけなら、textは`workspace.read`、画像は`image.read`を使います。
 
@@ -329,7 +334,7 @@ mode:
 - `full`: original imageをinlineで返す
 - `metadata`: inline bytesなしでmetadataだけ返す
 
-画像fileそのものをユーザーへ渡す場合は`artifact.read`を使います。
+画像fileそのものをユーザーへ渡す場合は既定で`artifact.link`を使い、embedded resourceが必要な場合だけ`artifact.read`をfallbackとして使います。
 
 ## Project Registry
 

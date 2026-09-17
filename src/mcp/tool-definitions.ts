@@ -3,7 +3,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-09-14.2";
+export const TOOL_SCHEMA_VERSION = "2026-09-17.1";
 
 export function buildToolDefinitions() {
   return [
@@ -230,7 +230,7 @@ export function buildToolDefinitions() {
     {
       name: "image.read",
       description:
-        "Read an image file from the selected project for model inspection and return inline MCP image content plus metadata. This does not create a user-visible chat attachment. If the user asks to send, show, display, or attach the image in chat, call artifact.read with the same path. Path must stay inside the project root.",
+        "Read an image file from the selected project for model inspection and return inline MCP image content plus metadata. This does not create a user-visible chat attachment. If the user asks to send, show, display, or attach the image in chat, call artifact.link with the same path; use artifact.read only as a compatibility fallback when an embedded resource is explicitly needed. Path must stay inside the project root.",
       inputSchema: {
         type: "object",
         properties: {
@@ -273,9 +273,35 @@ export function buildToolDefinitions() {
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     {
+      name: "artifact.link",
+      description:
+        "Return a local project file as an MCP resource_link without embedding the file bytes in the tool result. Use this by default when the user asks to receive, download, send, show, display, or attach a generated file or screenshot in chat. The client can fetch the original later through resources/read, keeping large base64 payloads out of normal tool-call history. Prefer workspace.read for model-only text inspection and image.read for model-only image inspection.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Project-relative file path, or an absolute path inside the selected project root." },
+        },
+        required: ["path"],
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+          path: { type: "string" },
+          filename: { type: "string" },
+          mime_type: { type: "string" },
+          size_bytes: { type: "number" },
+          transport: { type: "string" },
+          uri: { type: "string" },
+        },
+        required: ["project_id", "path", "filename", "mime_type", "size_bytes", "transport", "uri"],
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    {
       name: "artifact.read",
       description:
-        "Transfer a local project file intact through the MCP response as a user-visible embedded attachment. Use this when the user asks to receive, download, send, show, display, or attach a generated file or screenshot in chat. Prefer workspace.read for model-only text inspection and image.read for model-only image inspection. Files are base64-encoded inside MCP and limited to 8 MiB per call.",
+        "Compatibility fallback that embeds a local project file directly in the MCP tool result as base64. Avoid this for normal send/show/display/attach requests because embedded bytes remain in tool-call history; prefer artifact.link. Use only when the client cannot consume resource links or an embedded resource is explicitly required. Limited to 8 MiB per call.",
       inputSchema: {
         type: "object",
         properties: {

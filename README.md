@@ -37,6 +37,7 @@ Important runtime rules:
 - HTTP MCP binds to `127.0.0.1` only.
 - HTTP requests accept loopback `Host` values only.
 - HTTP MCP requires `X-Local-Dev-MCP-Tunnel-Token` on every protected request.
+- HTTP tool calls and resource reads also require the ChatGPT `openai/subject` to match the local allowlist.
 - The local tunnel token is shared only between `tunnel-client` and `local-dev-mcp`.
 - The OpenAI Tunnel runtime API key and local tunnel token are never embedded in launchd plist files.
 - `shell.run` remains the fallback escape hatch; prefer typed tools whenever possible.
@@ -64,7 +65,8 @@ Core tool families include:
 - `todo.*` — shared Todo Service operations
 - `skills.*` — readable project/user/system Skills
 - `image.read` — inline image inspection without a custom viewer or public URL
-- `artifact.read` — send a local file to ChatGPT as an MCP embedded resource
+- `artifact.link` — send a lightweight MCP resource link to a local file without embedding file bytes in tool history
+- `artifact.read` — compatibility fallback that embeds a local file directly in the MCP tool result
 - `artifact.receive` — receive a normal ChatGPT attachment in one MCP call
 - `tool.schema` / `tool.usage` — schema refresh and compact usage diagnostics
 
@@ -199,12 +201,14 @@ Tunnel state is split by ChatGPT context. Personal and Business Tunnel clients c
 ~/.openai-tunnels/business/runtime-api-key
 
 ~/.local-dev-mcp/openai-tunnel/mcp-token
+~/.local-dev-mcp/allowed-openai-subject
 ```
 
 - `organization-id` is the OpenAI organization that owns that Tunnel.
 - `tunnel-id` is the Tunnel ID created in OpenAI Platform.
 - each `runtime-api-key` belongs to its corresponding Personal or Business control-plane context.
 - `mcp-token` is a shared local-hop secret used only between the Tunnel clients and `local-dev-mcp`. It is intentionally not duplicated per Tunnel.
+- `allowed-openai-subject` contains the single anonymized ChatGPT user subject allowed to execute HTTP tools and read resources. Requests from other subjects or with no subject fail closed.
 
 Recommended permissions are `0700` for state directories and `0600` for the files they contain. Do not commit these files or paste secret values into logs.
 
@@ -214,6 +218,7 @@ Environment-variable alternatives are supported for automation:
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN` / `_FILE`
+- `LOCAL_DEV_MCP_ALLOWED_OPENAI_SUBJECT` / `_FILE` (defaults to `~/.local-dev-mcp/allowed-openai-subject`)
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR`
 - `LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR`
@@ -297,19 +302,19 @@ This repository has been end-to-end tested with a Pro developer-mode plugin on b
 
 ### Development host → ChatGPT
 
-Use `artifact.read` when the user needs the actual file:
+Use `artifact.link` by default when the user needs the actual file:
 
 ```text
 local file
-  → artifact.read
-  → MCP EmbeddedResource / BlobResourceContents
+  → artifact.link
+  → MCP ResourceLink (`local-dev-artifact://...`)
   → Secure MCP Tunnel
-  → ChatGPT file materialization
+  → client fetches the original through `resources/read` only when needed
 ```
 
-The raw file limit is currently 8 MiB per `artifact.read` call. The result includes MIME type, byte size, and SHA-256.
+`artifact.link` returns only metadata plus the resource URI in the tool result, so large base64 payloads do not accumulate in normal tool-call history. The original file is resolved through MCP `resources/read` when the client chooses to fetch it.
 
-ChatGPT may ask **Allow file materialization?** the first time a custom plugin returns an embedded file. After approval, the file appears as a normal attachment card.
+`artifact.read` remains as a compatibility fallback for clients or flows that explicitly require an embedded resource. It base64-embeds the file directly in the tool result and is limited to 8 MiB per call.
 
 Use `workspace.read` for text inspection and `image.read` for image inspection when the user does not need the file itself.
 
@@ -361,7 +366,7 @@ Modes:
 - `full` — return the original image inline
 - `metadata` — return metadata without inline bytes
 
-If the user needs the image as a downloadable file, use `artifact.read` instead.
+If the user needs the image as a downloadable file, use `artifact.link` by default and `artifact.read` only as an embedded-resource fallback.
 
 ## Project Registry
 

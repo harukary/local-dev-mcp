@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   isAllowedHttpHost,
+  isAuthorizedOpenAiSubject,
   isMcpDebugEnabled,
   normalizeHttpHost,
   resolveChatContextId,
@@ -48,6 +49,19 @@ describe("resolveChatContextId", () => {
   });
 });
 
+describe("ChatGPT subject authorization", () => {
+  it("allows only the configured ChatGPT subject when HTTP auth is enabled", () => {
+    expect(isAuthorizedOpenAiSubject({ "openai/subject": "owner" }, "owner")).toBe(true);
+    expect(isAuthorizedOpenAiSubject({ "openai/subject": "other" }, "owner")).toBe(false);
+    expect(isAuthorizedOpenAiSubject(undefined, "owner")).toBe(false);
+  });
+
+  it("does not constrain local stdio contexts without a configured subject", () => {
+    expect(isAuthorizedOpenAiSubject(undefined, undefined)).toBe(true);
+    expect(isAuthorizedOpenAiSubject({ "openai/subject": "any" }, undefined)).toBe(true);
+  });
+});
+
 describe("stateless MCP transport", () => {
   it("rejects standalone GET streams with 405 and advertises POST", () => {
     const json = vi.fn();
@@ -91,13 +105,15 @@ describe("tool schema snapshot", () => {
     const shellRun = snapshot.tools.find((tool) => tool.name === "shell.run");
     const workspacePatch = snapshot.tools.find((tool) => tool.name === "workspace.patch");
     const imageRead = snapshot.tools.find((tool) => tool.name === "image.read");
+    const artifactLink = snapshot.tools.find((tool) => tool.name === "artifact.link");
     const artifactRead = snapshot.tools.find((tool) => tool.name === "artifact.read");
     const artifactReceive = snapshot.tools.find((tool) => tool.name === "artifact.receive");
     const mobileScreenshot = snapshot.tools.find((tool) => tool.name === "mobile.screenshot");
 
-    expect(snapshot.schema_version).toBe("2026-09-14.2");
+    expect(snapshot.schema_version).toBe("2026-09-17.1");
     expect(names).toContain("tool.schema");
     expect(names).toContain("image.read");
+    expect(names).toContain("artifact.link");
     expect(names).toContain("artifact.read");
     expect(names).toContain("artifact.receive");
     expect(names).toEqual(expect.arrayContaining(["browser.tab.open", "browser.tab.use", "browser.tab.close"]));
@@ -112,15 +128,18 @@ describe("tool schema snapshot", () => {
     });
     expect(imageRead?.outputSchema).not.toHaveProperty("properties.display_url");
     expect(imageRead?.description).toContain("does not create a user-visible chat attachment");
-    expect(imageRead?.description).toContain("artifact.read");
+    expect(imageRead?.description).toContain("artifact.link");
 
+    expect(artifactLink?.annotations).toMatchObject({ readOnlyHint: true });
+    expect(artifactLink?.description).toContain("resource_link");
+    expect(artifactLink?.description).toContain("without embedding");
     expect(artifactRead?.annotations).toMatchObject({ readOnlyHint: true });
-    expect(artifactRead?.description).toContain("user-visible embedded attachment");
-    expect(artifactRead?.description).toContain("screenshot");
+    expect(artifactRead?.description).toContain("Compatibility fallback");
+    expect(artifactRead?.description).toContain("prefer artifact.link");
     expect(artifactReceive?._meta).toEqual({ "openai/fileParams": ["file"] });
     expect(artifactReceive?.annotations).toMatchObject({ readOnlyHint: false });
     expect(mobileScreenshot?.description).toContain("does not create a user-visible chat attachment");
-    expect(mobileScreenshot?.description).toContain("artifact.read");
+    expect(mobileScreenshot?.description).toContain("artifact.link");
 
     expect(shellRun?.annotations).toMatchObject({
       readOnlyHint: false,

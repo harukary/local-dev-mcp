@@ -3,9 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  OPENAI_ALLOWED_SUBJECT_ENV,
+  OPENAI_ALLOWED_SUBJECT_FILE_ENV,
   OPENAI_TUNNEL_TOKEN_ENV,
   OPENAI_TUNNEL_TOKEN_FILE_ENV,
+  resolveOpenAiSubjectAuthConfig,
   resolveOpenAiTunnelAuthConfig,
+  verifyOpenAiSubject,
   verifyOpenAiTunnelToken,
 } from "../../src/mcp/auth.js";
 
@@ -53,5 +57,39 @@ describe("OpenAI Secure MCP Tunnel auth", () => {
     expect(verifyOpenAiTunnelToken("d".repeat(48), token)).toBe(false);
     expect(verifyOpenAiTunnelToken([token, token], token)).toBe(false);
     expect(verifyOpenAiTunnelToken(undefined, token)).toBe(false);
+  });
+});
+
+describe("ChatGPT subject allowlist", () => {
+  it("loads an inline allowed subject", () => {
+    expect(resolveOpenAiSubjectAuthConfig({
+      [OPENAI_ALLOWED_SUBJECT_ENV]: "subject-owner",
+    })).toEqual({ subject: "subject-owner" });
+  });
+
+  it("loads an allowed subject from a private file", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-subject-auth-"));
+    const subjectFile = path.join(dir, "subject");
+    writeFileSync(subjectFile, "subject-owner\n", { mode: 0o600 });
+    try {
+      expect(resolveOpenAiSubjectAuthConfig({
+        [OPENAI_ALLOWED_SUBJECT_FILE_ENV]: subjectFile,
+      })).toEqual({ subject: "subject-owner" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects ambiguous subject configuration", () => {
+    expect(() => resolveOpenAiSubjectAuthConfig({
+      [OPENAI_ALLOWED_SUBJECT_ENV]: "subject-owner",
+      [OPENAI_ALLOWED_SUBJECT_FILE_ENV]: "/tmp/subject",
+    })).toThrow("mutually exclusive");
+  });
+
+  it("matches only the configured subject", () => {
+    expect(verifyOpenAiSubject("subject-owner", "subject-owner")).toBe(true);
+    expect(verifyOpenAiSubject("subject-other", "subject-owner")).toBe(false);
+    expect(verifyOpenAiSubject(undefined, "subject-owner")).toBe(false);
   });
 });
