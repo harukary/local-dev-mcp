@@ -219,6 +219,7 @@ Environment-variable alternatives are supported for automation:
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN` / `_FILE`
 - `LOCAL_DEV_MCP_ALLOWED_OPENAI_SUBJECT` / `_FILE` (defaults to `~/.local-dev-mcp/allowed-openai-subject`)
+- `LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY` (`enforce` by default; `tunnel_only` preserves an intentional Tunnel-token-only host policy while retaining hashed subject auditing)
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR`
 - `LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR`
@@ -259,6 +260,20 @@ By default:
 - tunnel-client health/readiness: `127.0.0.1:3460`
 
 A healthy setup should report the local MCP probe as reachable and Tunnel readiness as `ready`.
+
+HTTP tool and resource authorization writes a privacy-safe audit event to
+`logs/audit.jsonl`. The event records `openAiSubjectHash` as
+`sha256:<64 lowercase hex characters>` plus `openAiSubjectPresent` and
+`openAiSubjectAuthorized`; it never stores the raw subject. Count distinct
+authorized subjects in a half-open observation window with:
+
+```bash
+pnpm audit:subject-count -- \
+  --since 2026-09-17T00:00:00Z \
+  --until 2026-09-18T00:00:00Z
+```
+
+Pass `--log <path>` more than once when a window spans rotated audit files.
 
 ### launchd
 

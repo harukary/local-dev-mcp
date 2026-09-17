@@ -8,6 +8,7 @@ import { ChatContextStore } from "../../src/project/context-store.js";
 import { ShellRunner } from "../../src/shell/runner.js";
 import { ToolUsageMetrics } from "../../src/metrics/tool-usage.js";
 import type { ProjectConfig } from "../../src/types.js";
+import { hashOpenAiSubject } from "../../src/mcp/auth.js";
 
 it("enforces the ChatGPT subject allowlist through the actual dispatcher", async () => {
   const root = join(dirname(process.env.LOCAL_DEV_MCP_JOB_STORE_DIR!), "subject-auth-protocol");
@@ -15,30 +16,42 @@ it("enforces the ChatGPT subject allowlist through the actual dispatcher", async
   await writeFile(join(root, "sample.txt"), "owner-only\n");
   const project: ProjectConfig = { projectId: "fixture", displayName: "Fixture", hostRoot: root, sandboxRoot: root, sandboxType: "host", defaultShell: "/bin/bash", defaultTimeoutSeconds: 10, maxTimeoutSeconds: 30, networkPolicy: "ask", writePolicy: "allow", approvalMode: "never", deniedPaths: [], redactionProfile: "default" };
   const contextStore = new ChatContextStore();
-  contextStore.setCurrentProject("chatgpt-user:owner", "fixture");
+  const allowedSubject = "synthetic-owner";
+  const rejectedSubject = "synthetic-rejected";
+  contextStore.setCurrentProject(`chatgpt-user:${hashOpenAiSubject(allowedSubject)}`, "fixture");
   const metrics = new ToolUsageMetrics(join(root, "usage.json"), { flush_every: 1 });
-  const server = createMcpServer({ registry: { has: () => true, get: () => project, getAll: () => [project] }, contextStore, shellRunner: new ShellRunner(), auditLogger: { log: vi.fn() }, toolUsageMetrics: metrics, allowedOpenAiSubject: "owner" } as unknown as AppContext);
+  const auditLog = vi.fn();
+  const server = createMcpServer({ registry: { has: () => true, get: () => project, getAll: () => [project] }, contextStore, shellRunner: new ShellRunner(), auditLogger: { log: auditLog }, toolUsageMetrics: metrics, allowedOpenAiSubject: allowedSubject } as unknown as AppContext);
   const client = new Client({ name: "local-subject-auth-regression", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair();
   try {
     await server.connect(b);
     await client.connect(a);
 
-    const denied = await client.callTool({ name: "project.list", arguments: {}, _meta: { "openai/subject": "other" } });
+    const denied = await client.callTool({ name: "project.list", arguments: {}, _meta: { "openai/subject": rejectedSubject } });
     expect(denied.isError).toBe(true);
     expect(denied.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("not authorized") })]));
 
     const missing = await client.callTool({ name: "project.list", arguments: {} });
     expect(missing.isError).toBe(true);
 
-    const allowed = await client.callTool({ name: "project.list", arguments: {}, _meta: { "openai/subject": "owner" } });
+    const allowed = await client.callTool({ name: "project.list", arguments: {}, _meta: { "openai/subject": allowedSubject } });
     expect(allowed.isError).toBeUndefined();
 
-    const link = await client.callTool({ name: "artifact.link", arguments: { path: "sample.txt" }, _meta: { "openai/subject": "owner" } });
+    const link = await client.callTool({ name: "artifact.link", arguments: { path: "sample.txt" }, _meta: { "openai/subject": allowedSubject } });
     expect(link.isError).toBeUndefined();
-    await expect(client.readResource({ uri: "local-dev-artifact://fixture/sample.txt", _meta: { "openai/subject": "other" } })).rejects.toThrow("not authorized");
-    const allowedResource = await client.readResource({ uri: "local-dev-artifact://fixture/sample.txt", _meta: { "openai/subject": "owner" } });
+    await expect(client.readResource({ uri: "local-dev-artifact://fixture/sample.txt", _meta: { "openai/subject": rejectedSubject } })).rejects.toThrow("not authorized");
+    const allowedResource = await client.readResource({ uri: "local-dev-artifact://fixture/sample.txt", _meta: { "openai/subject": allowedSubject } });
     expect(allowedResource.contents[0]).toMatchObject({ uri: "local-dev-artifact://fixture/sample.txt" });
+
+    const entries = auditLog.mock.calls.map(([entry]) => entry);
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "openai_subject_authorization", openAiSubjectHash: hashOpenAiSubject(allowedSubject), openAiSubjectPresent: true, openAiSubjectAuthorized: true }),
+      expect.objectContaining({ event: "openai_subject_authorization", openAiSubjectHash: hashOpenAiSubject(rejectedSubject), openAiSubjectPresent: true, openAiSubjectAuthorized: false }),
+      expect.objectContaining({ event: "openai_subject_authorization", openAiSubjectPresent: false, openAiSubjectAuthorized: false }),
+    ]));
+    expect(JSON.stringify(entries)).not.toContain(allowedSubject);
+    expect(JSON.stringify(entries)).not.toContain(rejectedSubject);
   } finally { await client.close(); await server.close(); metrics.flush(); }
 });
 
@@ -88,5 +101,29 @@ it("negotiates MCP, discovers tools, validates calls, and runs a bounded batch t
     const blob = "blob" in resource.contents[0] ? resource.contents[0].blob : "";
     expect(Buffer.from(blob, "base64").toString("utf8")).toBe("alpha\nbeta\n");
     expect(metrics.snapshot().totals.measurements?.calls).toBe(3);
+  } finally { await client.close(); await server.close(); metrics.flush(); }
+});
+
+it("audits HTTP subjects without changing an intentional tunnel-token-only policy", async () => {
+  const root = join(dirname(process.env.LOCAL_DEV_MCP_JOB_STORE_DIR!), "subject-audit-only-protocol");
+  await mkdir(root);
+  const project: ProjectConfig = { projectId: "fixture", displayName: "Fixture", hostRoot: root, sandboxRoot: root, sandboxType: "host", defaultShell: "/bin/bash", defaultTimeoutSeconds: 10, maxTimeoutSeconds: 30, networkPolicy: "ask", writePolicy: "allow", approvalMode: "never", deniedPaths: [], redactionProfile: "default" };
+  const metrics = new ToolUsageMetrics(join(root, "usage.json"), { flush_every: 1 });
+  const auditLog = vi.fn();
+  const server = createMcpServer({ registry: { has: () => true, get: () => project, getAll: () => [project] }, contextStore: new ChatContextStore(), shellRunner: new ShellRunner(), auditLogger: { log: auditLog }, toolUsageMetrics: metrics, openAiSubjectPolicy: "tunnel_only" } as unknown as AppContext);
+  const client = new Client({ name: "local-subject-audit-only-regression", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(b);
+    await client.connect(a);
+    const subject = "synthetic-tunnel-user";
+    const result = await client.callTool({ name: "project.list", arguments: {}, _meta: { "openai/subject": subject } });
+    expect(result.isError).toBeUndefined();
+    expect(auditLog).toHaveBeenCalledWith(expect.objectContaining({
+      event: "openai_subject_authorization",
+      openAiSubjectHash: hashOpenAiSubject(subject),
+      openAiSubjectAuthorized: true,
+    }));
+    expect(JSON.stringify(auditLog.mock.calls)).not.toContain(subject);
   } finally { await client.close(); await server.close(); metrics.flush(); }
 });

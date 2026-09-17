@@ -48,7 +48,7 @@ import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleG
 import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserToolOperation, handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserTabOpen, handleBrowserTabUse, handleBrowserTabClose, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete } from "./tools/todo.js";
-import { OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiSubjectAuthConfig, resolveOpenAiTunnelAuthConfig, verifyOpenAiSubject, verifyOpenAiTunnelToken, type OpenAiTunnelAuthConfig } from "./auth.js";
+import { hashOpenAiSubject, OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiSubjectAuthConfig, resolveOpenAiSubjectPolicy, resolveOpenAiTunnelAuthConfig, verifyOpenAiSubject, verifyOpenAiTunnelToken, type OpenAiSubjectPolicy, type OpenAiTunnelAuthConfig } from "./auth.js";
 
 export interface AppContext {
   configPath: string;
@@ -58,6 +58,7 @@ export interface AppContext {
   auditLogger: AuditLogger;
   toolUsageMetrics: ToolUsageMetrics;
   allowedOpenAiSubject?: string;
+  openAiSubjectPolicy?: OpenAiSubjectPolicy;
 }
 
 type CallToolMeta = {
@@ -72,8 +73,9 @@ export function resolveChatContextId(meta: CallToolMeta | undefined): string {
   }
 
   const subject = meta?.["openai/subject"];
-  if (typeof subject === "string" && subject.length > 0) {
-    return `chatgpt-user:${subject}`;
+  const subjectHash = hashOpenAiSubject(subject);
+  if (subjectHash) {
+    return `chatgpt-user:${subjectHash}`;
   }
 
   return "default";
@@ -84,8 +86,26 @@ export function isAuthorizedOpenAiSubject(meta: CallToolMeta | undefined, expect
   return verifyOpenAiSubject(meta?.["openai/subject"], expectedSubject);
 }
 
-function requireAuthorizedOpenAiSubject(ctx: AppContext, meta: CallToolMeta | undefined): void {
-  if (isAuthorizedOpenAiSubject(meta, ctx.allowedOpenAiSubject)) return;
+async function requireAuthorizedOpenAiSubject(
+  ctx: AppContext,
+  meta: CallToolMeta | undefined,
+  target: string
+): Promise<void> {
+  const authorized = isAuthorizedOpenAiSubject(meta, ctx.allowedOpenAiSubject);
+  if (ctx.openAiSubjectPolicy || ctx.allowedOpenAiSubject) {
+    const subjectHash = hashOpenAiSubject(meta?.["openai/subject"]);
+    await ctx.auditLogger.log({
+      timestamp: new Date().toISOString(),
+      chatContextId: resolveChatContextId(meta),
+      tool: target,
+      event: "openai_subject_authorization",
+      enforcement: authorized ? "audit_only" : "blocked",
+      openAiSubjectPresent: subjectHash !== undefined,
+      ...(subjectHash ? { openAiSubjectHash: subjectHash } : {}),
+      openAiSubjectAuthorized: authorized,
+    });
+  }
+  if (authorized) return;
   throw new Error("Forbidden: this ChatGPT user is not authorized to use local-dev.");
 }
 
@@ -149,7 +169,11 @@ export function sanitizeRequestUrlForLog(url: string): string {
   }
 }
 
-async function createAppContext(configPath: string, allowedOpenAiSubject?: string): Promise<AppContext> {
+async function createAppContext(
+  configPath: string,
+  allowedOpenAiSubject?: string,
+  openAiSubjectPolicy?: OpenAiSubjectPolicy
+): Promise<AppContext> {
   const { ProjectRegistry } = await import("../project/registry.js");
   const { ChatContextStore } = await import("../project/context-store.js");
   const { ShellRunner } = await import("../shell/runner.js");
@@ -165,7 +189,7 @@ async function createAppContext(configPath: string, allowedOpenAiSubject?: strin
   const auditLogger = new AuditLogger("./logs/audit.jsonl");
   const toolUsageMetrics = new ToolUsageMetrics("./logs/tool-usage.json");
 
-  return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics, allowedOpenAiSubject };
+  return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics, allowedOpenAiSubject, openAiSubjectPolicy };
 }
 
 export const SERVER_INSTRUCTIONS = `
@@ -202,7 +226,7 @@ export function createMcpServer(ctx: AppContext): Server {
     const requestBytes = Buffer.byteLength(JSON.stringify(providedArgs ?? {}));
 
     try {
-      requireAuthorizedOpenAiSubject(ctx, meta);
+      await requireAuthorizedOpenAiSubject(ctx, meta, name);
       debugMcpLog(`[CallTool] ${name} chatContextId=${chatContextId} store=${ctx.contextStore.getAll().size}ctxs`);
       const invokeTool = async () => {
         extra.signal.throwIfAborted();
@@ -532,7 +556,15 @@ export function createMcpServer(ctx: AppContext): Server {
 
   server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     const meta = request.params?._meta as CallToolMeta | undefined;
-    if (!isAuthorizedOpenAiSubject(meta, ctx.allowedOpenAiSubject)) return { resources: [] };
+    const authorized = isAuthorizedOpenAiSubject(meta, ctx.allowedOpenAiSubject);
+    if (ctx.openAiSubjectPolicy || ctx.allowedOpenAiSubject) {
+      try {
+        await requireAuthorizedOpenAiSubject(ctx, meta, "resources/list");
+      } catch {
+        return { resources: [] };
+      }
+    }
+    if (!authorized) return { resources: [] };
     const projects = ctx.registry.getAll();
     const resources: Array<{ uri: string; name: string; mimeType: string }> = [];
     for (const p of projects) {
@@ -556,7 +588,7 @@ export function createMcpServer(ctx: AppContext): Server {
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const meta = request.params._meta as CallToolMeta | undefined;
-    requireAuthorizedOpenAiSubject(ctx, meta);
+    await requireAuthorizedOpenAiSubject(ctx, meta, "resources/read");
     const uri = request.params.uri;
     if (uri.startsWith("local-dev-artifact://")) {
       const chatContextId = resolveChatContextId(request.params._meta as CallToolMeta | undefined);
@@ -721,9 +753,10 @@ function parseRawBody(req: express.Request): unknown | undefined {
 
 export async function startHttpServer(configPath: string, port: number): Promise<void> {
   const httpAuthConfig = resolveOpenAiTunnelAuthConfig();
-  const subjectAuthConfig = resolveOpenAiSubjectAuthConfig();
+  const subjectPolicy = resolveOpenAiSubjectPolicy();
+  const subjectAuthConfig = subjectPolicy === "enforce" ? resolveOpenAiSubjectAuthConfig() : undefined;
   const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig);
-  const ctx = await createAppContext(configPath, subjectAuthConfig.subject);
+  const ctx = await createAppContext(configPath, subjectAuthConfig?.subject, subjectPolicy);
   const browserLifecycle = await createBrowserLifecycleService();
   const app = express();
   app.use(requireLoopbackHost);
@@ -781,7 +814,11 @@ export async function startHttpServer(configPath: string, port: number): Promise
 
 
   console.error(`[OpenAI Tunnel] Local MCP authentication enabled via ${OPENAI_TUNNEL_HEADER_NAME}.`);
-  console.error("[OpenAI Tunnel] ChatGPT subject allowlist enabled for HTTP MCP tool and resource access.");
+  if (subjectPolicy === "enforce") {
+    console.error("[OpenAI Tunnel] ChatGPT subject allowlist enabled for HTTP MCP tool and resource access.");
+  } else {
+    console.error("[OpenAI Tunnel] ChatGPT subject auditing enabled; authorization remains tunnel-token-only.");
+  }
 
   const startupResult = await browserLifecycle.start();
   if (startupResult.recoveredProfileKeys.length || startupResult.stoppedProfileKeys.length || startupResult.failedProfileKeys.length) {

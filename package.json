@@ -8,6 +8,7 @@
     "dev:http": "tsx src/index.ts --http 3456",
     "serve": "tsx src/index.ts serve",
     "doctor": "tsx src/index.ts doctor",
+    "audit:subject-count": "tsx scripts/count-authorized-subjects.ts",
     "start": "node dist/index.js",
     "build": "tsc",
     "typecheck": "tsc --noEmit",

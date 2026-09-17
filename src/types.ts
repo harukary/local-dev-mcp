@@ -89,6 +89,9 @@ export interface AuditLogEntry {
   credentialScope?: CredentialScope;
   riskLevel?: RiskLevel;
   enforcement?: "audit_only" | "blocked" | "approval_required";
+  openAiSubjectPresent?: boolean;
+  openAiSubjectHash?: string;
+  openAiSubjectAuthorized?: boolean;
   approvalRequestId?: string;
   approvalPolicy?: "ask" | "deny";
   approval?: {

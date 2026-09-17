@@ -63,6 +63,7 @@ fi
 NODE_DIR="$(dirname "$NODE_BIN")"
 SERVICE_PATH="$NODE_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 SERVICE_PORT="${PORT:-3456}"
+SUBJECT_POLICY="${LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY:-enforce}"
 mkdir -p "$LAUNCH_AGENTS_DIR" "$PROJECT_DIR/logs"
 
 PROJECT_XML="$(xml_escape "$PROJECT_DIR")"
@@ -129,7 +130,8 @@ PLIST
 }
 
 TUNNEL_LABELS=("$PERSONAL_TUNNEL_LABEL")
-write_agent "$SERVER_LABEL" "$SERVER_LABEL_XML" "server.sh" "mcp-server.log"
+SERVER_EXTRA_ENV="$(env_entry "LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY" "$SUBJECT_POLICY")"
+write_agent "$SERVER_LABEL" "$SERVER_LABEL_XML" "server.sh" "mcp-server.log" "$SERVER_EXTRA_ENV"
 
 PERSONAL_TUNNEL_STATE_DIR="${LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_STATE_DIR:-$HOME/.local-dev-mcp/openai-tunnel-personal}"
 PERSONAL_TUNNEL_API_KEY_FILE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_API_KEY_FILE:-$HOME/.openai-tunnels/personal/runtime-api-key}"

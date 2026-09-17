@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
@@ -9,7 +9,10 @@ export const OPENAI_TUNNEL_HEADER_NAME = "x-local-dev-mcp-tunnel-token";
 export const OPENAI_TUNNEL_HEADER_DISPLAY_NAME = "X-Local-Dev-MCP-Tunnel-Token";
 export const OPENAI_ALLOWED_SUBJECT_ENV = "LOCAL_DEV_MCP_ALLOWED_OPENAI_SUBJECT";
 export const OPENAI_ALLOWED_SUBJECT_FILE_ENV = "LOCAL_DEV_MCP_ALLOWED_OPENAI_SUBJECT_FILE";
+export const OPENAI_SUBJECT_POLICY_ENV = "LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY";
 export const DEFAULT_OPENAI_ALLOWED_SUBJECT_FILE = resolve(homedir(), ".local-dev-mcp", "allowed-openai-subject");
+
+export type OpenAiSubjectPolicy = "enforce" | "tunnel_only";
 
 export interface OpenAiTunnelAuthConfig {
   token: string;
@@ -94,6 +97,17 @@ export function resolveOpenAiSubjectAuthConfig(env: NodeJS.ProcessEnv = process.
 
 export function verifyOpenAiSubject(subject: unknown, expectedSubject: string): boolean {
   return typeof subject === "string" && subject.length > 0 && secureStringEqual(subject, expectedSubject);
+}
+
+export function resolveOpenAiSubjectPolicy(env: NodeJS.ProcessEnv = process.env): OpenAiSubjectPolicy {
+  const policy = env[OPENAI_SUBJECT_POLICY_ENV]?.trim() || "enforce";
+  if (policy === "enforce" || policy === "tunnel_only") return policy;
+  throw new Error(`${OPENAI_SUBJECT_POLICY_ENV} must be enforce or tunnel_only.`);
+}
+
+export function hashOpenAiSubject(subject: unknown): string | undefined {
+  if (typeof subject !== "string" || subject.length === 0) return undefined;
+  return `sha256:${createHash("sha256").update(subject, "utf8").digest("hex")}`;
 }
 
 function secureStringEqual(actualValue: string, expectedValue: string): boolean {

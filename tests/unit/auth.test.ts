@@ -5,9 +5,11 @@ import path from "node:path";
 import {
   OPENAI_ALLOWED_SUBJECT_ENV,
   OPENAI_ALLOWED_SUBJECT_FILE_ENV,
+  OPENAI_SUBJECT_POLICY_ENV,
   OPENAI_TUNNEL_TOKEN_ENV,
   OPENAI_TUNNEL_TOKEN_FILE_ENV,
   resolveOpenAiSubjectAuthConfig,
+  resolveOpenAiSubjectPolicy,
   resolveOpenAiTunnelAuthConfig,
   verifyOpenAiSubject,
   verifyOpenAiTunnelToken,
@@ -61,6 +63,11 @@ describe("OpenAI Secure MCP Tunnel auth", () => {
 });
 
 describe("ChatGPT subject allowlist", () => {
+  it("defaults to enforced authorization and accepts an explicit tunnel-only policy", () => {
+    expect(resolveOpenAiSubjectPolicy({})).toBe("enforce");
+    expect(resolveOpenAiSubjectPolicy({ [OPENAI_SUBJECT_POLICY_ENV]: "tunnel_only" })).toBe("tunnel_only");
+    expect(() => resolveOpenAiSubjectPolicy({ [OPENAI_SUBJECT_POLICY_ENV]: "unknown" })).toThrow("enforce or tunnel_only");
+  });
   it("loads an inline allowed subject", () => {
     expect(resolveOpenAiSubjectAuthConfig({
       [OPENAI_ALLOWED_SUBJECT_ENV]: "subject-owner",

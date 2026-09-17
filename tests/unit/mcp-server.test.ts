@@ -9,6 +9,7 @@ import {
   sendStatelessMcpMethodNotAllowed,
 } from "../../src/mcp/server.js";
 import { buildToolSchemaSnapshot } from "../../src/mcp/tool-definitions.js";
+import { hashOpenAiSubject } from "../../src/mcp/auth.js";
 
 describe("resolveChatContextId", () => {
   it("uses openai/session when present", () => {
@@ -22,7 +23,7 @@ describe("resolveChatContextId", () => {
     expect(resolveChatContextId({
       "openai/session": "",
       "openai/subject": "user_456",
-    })).toBe("chatgpt-user:user_456");
+    })).toBe(`chatgpt-user:${hashOpenAiSubject("user_456")}`);
   });
 
   it("falls back to default when no app metadata is present", () => {
