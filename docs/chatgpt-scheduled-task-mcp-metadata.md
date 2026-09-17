@@ -103,11 +103,11 @@ Therefore the local implementation must not broaden the rule to "allow any reque
 
 ## Current local-dev-mcp compatibility rule
 
-`local-dev-mcp` currently resolves authorization in this order:
+Subject enforcement is an optional defense-in-depth layer. Without subject configuration, `local-dev-mcp` relies on the required Secure MCP Tunnel token. When subject enforcement is enabled, authorization resolves in this order:
 
 1. If the configured owner `openai/subject` matches, allow with `owner_subject`.
 2. Otherwise, if the `_meta` key set exactly matches the four-key Scheduled Task shape observed above, allow with `scheduled_task_meta`.
-3. Otherwise, reject when subject enforcement is enabled.
+3. Otherwise, reject.
 
 The Scheduled Task exception matches key names only. It does not log or compare the values of locale, user agent, location, or timezone.
 

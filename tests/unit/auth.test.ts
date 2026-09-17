@@ -63,10 +63,20 @@ describe("OpenAI Secure MCP Tunnel auth", () => {
 });
 
 describe("ChatGPT subject allowlist", () => {
-  it("defaults to enforced authorization and accepts an explicit tunnel-only policy", () => {
-    expect(resolveOpenAiSubjectPolicy({})).toBe("enforce");
-    expect(resolveOpenAiSubjectPolicy({ [OPENAI_SUBJECT_POLICY_ENV]: "tunnel_only" })).toBe("tunnel_only");
-    expect(() => resolveOpenAiSubjectPolicy({ [OPENAI_SUBJECT_POLICY_ENV]: "unknown" })).toThrow("enforce or tunnel_only");
+  it("defaults to tunnel-only unless subject restriction is configured", () => {
+    expect(resolveOpenAiSubjectPolicy({}, false)).toBe("tunnel_only");
+    expect(resolveOpenAiSubjectPolicy({ [OPENAI_ALLOWED_SUBJECT_ENV]: "subject-owner" }, false)).toBe("enforce");
+    expect(resolveOpenAiSubjectPolicy({ [OPENAI_ALLOWED_SUBJECT_FILE_ENV]: "/tmp/subject" }, false)).toBe("enforce");
+    expect(resolveOpenAiSubjectPolicy({}, true)).toBe("enforce");
+  });
+
+  it("lets an explicit subject policy override automatic detection", () => {
+    expect(resolveOpenAiSubjectPolicy({
+      [OPENAI_SUBJECT_POLICY_ENV]: "tunnel_only",
+      [OPENAI_ALLOWED_SUBJECT_ENV]: "subject-owner",
+    }, true)).toBe("tunnel_only");
+    expect(resolveOpenAiSubjectPolicy({ [OPENAI_SUBJECT_POLICY_ENV]: "enforce" }, false)).toBe("enforce");
+    expect(() => resolveOpenAiSubjectPolicy({ [OPENAI_SUBJECT_POLICY_ENV]: "unknown" }, false)).toThrow("enforce or tunnel_only");
   });
   it("loads an inline allowed subject", () => {
     expect(resolveOpenAiSubjectAuthConfig({

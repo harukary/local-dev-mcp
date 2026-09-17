@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -99,10 +99,19 @@ export function verifyOpenAiSubject(subject: unknown, expectedSubject: string): 
   return typeof subject === "string" && subject.length > 0 && secureStringEqual(subject, expectedSubject);
 }
 
-export function resolveOpenAiSubjectPolicy(env: NodeJS.ProcessEnv = process.env): OpenAiSubjectPolicy {
-  const policy = env[OPENAI_SUBJECT_POLICY_ENV]?.trim() || "enforce";
-  if (policy === "enforce" || policy === "tunnel_only") return policy;
-  throw new Error(`${OPENAI_SUBJECT_POLICY_ENV} must be enforce or tunnel_only.`);
+export function resolveOpenAiSubjectPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+  defaultSubjectFileExists: boolean = existsSync(DEFAULT_OPENAI_ALLOWED_SUBJECT_FILE)
+): OpenAiSubjectPolicy {
+  const explicitPolicy = env[OPENAI_SUBJECT_POLICY_ENV]?.trim();
+  if (explicitPolicy) {
+    if (explicitPolicy === "enforce" || explicitPolicy === "tunnel_only") return explicitPolicy;
+    throw new Error(`${OPENAI_SUBJECT_POLICY_ENV} must be enforce or tunnel_only.`);
+  }
+
+  const hasInlineSubject = Boolean(env[OPENAI_ALLOWED_SUBJECT_ENV]?.trim());
+  const hasConfiguredSubjectFile = Boolean(env[OPENAI_ALLOWED_SUBJECT_FILE_ENV]?.trim());
+  return hasInlineSubject || hasConfiguredSubjectFile || defaultSubjectFileExists ? "enforce" : "tunnel_only";
 }
 
 export function hashOpenAiSubject(subject: unknown): string | undefined {

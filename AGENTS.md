@@ -6,7 +6,7 @@
 ## ChatGPT transport
 
 - ChatGPTとの正規接続経路はOpenAI Secure MCP Tunnelのみとする。public MCP ingressや別Tunnel方式の互換コードを追加しない。
-- HTTP MCPはloopback bind + `X-Local-Dev-MCP-Tunnel-Token`を安全境界とし、tool/resource accessは原則`openai/subject` allowlistでfail-closedに制限する。ChatGPT Scheduled Taskで`openai/subject`が欠落する実測経路だけは、観測済みのexact metadata fingerprintに限定した互換例外を許可し、未知のanonymous request shapeは拒否する。stdio transportはlocal MCP client向けに独立して維持する。
+- HTTP MCPはloopback bind + `X-Local-Dev-MCP-Tunnel-Token`を必須の安全境界とする。`openai/subject` allowlistは必要な利用者だけが有効化する追加の防御層で、未設定時はTunnel tokenのみで動作する。allowlist有効時はfail-closedに制限し、ChatGPT Scheduled Taskで`openai/subject`が欠落する実測経路だけ観測済みのexact metadata fingerprintに限定した互換例外を許可する。stdio transportはlocal MCP client向けに独立して維持する。
 - tool schemaやTunnel起動方式を変更した場合はunit testだけで完了扱いにせず、ChatGPT WebまたはAndroidで実tool callを確認する。
 - ChatGPT Webで実tool callを促す検証では、通常は自然文で対象app名やtool目的を指定する。`@...` mentionを必須手順として扱わず、mention UI自体を検証する場合だけ使う。
 

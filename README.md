@@ -199,14 +199,14 @@ Tunnel state is split by ChatGPT context. Personal and Business Tunnel clients c
 ~/.openai-tunnels/business/runtime-api-key
 
 ~/.local-dev-mcp/openai-tunnel/mcp-token
-~/.local-dev-mcp/allowed-openai-subject
+~/.local-dev-mcp/allowed-openai-subject  # optional
 ```
 
 - `organization-id` is the OpenAI organization that owns that Tunnel.
 - `tunnel-id` is the Tunnel ID created in OpenAI Platform.
 - each `runtime-api-key` belongs to its corresponding Personal or Business control-plane context.
 - `mcp-token` is a shared local-hop secret used only between the Tunnel clients and `local-dev-mcp`. It is intentionally not duplicated per Tunnel.
-- `allowed-openai-subject` contains the single anonymized ChatGPT user subject allowed to execute HTTP tools and read resources. Requests from other subjects fail closed; anonymous requests also fail closed except for the exact ChatGPT Scheduled Task metadata shape documented in [`docs/chatgpt-scheduled-task-mcp-metadata.md`](docs/chatgpt-scheduled-task-mcp-metadata.md).
+- `allowed-openai-subject` is optional. When present, it enables a single-user `openai/subject` allowlist for HTTP tools and resources. Other subjects fail closed; anonymous requests also fail closed except for the exact ChatGPT Scheduled Task metadata shape documented in [`docs/chatgpt-scheduled-task-mcp-metadata.md`](docs/chatgpt-scheduled-task-mcp-metadata.md). Without subject configuration, the server uses the required Tunnel token only.
 
 Recommended permissions are `0700` for state directories and `0600` for the files they contain. Do not commit these files or paste secret values into logs.
 
@@ -216,8 +216,8 @@ Environment-variable alternatives are supported for automation:
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN` / `_FILE`
-- `LOCAL_DEV_MCP_ALLOWED_OPENAI_SUBJECT` / `_FILE` (defaults to `~/.local-dev-mcp/allowed-openai-subject`)
-- `LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY` (`enforce` by default; `tunnel_only` preserves an intentional Tunnel-token-only host policy while retaining hashed subject auditing)
+- `LOCAL_DEV_MCP_ALLOWED_OPENAI_SUBJECT` / `_FILE` (optional; configuring either enables subject enforcement, and the default file `~/.local-dev-mcp/allowed-openai-subject` is auto-detected when present)
+- `LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY` (optional override: `enforce` requires subject configuration; `tunnel_only` disables subject restriction while retaining hashed subject auditing)
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR`
 - `LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR`

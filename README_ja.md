@@ -167,14 +167,14 @@ TunnelのstateはChatGPT側の利用コンテキストごとに分離します�
 ~/.openai-tunnels/business/runtime-api-key
 
 ~/.local-dev-mcp/openai-tunnel/mcp-token
-~/.local-dev-mcp/allowed-openai-subject
+~/.local-dev-mcp/allowed-openai-subject  # optional
 ```
 
 - `organization-id`: そのTunnelを所有するOpenAI organization ID
 - `tunnel-id`: OpenAI Platformで作成したTunnel ID
 - `runtime-api-key`: Personal / Businessそれぞれのcontrol plane用runtime key
 - `mcp-token`: Tunnel clientと`local-dev-mcp`のlocal hopだけで共有するsecret。Tunnelごとには複製しません
-- `allowed-openai-subject`: HTTP tool/resource accessを許可する単一の匿名化ChatGPT user subject。別subjectはfail-closedで拒否し、anonymous requestも原則拒否します。例外は[`docs/chatgpt-scheduled-task-mcp-metadata.md`](docs/chatgpt-scheduled-task-mcp-metadata.md)に記録したChatGPT Scheduled Taskのexact metadata shapeだけです
+- `allowed-openai-subject`: 任意の追加防御です。存在する場合だけ単一の匿名化ChatGPT user subject allowlistを有効化します。別subjectはfail-closedで拒否し、anonymous requestも原則拒否します。例外は[`docs/chatgpt-scheduled-task-mcp-metadata.md`](docs/chatgpt-scheduled-task-mcp-metadata.md)に記録したChatGPT Scheduled Taskのexact metadata shapeだけです。subjectを設定しない場合は必須のTunnel tokenだけで動作します
 
 state directoryは`0700`、中のfileは`0600`を推奨します。secretやuser identifierをGitやlogへ保存しません。
 
@@ -184,7 +184,8 @@ automationでは次のenvironment variableも利用できます。
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_ORGANIZATION_ID` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_API_KEY` / `_FILE`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN` / `_FILE`
-- `LOCAL_DEV_MCP_ALLOWED_OPENAI_SUBJECT` / `_FILE`（既定は`~/.local-dev-mcp/allowed-openai-subject`）
+- `LOCAL_DEV_MCP_ALLOWED_OPENAI_SUBJECT` / `_FILE`（任意。どちらかを設定するとsubject制限を有効化し、既定file `~/.local-dev-mcp/allowed-openai-subject` も存在すれば自動検出します）
+- `LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY`（任意override。`enforce`はsubject設定を必須化し、`tunnel_only`はsubject制限を無効化しつつhash監査を維持します）
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_STATE_DIR`
 - `LOCAL_DEV_MCP_TUNNEL_CLIENT_BIN`
 - `LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR`

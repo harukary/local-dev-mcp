@@ -25,6 +25,7 @@ describe("launchd installer", () => {
         HOME: tempDir,
         LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: tempDir,
         LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: labelPrefix,
+        LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY: "",
         PORT: "13461",
       },
       encoding: "utf8",
@@ -52,6 +53,30 @@ describe("launchd installer", () => {
     expect(tunnel).not.toContain("<key>LOCAL_DEV_MCP_OPENAI_TUNNEL_TOKEN</key>");
     expect(server).toContain("<key>ExitTimeOut</key>");
     expect(server).toContain("<integer>60</integer>");
+    expect(server).not.toContain("LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY");
+  });
+
+  it("embeds an explicit subject policy in the server LaunchAgent", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-launchd-subject-policy-"));
+    tempDirs.push(tempDir);
+    const labelPrefix = "test.local-dev-mcp";
+
+    const result = spawnSync("/bin/bash", [path.resolve("scripts/install-launchd.sh"), "--install-only"], {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: tempDir,
+        LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: labelPrefix,
+        LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY: "enforce",
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    const server = readFileSync(path.join(tempDir, `${labelPrefix}.server.plist`), "utf8");
+    expect(server).toContain("<key>LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY</key>");
+    expect(server).toContain("<string>enforce</string>");
   });
 
   it("generates an optional Business Secure MCP Tunnel LaunchAgent", () => {
