@@ -8,8 +8,6 @@ ChatGPT との正規接続経路は **OpenAI Secure MCP Tunnel** です。HTTP M
 
 ## 主な用途
 
-実装中の汎用性能・出力効率改善と検証範囲は [改善台帳](docs/improvement-tracker.md) を参照してください。ソースの実装と、稼働中サーバー・ChatGPTへの反映は別段階です。
-
 - source repository の調査・編集
 - test / build / deploy / custom script の実行
 - browser session や mobile device の操作
@@ -176,7 +174,7 @@ TunnelのstateはChatGPT側の利用コンテキストごとに分離します�
 - `tunnel-id`: OpenAI Platformで作成したTunnel ID
 - `runtime-api-key`: Personal / Businessそれぞれのcontrol plane用runtime key
 - `mcp-token`: Tunnel clientと`local-dev-mcp`のlocal hopだけで共有するsecret。Tunnelごとには複製しません
-- `allowed-openai-subject`: HTTP tool/resource accessを許可する単一の匿名化ChatGPT user subject。別subjectまたはsubject欠落はfail-closedで拒否します
+- `allowed-openai-subject`: HTTP tool/resource accessを許可する単一の匿名化ChatGPT user subject。別subjectはfail-closedで拒否し、anonymous requestも原則拒否します。例外は[`docs/chatgpt-scheduled-task-mcp-metadata.md`](docs/chatgpt-scheduled-task-mcp-metadata.md)に記録したChatGPT Scheduled Taskのexact metadata shapeだけです
 
 state directoryは`0700`、中のfileは`0600`を推奨します。secretやuser identifierをGitやlogへ保存しません。
 

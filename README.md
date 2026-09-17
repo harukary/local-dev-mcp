@@ -8,8 +8,6 @@ For ChatGPT, the canonical transport is **OpenAI Secure MCP Tunnel**. The HTTP M
 
 ## Intended Uses
 
-See the [improvement tracker](docs/improvement-tracker.md) for capability and output-efficiency changes, verification, and remaining gates. Source implementation is separate from running-server and ChatGPT rollout.
-
 - inspect and edit source repositories
 - run tests, builds, deploy commands, and custom scripts
 - operate browser sessions and mobile devices
@@ -208,7 +206,7 @@ Tunnel state is split by ChatGPT context. Personal and Business Tunnel clients c
 - `tunnel-id` is the Tunnel ID created in OpenAI Platform.
 - each `runtime-api-key` belongs to its corresponding Personal or Business control-plane context.
 - `mcp-token` is a shared local-hop secret used only between the Tunnel clients and `local-dev-mcp`. It is intentionally not duplicated per Tunnel.
-- `allowed-openai-subject` contains the single anonymized ChatGPT user subject allowed to execute HTTP tools and read resources. Requests from other subjects or with no subject fail closed.
+- `allowed-openai-subject` contains the single anonymized ChatGPT user subject allowed to execute HTTP tools and read resources. Requests from other subjects fail closed; anonymous requests also fail closed except for the exact ChatGPT Scheduled Task metadata shape documented in [`docs/chatgpt-scheduled-task-mcp-metadata.md`](docs/chatgpt-scheduled-task-mcp-metadata.md).
 
 Recommended permissions are `0700` for state directories and `0600` for the files they contain. Do not commit these files or paste secret values into logs.
 
