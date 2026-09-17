@@ -92,6 +92,9 @@ export interface AuditLogEntry {
   openAiSubjectPresent?: boolean;
   openAiSubjectHash?: string;
   openAiSubjectAuthorized?: boolean;
+  openAiAuthorizationBasis?: "owner_subject" | "scheduled_task_meta" | "tunnel_only" | "rejected";
+  requestMetaKeys?: string[];
+  requestMetaUnknownKeyCount?: number;
   approvalRequestId?: string;
   approvalPolicy?: "ask" | "deny";
   approval?: {

@@ -61,10 +61,35 @@ export interface AppContext {
   openAiSubjectPolicy?: OpenAiSubjectPolicy;
 }
 
-type CallToolMeta = {
+type CallToolMeta = Record<string, unknown> & {
   "openai/session"?: unknown;
   "openai/subject"?: unknown;
 };
+
+const SAFE_REQUEST_META_KEY_PATTERN = /^[A-Za-z0-9._/-]{1,128}$/;
+const SCHEDULED_TASK_META_KEYS = [
+  "openai/locale",
+  "openai/userAgent",
+  "openai/userLocation",
+  "timezone",
+] as const;
+
+type OpenAiAuthorizationBasis = "owner_subject" | "scheduled_task_meta" | "tunnel_only" | "rejected";
+
+function summarizeRequestMetaKeys(meta: CallToolMeta | undefined): {
+  requestMetaKeys: string[];
+  requestMetaUnknownKeyCount: number;
+} {
+  if (!meta || typeof meta !== "object") {
+    return { requestMetaKeys: [], requestMetaUnknownKeyCount: 0 };
+  }
+  const keys = Object.keys(meta);
+  const requestMetaKeys = keys.filter((key) => SAFE_REQUEST_META_KEY_PATTERN.test(key)).sort();
+  return {
+    requestMetaKeys,
+    requestMetaUnknownKeyCount: keys.length - requestMetaKeys.length,
+  };
+}
 
 export function resolveChatContextId(meta: CallToolMeta | undefined): string {
   const session = meta?.["openai/session"];
@@ -86,26 +111,50 @@ export function isAuthorizedOpenAiSubject(meta: CallToolMeta | undefined, expect
   return verifyOpenAiSubject(meta?.["openai/subject"], expectedSubject);
 }
 
+export function isObservedScheduledTaskMeta(meta: CallToolMeta | undefined): boolean {
+  if (!meta || typeof meta !== "object") return false;
+  const keys = Object.keys(meta).sort();
+  if (keys.length !== SCHEDULED_TASK_META_KEYS.length) return false;
+  return SCHEDULED_TASK_META_KEYS.every((key, index) => keys[index] === key);
+}
+
+export function resolveOpenAiAuthorization(
+  meta: CallToolMeta | undefined,
+  expectedSubject: string | undefined
+): { authorized: boolean; basis: OpenAiAuthorizationBasis } {
+  if (!expectedSubject) return { authorized: true, basis: "tunnel_only" };
+  if (verifyOpenAiSubject(meta?.["openai/subject"], expectedSubject)) {
+    return { authorized: true, basis: "owner_subject" };
+  }
+  if (isObservedScheduledTaskMeta(meta)) {
+    return { authorized: true, basis: "scheduled_task_meta" };
+  }
+  return { authorized: false, basis: "rejected" };
+}
+
 async function requireAuthorizedOpenAiSubject(
   ctx: AppContext,
   meta: CallToolMeta | undefined,
   target: string
 ): Promise<void> {
-  const authorized = isAuthorizedOpenAiSubject(meta, ctx.allowedOpenAiSubject);
+  const authorization = resolveOpenAiAuthorization(meta, ctx.allowedOpenAiSubject);
   if (ctx.openAiSubjectPolicy || ctx.allowedOpenAiSubject) {
     const subjectHash = hashOpenAiSubject(meta?.["openai/subject"]);
+    const metaKeySummary = summarizeRequestMetaKeys(meta);
     await ctx.auditLogger.log({
       timestamp: new Date().toISOString(),
       chatContextId: resolveChatContextId(meta),
       tool: target,
       event: "openai_subject_authorization",
-      enforcement: authorized ? "audit_only" : "blocked",
+      enforcement: authorization.authorized ? "audit_only" : "blocked",
       openAiSubjectPresent: subjectHash !== undefined,
       ...(subjectHash ? { openAiSubjectHash: subjectHash } : {}),
-      openAiSubjectAuthorized: authorized,
+      openAiSubjectAuthorized: authorization.authorized,
+      openAiAuthorizationBasis: authorization.basis,
+      ...metaKeySummary,
     });
   }
-  if (authorized) return;
+  if (authorization.authorized) return;
   throw new Error("Forbidden: this ChatGPT user is not authorized to use local-dev.");
 }
 
@@ -556,7 +605,7 @@ export function createMcpServer(ctx: AppContext): Server {
 
   server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     const meta = request.params?._meta as CallToolMeta | undefined;
-    const authorized = isAuthorizedOpenAiSubject(meta, ctx.allowedOpenAiSubject);
+    const authorized = resolveOpenAiAuthorization(meta, ctx.allowedOpenAiSubject).authorized;
     if (ctx.openAiSubjectPolicy || ctx.allowedOpenAiSubject) {
       try {
         await requireAuthorizedOpenAiSubject(ctx, meta, "resources/list");

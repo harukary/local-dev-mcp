@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   isAllowedHttpHost,
   isAuthorizedOpenAiSubject,
+  isObservedScheduledTaskMeta,
   isMcpDebugEnabled,
+  resolveOpenAiAuthorization,
   normalizeHttpHost,
   resolveChatContextId,
   sanitizeRequestUrlForLog,
@@ -60,6 +62,34 @@ describe("ChatGPT subject authorization", () => {
   it("does not constrain local stdio contexts without a configured subject", () => {
     expect(isAuthorizedOpenAiSubject(undefined, undefined)).toBe(true);
     expect(isAuthorizedOpenAiSubject({ "openai/subject": "any" }, undefined)).toBe(true);
+  });
+
+  it("recognizes only the observed Scheduled Task metadata fingerprint", () => {
+    const scheduledMeta = {
+      "openai/locale": "ja-JP",
+      "openai/userAgent": "test-agent",
+      "openai/userLocation": { country: "JP" },
+      timezone: "Asia/Tokyo",
+    };
+    expect(isObservedScheduledTaskMeta(scheduledMeta)).toBe(true);
+    expect(isObservedScheduledTaskMeta({ ...scheduledMeta, "openai/organization": "org" })).toBe(false);
+    expect(isObservedScheduledTaskMeta({ ...scheduledMeta, "openai/session": "session" })).toBe(false);
+    expect(isObservedScheduledTaskMeta({ ...scheduledMeta, "openai/subject": "subject" })).toBe(false);
+    expect(isObservedScheduledTaskMeta(undefined)).toBe(false);
+  });
+
+  it("allows the owner subject or the exact Scheduled Task fingerprint and rejects other anonymous requests", () => {
+    const scheduledMeta = {
+      "openai/locale": "ja-JP",
+      "openai/userAgent": "test-agent",
+      "openai/userLocation": { country: "JP" },
+      timezone: "Asia/Tokyo",
+    };
+    expect(resolveOpenAiAuthorization({ "openai/subject": "owner" }, "owner")).toEqual({ authorized: true, basis: "owner_subject" });
+    expect(resolveOpenAiAuthorization(scheduledMeta, "owner")).toEqual({ authorized: true, basis: "scheduled_task_meta" });
+    expect(resolveOpenAiAuthorization({ "openai/locale": "ja-JP", timezone: "Asia/Tokyo" }, "owner")).toEqual({ authorized: false, basis: "rejected" });
+    expect(resolveOpenAiAuthorization(undefined, "owner")).toEqual({ authorized: false, basis: "rejected" });
+    expect(resolveOpenAiAuthorization(undefined, undefined)).toEqual({ authorized: true, basis: "tunnel_only" });
   });
 });
 

@@ -28,7 +28,15 @@ it("enforces the ChatGPT subject allowlist through the actual dispatcher", async
     await server.connect(b);
     await client.connect(a);
 
-    const denied = await client.callTool({ name: "project.list", arguments: {}, _meta: { "openai/subject": rejectedSubject } });
+    const denied = await client.callTool({
+      name: "project.list",
+      arguments: {},
+      _meta: {
+        "openai/subject": rejectedSubject,
+        "openai/organization": "synthetic-organization",
+        "openai/userAgent": "synthetic-user-agent",
+      },
+    });
     expect(denied.isError).toBe(true);
     expect(denied.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("not authorized") })]));
 
@@ -46,12 +54,29 @@ it("enforces the ChatGPT subject allowlist through the actual dispatcher", async
 
     const entries = auditLog.mock.calls.map(([entry]) => entry);
     expect(entries).toEqual(expect.arrayContaining([
-      expect.objectContaining({ event: "openai_subject_authorization", openAiSubjectHash: hashOpenAiSubject(allowedSubject), openAiSubjectPresent: true, openAiSubjectAuthorized: true }),
-      expect.objectContaining({ event: "openai_subject_authorization", openAiSubjectHash: hashOpenAiSubject(rejectedSubject), openAiSubjectPresent: true, openAiSubjectAuthorized: false }),
-      expect.objectContaining({ event: "openai_subject_authorization", openAiSubjectPresent: false, openAiSubjectAuthorized: false }),
+      expect.objectContaining({ event: "openai_subject_authorization", openAiSubjectHash: hashOpenAiSubject(allowedSubject), openAiSubjectPresent: true, openAiSubjectAuthorized: true, openAiAuthorizationBasis: "owner_subject" }),
+      expect.objectContaining({
+        event: "openai_subject_authorization",
+        openAiSubjectHash: hashOpenAiSubject(rejectedSubject),
+        openAiSubjectPresent: true,
+        openAiSubjectAuthorized: false,
+        openAiAuthorizationBasis: "rejected",
+        requestMetaKeys: ["openai/organization", "openai/subject", "openai/userAgent"],
+        requestMetaUnknownKeyCount: 0,
+      }),
+      expect.objectContaining({
+        event: "openai_subject_authorization",
+        openAiSubjectPresent: false,
+        openAiSubjectAuthorized: false,
+        openAiAuthorizationBasis: "rejected",
+        requestMetaKeys: [],
+        requestMetaUnknownKeyCount: 0,
+      }),
     ]));
     expect(JSON.stringify(entries)).not.toContain(allowedSubject);
     expect(JSON.stringify(entries)).not.toContain(rejectedSubject);
+    expect(JSON.stringify(entries)).not.toContain("synthetic-organization");
+    expect(JSON.stringify(entries)).not.toContain("synthetic-user-agent");
   } finally { await client.close(); await server.close(); metrics.flush(); }
 });
 
