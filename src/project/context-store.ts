@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile, writeFile, rename, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -9,6 +10,7 @@ export interface ContextStoreData {
 
 export class ChatContextStore {
   private contexts: Map<string, ChatContext> = new Map();
+  private scopedContexts = new AsyncLocalStorage<Map<string, ChatContext>>();
   private persistencePath: string | null = null;
   private pendingSave: Promise<void> = Promise.resolve();
 
@@ -30,6 +32,7 @@ export class ChatContextStore {
   }
 
   async save(): Promise<void> {
+    if (this.scopedContexts.getStore()) return;
     if (!this.persistencePath) return;
     const data: ContextStoreData = {
       chatContexts: Object.fromEntries(this.contexts),
@@ -49,17 +52,32 @@ export class ChatContextStore {
     await operation;
   }
 
+  async withTemporaryContext<T>(
+    chatContextId: string,
+    seed: Partial<ChatContext>,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const scoped = new Map<string, ChatContext>();
+    scoped.set(chatContextId, { ...seed, chatContextId });
+    return await this.scopedContexts.run(scoped, operation);
+  }
+
+  private activeContexts(): Map<string, ChatContext> {
+    return this.scopedContexts.getStore() ?? this.contexts;
+  }
+
   getOrCreate(chatContextId: string): ChatContext {
-    let ctx = this.contexts.get(chatContextId);
+    const contexts = this.activeContexts();
+    let ctx = contexts.get(chatContextId);
     if (!ctx) {
       ctx = { chatContextId };
-      this.contexts.set(chatContextId, ctx);
+      contexts.set(chatContextId, ctx);
     }
     return ctx;
   }
 
   get(chatContextId: string): ChatContext | undefined {
-    return this.contexts.get(chatContextId);
+    return this.activeContexts().get(chatContextId);
   }
 
   setCurrentProject(chatContextId: string, projectId: ProjectId, selectedBy: string = "user"): ChatContext {
@@ -84,11 +102,11 @@ export class ChatContextStore {
   }
 
   getWorkingDirectory(chatContextId: string): string | undefined {
-    return this.contexts.get(chatContextId)?.workingDirectory;
+    return this.activeContexts().get(chatContextId)?.workingDirectory;
   }
 
   clearCurrentProject(chatContextId: string): void {
-    const ctx = this.contexts.get(chatContextId);
+    const ctx = this.activeContexts().get(chatContextId);
     if (!ctx) return;
     delete ctx.currentProjectId;
     delete ctx.workingDirectory;
@@ -97,7 +115,7 @@ export class ChatContextStore {
   }
 
   getCurrentProject(chatContextId: string): ProjectId | undefined {
-    return this.contexts.get(chatContextId)?.currentProjectId;
+    return this.activeContexts().get(chatContextId)?.currentProjectId;
   }
 
   getActiveProject(chatContextId: string, isAvailable: (projectId: ProjectId) => boolean): ProjectId | undefined {

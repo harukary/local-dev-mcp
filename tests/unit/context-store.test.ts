@@ -84,4 +84,34 @@ describe("ChatContextStore", () => {
     expect(store.getCurrentProject("chat_1")).toBe("frontend");
     expect(store.getCurrentProject("chat_2")).toBeUndefined();
   });
+
+  it("isolates concurrent temporary contexts and does not persist them", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-context-"));
+    const persistencePath = join(tmpRoot, "chat-contexts.json");
+    const store = new ChatContextStore(persistencePath);
+    store.setCurrentProject("default", "persistent");
+    await store.save();
+
+    const seen = await Promise.all([
+      store.withTemporaryContext("chatgpt-scheduled-task:stateless", { currentProjectId: "alpha" }, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        await store.save();
+        return store.getCurrentProject("chatgpt-scheduled-task:stateless");
+      }),
+      store.withTemporaryContext("chatgpt-scheduled-task:stateless", { currentProjectId: "beta" }, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        await store.save();
+        return store.getCurrentProject("chatgpt-scheduled-task:stateless");
+      }),
+    ]);
+
+    expect(seen).toEqual(["alpha", "beta"]);
+    expect(store.getCurrentProject("chatgpt-scheduled-task:stateless")).toBeUndefined();
+    expect(store.getCurrentProject("default")).toBe("persistent");
+
+    const restored = new ChatContextStore(persistencePath);
+    await restored.load();
+    expect(restored.getCurrentProject("default")).toBe("persistent");
+    expect(restored.getCurrentProject("chatgpt-scheduled-task:stateless")).toBeUndefined();
+  });
 });

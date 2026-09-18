@@ -36,10 +36,13 @@ describe("MCP server instructions", () => {
     await client.connect(clientTransport);
 
     expect(client.getInstructions()).toBe(SERVER_INSTRUCTIONS);
-    expect(client.getInstructions()).toContain("Ensure the target project is selected");
-    expect(client.getInstructions()).toContain("Call skills.list once for the selected project");
+    expect(client.getInstructions()).toContain("ChatGPT Scheduled Tasks");
+    expect(client.getInstructions()).toContain("pass project_id and optional working_dir directly");
+    expect(client.getInstructions()).toContain("Call skills.list once for the selected or explicitly scoped project");
     expect(client.getInstructions()).toContain("call skills.read for that exact SKILL.md");
     expect(client.getInstructions()).toContain("Do not read unrelated skills");
-    expect(client.getInstructions()).toContain("Do not call skills.list again unless the selected project changes");
+    expect(client.getInstructions()).toContain("Do not call skills.list again unless the project changes");
+    expect(client.getInstructions()).toContain("Use git.inspect/status/diff/log/show for read-only Git inspection");
+    expect(client.getInstructions()).toContain("wait_ms=30000 and output=none");
   });
 });

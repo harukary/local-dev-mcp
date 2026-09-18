@@ -3,10 +3,71 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-09-17.1";
+export const TOOL_SCHEMA_VERSION = "2026-09-18.1";
+
+const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
+  "skills.list",
+  "project.inspect",
+  "workspace.batch",
+  "workspace.read",
+  "workspace.list",
+  "workspace.search",
+  "workspace.patch",
+  "git.inspect",
+  "git.status",
+  "git.log",
+  "git.show",
+  "git.diff",
+  "shell.run",
+  "image.read",
+  "artifact.link",
+  "artifact.read",
+  "artifact.receive",
+  "mobile.screenshot",
+  "mobile.snapshot",
+  "mobile.current_app",
+  "mobile.logs",
+  "mobile.stop_app",
+  "mobile.restart_app",
+  "mobile.boot",
+  "mobile.launch_app",
+  "mobile.open_url",
+  "mobile.tap",
+  "mobile.tap_element",
+  "mobile.type",
+  "mobile.swipe",
+  "mobile.press",
+  "mobile.wait",
+]);
+
+export function supportsExplicitProjectScope(name: string): boolean {
+  return EXPLICIT_PROJECT_SCOPE_TOOLS.has(name);
+}
+
+function addExplicitProjectScope<T extends { name: string; inputSchema: Record<string, any> }>(tool: T): T {
+  if (!supportsExplicitProjectScope(tool.name)) return tool;
+  const properties = tool.inputSchema.properties ?? {};
+  return {
+    ...tool,
+    inputSchema: {
+      ...tool.inputSchema,
+      properties: {
+        ...properties,
+        project_id: {
+          type: "string",
+          description: "Optional explicit project scope for this call. ChatGPT Scheduled Tasks must pass project_id on every project-scoped call instead of relying on project.select.",
+        },
+        working_dir: {
+          type: "string",
+          description: "Optional project-relative working directory used with project_id. Must resolve inside the project root.",
+        },
+      },
+    },
+  };
+}
 
 export function buildToolDefinitions() {
-  return [
+  const tools = [
     {
       name: "project.list",
       description: "List available local development projects.",
@@ -104,7 +165,7 @@ export function buildToolDefinitions() {
     {
       name: "shell.run",
       description:
-        "Fallback escape hatch for operations not covered by typed tools. Prefer workspace.*, git.*, browser.*, mobile.*, and todo.* when they support the task. For file edits, prefer workspace.patch over Python/Node/Ruby heredocs or text-replacement scripts. If work is in a git worktree, select it once with project.select working_dir and keep using typed tools. Use shell.run for builds, tests, deploys, installs, custom scripts, or unsupported operations. For any command likely to exceed about 30 seconds, use async=true and poll shell.status with wait_ms. When only completion matters, use shell.status output=none; when output matters, reuse cursor. Do not create repeated sleep + ps polling commands.",
+        "Fallback escape hatch for operations not covered by typed tools. Prefer workspace.*, git.*, browser.*, mobile.*, and todo.* when they support the task. Use git.inspect/status/diff/log/show for read-only Git inspection; reserve shell.run for Git writes or unsupported compound operations. For file edits, prefer workspace.patch over Python/Node/Ruby heredocs or text-replacement scripts. If work is in a git worktree, select it once with project.select working_dir in interactive chats, or pass project_id + working_dir directly in stateless Scheduled Tasks. Use shell.run for builds, tests, deploys, installs, custom scripts, or unsupported operations. For any command likely to exceed about 30 seconds, use async=true. For normal completion polling call shell.status with wait_ms=30000 and output=none; when output matters, reuse cursor. Do not create repeated sleep + ps polling commands.",
       inputSchema: {
         type: "object",
         properties: {
@@ -145,7 +206,7 @@ export function buildToolDefinitions() {
     },
     {
       name: "shell.status",
-      description: "Return background-job status and optional bounded output. If only completion matters, prefer output=none with wait_ms. If output matters, reuse the returned cursor so later polls receive only new stdout/stderr; increase max_bytes only when needed.",
+      description: "Return background-job status and optional bounded output. For normal completion polling, use wait_ms=30000 and output=none so one call long-polls instead of repeatedly checking. If output matters, reuse the returned cursor so later polls receive only new stdout/stderr; increase max_bytes only when needed.",
       inputSchema: {
         type: "object",
         properties: {
@@ -399,6 +460,7 @@ export function buildToolDefinitions() {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
   ];
+  return tools.map(addExplicitProjectScope);
 }
 
 export function buildToolSchemaSnapshot(options: { prefix?: string; detail?: "summary" | "full" } = {}) {

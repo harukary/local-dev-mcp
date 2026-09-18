@@ -32,7 +32,7 @@ import { listPendingRequests } from "../shell/approval.js";
 import { getActiveJobs } from "../shell/job-manager.js";
 import { handleProjectReload } from "./tools/project-reload.js";
 import { handleSkillsList, handleSkillsRead } from "./tools/skills.js";
-import { buildToolDefinitions, buildToolSchemaSnapshot } from "./tool-definitions.js";
+import { buildToolDefinitions, buildToolSchemaSnapshot, supportsExplicitProjectScope } from "./tool-definitions.js";
 import { handleProjectInspect } from "./tools/dev/project-inspect.js";
 import { handleWorkspaceRead } from "./tools/dev/workspace-read.js";
 import { handleWorkspaceList } from "./tools/dev/workspace-list.js";
@@ -49,6 +49,7 @@ import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserTo
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete } from "./tools/todo.js";
 import { hashOpenAiSubject, OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiSubjectAuthConfig, resolveOpenAiSubjectPolicy, resolveOpenAiTunnelAuthConfig, verifyOpenAiSubject, verifyOpenAiTunnelToken, type OpenAiSubjectPolicy, type OpenAiTunnelAuthConfig } from "./auth.js";
+import { resolveWorkingDirectory } from "../project/working-directory.js";
 
 export interface AppContext {
   configPath: string;
@@ -118,6 +119,47 @@ export function isObservedScheduledTaskMeta(meta: CallToolMeta | undefined): boo
   return SCHEDULED_TASK_META_KEYS.every((key, index) => keys[index] === key);
 }
 
+export function resolveRequestContextId(meta: CallToolMeta | undefined): string {
+  return isObservedScheduledTaskMeta(meta) ? "chatgpt-scheduled-task:stateless" : resolveChatContextId(meta);
+}
+
+function resolveExplicitProjectScope(ctx: AppContext, name: string, args: Record<string, unknown>) {
+  if (!supportsExplicitProjectScope(name)) return { ok: true as const, projectId: undefined, seed: undefined };
+
+  const projectId = args.project_id;
+  const workingDir = args.working_dir;
+  if (projectId === undefined) {
+    if (workingDir !== undefined) {
+      return { ok: false as const, result: jsonError("PROJECT_ID_REQUIRED", "working_dir requires project_id for explicit project scope.") };
+    }
+    return { ok: true as const, projectId: undefined, seed: undefined };
+  }
+
+  const project = ctx.registry.get(projectId as string);
+  if (!project) {
+    return {
+      ok: false as const,
+      result: jsonError("PROJECT_NOT_FOUND", `Unknown project: "${String(projectId)}".`, {
+        available_projects: ctx.registry.getAll().map((candidate) => candidate.projectId),
+      }),
+    };
+  }
+
+  const working = resolveWorkingDirectory(project, workingDir as string | undefined);
+  if (!working.ok) return { ok: false as const, result: jsonError(working.code, working.message) };
+
+  return {
+    ok: true as const,
+    projectId: project.projectId,
+    seed: {
+      currentProjectId: project.projectId,
+      ...(working.relativePath === "." ? {} : { workingDirectory: working.relativePath }),
+      selectedAt: new Date().toISOString(),
+      selectedBy: "request",
+    },
+  };
+}
+
 export function resolveOpenAiAuthorization(
   meta: CallToolMeta | undefined,
   expectedSubject: string | undefined
@@ -143,7 +185,7 @@ async function requireAuthorizedOpenAiSubject(
     const metaKeySummary = summarizeRequestMetaKeys(meta);
     await ctx.auditLogger.log({
       timestamp: new Date().toISOString(),
-      chatContextId: resolveChatContextId(meta),
+      chatContextId: resolveRequestContextId(meta),
       tool: target,
       event: "openai_subject_authorization",
       enforcement: authorization.authorized ? "audit_only" : "blocked",
@@ -243,14 +285,15 @@ async function createAppContext(
 
 export const SERVER_INSTRUCTIONS = `
 For substantive work on a project:
-1. Ensure the target project is selected before using project-scoped tools.
-2. Call skills.list once for the selected project near the start of the work.
+1. In interactive chats, select the target project before using project-scoped tools. In ChatGPT Scheduled Tasks, project.select is intentionally stateless: pass project_id and optional working_dir directly on every project-scoped tool call.
+2. Call skills.list once for the selected or explicitly scoped project near the start of the work.
 3. Inspect the returned skill names and descriptions.
 4. If a skill is relevant to the task, call skills.read for that exact SKILL.md before applying its workflow.
 5. Do not read unrelated skills.
-6. Do not call skills.list again unless the selected project changes, the Skills runtime is reloaded, or the available Skills may otherwise have changed.
+6. Do not call skills.list again unless the project changes, the Skills runtime is reloaded, or the available Skills may otherwise have changed.
 7. When two or more independent workspace.read, workspace.search, or workspace.list operations are needed, prefer one workspace.batch call.
-8. For long shell jobs, reuse shell.status cursors; use output=none when only completion matters and keep max_bytes small unless output is needed.
+8. Use git.inspect/status/diff/log/show for read-only Git inspection. Use shell.run for Git writes or operations not covered by typed Git tools.
+9. For long shell jobs, reuse shell.status cursors. For normal completion polling use wait_ms=30000 and output=none; keep max_bytes small unless output is needed.
 `.trim();
 
 export function createMcpServer(ctx: AppContext): Server {
@@ -270,7 +313,8 @@ export function createMcpServer(ctx: AppContext): Server {
     const { name, arguments: providedArgs } = request.params;
     const args = { ...(providedArgs ?? {}) };
     const meta = request.params._meta as CallToolMeta | undefined;
-    const chatContextId = resolveChatContextId(meta);
+    const chatContextId = resolveRequestContextId(meta);
+    const statelessScheduledTask = isObservedScheduledTaskMeta(meta);
     const usageStartedAt = performance.now();
     const requestBytes = Buffer.byteLength(JSON.stringify(providedArgs ?? {}));
 
@@ -286,10 +330,16 @@ export function createMcpServer(ctx: AppContext): Server {
           return await handleProjectList(ctx, chatContextId);
 
         case "project.select":
+          if (statelessScheduledTask) {
+            return jsonError(
+              "STATELESS_PROJECT_CONTEXT",
+              "ChatGPT Scheduled Task calls do not have a stable chat session identity, so project.select cannot persist. Pass project_id and optional working_dir directly on each project-scoped tool call."
+            );
+          }
           return await handleProjectSelect(ctx, chatContextId, args as { project_id: string; working_dir?: string });
 
         case "project.current":
-          return await handleProjectCurrent(ctx, chatContextId);
+          return await handleProjectCurrent(ctx, chatContextId, { stateless: statelessScheduledTask });
 
         case "project.reload":
           return await handleProjectReload(ctx, reloadProjectRegistry);
@@ -550,11 +600,29 @@ export function createMcpServer(ctx: AppContext): Server {
         }
       };
       const invalid = validateToolInput(name, args);
-      const result: any = invalid ? jsonError("INVALID_ARGUMENT", invalid) : name.startsWith("browser.")
+      const explicitScope = invalid ? undefined : resolveExplicitProjectScope(ctx, name, args);
+      const scopeRequired = !invalid && statelessScheduledTask && supportsExplicitProjectScope(name) && explicitScope?.ok && !explicitScope.projectId;
+      const executeTool = async () => name.startsWith("browser.")
         ? await runBrowserToolOperation(chatContextId, invokeTool)
         : name.startsWith("mobile.")
           ? await runMobileToolOperation(ctx, chatContextId, name, args, invokeTool)
           : await invokeTool();
+
+      let result: any;
+      if (invalid) {
+        result = jsonError("INVALID_ARGUMENT", invalid);
+      } else if (explicitScope && !explicitScope.ok) {
+        result = explicitScope.result;
+      } else if (scopeRequired) {
+        result = jsonError(
+          "PROJECT_SCOPE_REQUIRED",
+          "This ChatGPT Scheduled Task call is stateless. Pass project_id and optional working_dir directly on every project-scoped tool call."
+        );
+      } else if (statelessScheduledTask || explicitScope?.seed) {
+        result = await ctx.contextStore.withTemporaryContext(chatContextId, explicitScope?.seed ?? {}, executeTool);
+      } else {
+        result = await executeTool();
+      }
       let payload = result?.structuredContent;
       if (!payload) {
         try { payload = JSON.parse(result?.content?.find((item: { type: string }) => item.type === "text")?.text ?? "null"); } catch { /* Text-only tools need no JSON result. */ }
@@ -567,7 +635,11 @@ export function createMcpServer(ctx: AppContext): Server {
       const structuredResponseBytes = result?.structuredContent ? Buffer.byteLength(JSON.stringify(result.structuredContent)) : 0;
       ctx.toolUsageMetrics.record({
         tool: name,
-        project_id: ctx.contextStore.getCurrentProject(chatContextId),
+        project_id: explicitScope?.ok && explicitScope.projectId
+          ? explicitScope.projectId
+          : statelessScheduledTask
+            ? undefined
+            : ctx.contextStore.getCurrentProject(chatContextId),
         duration_ms: performance.now() - usageStartedAt,
         failed,
         response_bytes: Buffer.byteLength(JSON.stringify(result)),
@@ -580,7 +652,9 @@ export function createMcpServer(ctx: AppContext): Server {
     } catch (err) {
       ctx.toolUsageMetrics.record({
         tool: name,
-        project_id: ctx.contextStore.getCurrentProject(chatContextId),
+        project_id: statelessScheduledTask
+          ? (supportsExplicitProjectScope(name) && typeof args.project_id === "string" ? args.project_id : undefined)
+          : ctx.contextStore.getCurrentProject(chatContextId),
         duration_ms: performance.now() - usageStartedAt,
         failed: true,
         response_bytes: 0,
@@ -640,7 +714,7 @@ export function createMcpServer(ctx: AppContext): Server {
     await requireAuthorizedOpenAiSubject(ctx, meta, "resources/read");
     const uri = request.params.uri;
     if (uri.startsWith("local-dev-artifact://")) {
-      const chatContextId = resolveChatContextId(request.params._meta as CallToolMeta | undefined);
+      const chatContextId = resolveRequestContextId(request.params._meta as CallToolMeta | undefined);
       return await handleArtifactResourceRead(ctx, chatContextId, uri);
     }
 

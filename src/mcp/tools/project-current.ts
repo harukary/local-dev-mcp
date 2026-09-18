@@ -10,14 +10,17 @@ function jsonResult(value: Record<string, unknown>) {
 
 export async function handleProjectCurrent(
   ctx: AppContext,
-  chatContextId: string
+  chatContextId: string,
+  options: { stateless?: boolean } = {}
 ) {
   const currentProjectId = resolveCurrentProjectId(ctx, chatContextId);
 
   if (!currentProjectId) {
     return jsonResult({
       selected: false,
-      message: "No project is selected for this chat. Use project.select first.",
+      message: options.stateless
+        ? "This request has no persistent chat project context. Pass project_id and optional working_dir directly on each project-scoped tool call."
+        : "No project is selected for this chat. Use project.select first.",
       available_projects: ctx.registry.getAll().map((p) => p.projectId),
     });
   }

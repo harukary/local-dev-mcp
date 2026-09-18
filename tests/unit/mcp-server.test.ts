@@ -7,6 +7,7 @@ import {
   resolveOpenAiAuthorization,
   normalizeHttpHost,
   resolveChatContextId,
+  resolveRequestContextId,
   sanitizeRequestUrlForLog,
   sendStatelessMcpMethodNotAllowed,
 } from "../../src/mcp/server.js";
@@ -31,6 +32,15 @@ describe("resolveChatContextId", () => {
   it("falls back to default when no app metadata is present", () => {
     expect(resolveChatContextId(undefined)).toBe("default");
     expect(resolveChatContextId({ "openai/session": "" })).toBe("default");
+  });
+
+  it("uses a stateless request context for the observed Scheduled Task metadata", () => {
+    expect(resolveRequestContextId({
+      "openai/locale": "ja-JP",
+      "openai/userAgent": "test-agent",
+      "openai/userLocation": { country: "JP" },
+      timezone: "Asia/Tokyo",
+    })).toBe("chatgpt-scheduled-task:stateless");
   });
 
   it("reads the debug env gate", () => {
@@ -135,13 +145,14 @@ describe("tool schema snapshot", () => {
     const names = snapshot.tools.map((tool) => tool.name);
     const shellRun = snapshot.tools.find((tool) => tool.name === "shell.run");
     const workspacePatch = snapshot.tools.find((tool) => tool.name === "workspace.patch");
+    const workspaceRead = snapshot.tools.find((tool) => tool.name === "workspace.read");
     const imageRead = snapshot.tools.find((tool) => tool.name === "image.read");
     const artifactLink = snapshot.tools.find((tool) => tool.name === "artifact.link");
     const artifactRead = snapshot.tools.find((tool) => tool.name === "artifact.read");
     const artifactReceive = snapshot.tools.find((tool) => tool.name === "artifact.receive");
     const mobileScreenshot = snapshot.tools.find((tool) => tool.name === "mobile.screenshot");
 
-    expect(snapshot.schema_version).toBe("2026-09-17.1");
+    expect(snapshot.schema_version).toBe("2026-09-18.1");
     expect(names).toContain("tool.schema");
     expect(names).toContain("image.read");
     expect(names).toContain("artifact.link");
@@ -178,6 +189,12 @@ describe("tool schema snapshot", () => {
       openWorldHint: true,
     });
     expect(shellRun?.description).toContain("Do not create repeated sleep + ps polling commands");
+    expect(workspaceRead?.inputSchema).toMatchObject({
+      properties: {
+        project_id: { type: "string" },
+        working_dir: { type: "string" },
+      },
+    });
     expect(workspacePatch?.inputSchema).toMatchObject({
       properties: {
         patches: {

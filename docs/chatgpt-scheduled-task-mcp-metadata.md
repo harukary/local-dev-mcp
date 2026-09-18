@@ -1,6 +1,6 @@
 # ChatGPT Scheduled Task / MCP metadata observations
 
-Last verified: 2026-09-17
+Last verified: 2026-09-18
 
 This note records ChatGPT behavior observed while running `local-dev-mcp` as a Workspace-published Plugin over OpenAI Secure MCP Tunnel.
 
@@ -117,6 +117,29 @@ Relevant implementation:
 
 - `src/mcp/server.ts`: `SCHEDULED_TASK_META_KEYS`, `isObservedScheduledTaskMeta`, `resolveOpenAiAuthorization`
 - `src/types.ts`: `openAiAuthorizationBasis`, `requestMetaKeys`, `requestMetaUnknownKeyCount`
+
+## Scheduled Task project context is stateless
+
+A second operational consequence of the observed request shape is that Scheduled Task calls do not carry `openai/session`. The current stateless HTTP transport also does not receive a usable `mcp-session-id` on these calls. There is therefore no observed stable task or conversation identifier that can safely key mutable project selection state across Scheduled Task tool calls.
+
+Before 2026-09-18, calls without `openai/session` or `openai/subject` fell back to the shared context id `default`. Audit review showed unrelated Scheduled Tasks repeatedly overwriting that shared project's selection. A `project.select` followed by another tool call could therefore run against a project selected by a different Scheduled Task.
+
+The 2026-09-18 execution rule is:
+
+- interactive calls keep the existing persistent per-chat project selection,
+- calls matching the observed Scheduled Task metadata shape execute in an isolated request-local context,
+- `project.select` returns `STATELESS_PROJECT_CONTEXT` for those calls instead of pretending the selection can persist,
+- project-scoped tools accept `project_id` and optional `working_dir` directly,
+- Scheduled Task project-scoped calls without `project_id` return `PROJECT_SCOPE_REQUIRED`,
+- request-local contexts are isolated with `AsyncLocalStorage` and are never written to the persisted chat-context store.
+
+This is intentionally stateless. Do not derive a synthetic task identity from locale, user-agent, location, timezone, request timing, or another hint. Those values are not stable authenticated task identifiers.
+
+Relevant implementation:
+
+- `src/project/context-store.ts`: request-local context isolation
+- `src/mcp/server.ts`: `resolveRequestContextId`, explicit project scope resolution, Scheduled Task guards
+- `src/mcp/tool-definitions.ts`: project-scoped `project_id` / `working_dir` inputs
 
 ## Audit and privacy rules
 

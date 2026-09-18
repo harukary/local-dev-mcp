@@ -129,6 +129,53 @@ it("negotiates MCP, discovers tools, validates calls, and runs a bounded batch t
   } finally { await client.close(); await server.close(); metrics.flush(); }
 });
 
+it("keeps Scheduled Task project context request-scoped", async () => {
+  const root = join(dirname(process.env.LOCAL_DEV_MCP_JOB_STORE_DIR!), "scheduled-task-project-scope");
+  await mkdir(root);
+  await writeFile(join(root, "sample.txt"), "scheduled-scope\n");
+  const project: ProjectConfig = { projectId: "fixture", displayName: "Fixture", hostRoot: root, sandboxRoot: root, sandboxType: "host", defaultShell: "/bin/bash", defaultTimeoutSeconds: 10, maxTimeoutSeconds: 30, networkPolicy: "ask", writePolicy: "allow", approvalMode: "never", deniedPaths: [], redactionProfile: "default" };
+  const contextStore = new ChatContextStore();
+  contextStore.setCurrentProject("default", "legacy-selection");
+  const metrics = new ToolUsageMetrics(join(root, "usage.json"), { flush_every: 1 });
+  const registry = {
+    has: (projectId: string) => projectId === project.projectId,
+    get: (projectId: string) => projectId === project.projectId ? project : undefined,
+    getAll: () => [project],
+  };
+  const server = createMcpServer({ registry, contextStore, shellRunner: new ShellRunner(), auditLogger: { log: vi.fn() }, toolUsageMetrics: metrics } as unknown as AppContext);
+  const client = new Client({ name: "scheduled-task-scope-regression", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const scheduledMeta = {
+    "openai/locale": "ja-JP",
+    "openai/userAgent": "scheduled-test-agent",
+    "openai/userLocation": { country: "JP" },
+    timezone: "Asia/Tokyo",
+  };
+
+  try {
+    await server.connect(b);
+    await client.connect(a);
+
+    const select = await client.callTool({ name: "project.select", arguments: { project_id: "fixture" }, _meta: scheduledMeta });
+    expect(select.isError).toBe(true);
+    expect(select.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("STATELESS_PROJECT_CONTEXT") })]));
+
+    const missingScope = await client.callTool({ name: "workspace.read", arguments: { path: "sample.txt" }, _meta: scheduledMeta });
+    expect(missingScope.isError).toBe(true);
+    expect(missingScope.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("PROJECT_SCOPE_REQUIRED") })]));
+
+    const explicit = await client.callTool({ name: "workspace.read", arguments: { project_id: "fixture", path: "sample.txt" }, _meta: scheduledMeta });
+    expect(explicit.isError).toBeUndefined();
+    expect(explicit.structuredContent).toMatchObject({ project_id: "fixture", path: "sample.txt" });
+    expect(contextStore.getCurrentProject("chatgpt-scheduled-task:stateless")).toBeUndefined();
+    expect(contextStore.getCurrentProject("default")).toBe("legacy-selection");
+  } finally {
+    await client.close();
+    await server.close();
+    metrics.flush();
+  }
+});
+
 it("audits HTTP subjects without changing an intentional tunnel-token-only policy", async () => {
   const root = join(dirname(process.env.LOCAL_DEV_MCP_JOB_STORE_DIR!), "subject-audit-only-protocol");
   await mkdir(root);

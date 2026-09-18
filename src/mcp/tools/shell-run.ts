@@ -280,7 +280,7 @@ export async function handleShellRun(
             credential_scope: result.credentialScope,
             risk_level: result.riskLevel,
             status: "running",
-            message: "Job started. Use shell.status to check progress.",
+            message: "Job started. Poll shell.status with wait_ms=30000; use output=none when only completion matters, or reuse cursor when reading output.",
           }, null, 2),
         },
       ],

@@ -11,6 +11,7 @@ it("compiles every tool schema and rejects invalid required arguments before exe
   expect(validateToolInput("workspace.patch", { patches: [{ unified_diff: "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n" }] })).toBeUndefined();
   expect(validateToolInput("shell.status", { job_id: "job", max_bytes: -1 })).toBeDefined();
   expect(validateToolInput("shell.status", { job_id: "job", max_bytes: 4096, output: "none" })).toBeUndefined();
+  expect(validateToolInput("workspace.read", { project_id: "local-dev-mcp", working_dir: ".", path: "README.md" })).toBeUndefined();
 });
 
 it("offers bounded schema discovery without hiding tools from tools/list", () => {
@@ -20,4 +21,8 @@ it("offers bounded schema discovery without hiding tools from tools/list", () =>
   expect(summary.tools.every(tool => tool.name.startsWith("workspace."))).toBe(true);
   expect(summary.tools[0]).not.toHaveProperty("inputSchema");
   expect(Buffer.byteLength(JSON.stringify(summary))).toBeLessThan(Buffer.byteLength(JSON.stringify(full)) / 4);
+  const workspaceRead = full.tools.find((tool) => tool.name === "workspace.read");
+  const browserOpen = full.tools.find((tool) => tool.name === "browser.open");
+  expect(workspaceRead?.inputSchema).toMatchObject({ properties: { project_id: { type: "string" }, working_dir: { type: "string" } } });
+  expect(browserOpen?.inputSchema).not.toHaveProperty("properties.project_id");
 });
