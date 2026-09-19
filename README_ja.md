@@ -261,7 +261,9 @@ serverとTunnel clientは別processなので、Tunnel reconnectでMCP serverま�
 5. connection typeに **Tunnel** を選んでcustom pluginを作る
 6. Tunnel IDを選択または入力する
 7. Plugin側の追加authenticationは`None`にする。private local hopはTunnel tokenで保護する
-8. tool schema変更後はPluginをRefreshする
+8. tool schema変更後は対象scopeに応じてschemaを更新する。USER-scoped Pluginは通常のRefresh、Business Workspaceの公開済みAppはこのWorkspaceで実測した既存Appのactions Refreshを先に試し、Branch/new chatでread-backする。詳細は `docs/chatgpt-user-plugin-schema-refresh.md` と `docs/chatgpt-business-app-schema-refresh.md` を参照する
+
+Business Workspaceについては、2026-09-20時点のOpenAI公式文書が「公開後の更新には再作成・再公開が必要」とする一方、このWorkspaceでは既存Appのactions Refreshが成功している。したがって作り直しを既定手順にせず、Refreshが利用不能・失敗した場合だけfallbackとする。
 
 このrepositoryでは、Proのdeveloper-mode pluginを使いChatGPT WebとAndroid Mobileの両方でend-to-end確認済みです。
 
@@ -377,4 +379,4 @@ pnpm test
 bash -n scripts/server.sh scripts/tunnel.sh scripts/install-launchd.sh scripts/install-openai-tunnel-client.sh
 ```
 
-tool surfaceを変更したら`TOOL_SCHEMA_VERSION`を更新し、ChatGPT PluginのactionsをRefreshします。
+tool surfaceを変更したら`TOOL_SCHEMA_VERSION`を更新し、対象scopeのschema更新手順を実行します。Business Workspaceでは `docs/chatgpt-business-app-schema-refresh.md` の既存App Refresh手順を優先し、再作成はfallbackにします。

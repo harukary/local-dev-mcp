@@ -10,7 +10,7 @@ The important distinction is that some behavior below is documented by OpenAI, w
 
 This note is specifically about the USER-scoped `local-dev` Plugin used from ChatGPT Developer Mode.
 
-It is **not** describing the lifecycle of a Business app that has been published to a workspace. Workspace-published apps have separate approval/snapshot rules and should not be used to infer USER Plugin behavior.
+It is **not** describing the lifecycle of a Business app that has been published to a workspace. Workspace-published apps have separate approval/snapshot rules and should not be used to infer USER Plugin behavior. For the Business workspace path observed in this repository, see [chatgpt-business-app-schema-refresh.md](./chatgpt-business-app-schema-refresh.md).
 
 ## What OpenAI documents
 

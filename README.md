@@ -307,7 +307,9 @@ The server and Tunnel clients are separate processes, so Tunnel reconnects do no
 5. Create a custom plugin using **Tunnel** as the connection type.
 6. Select or enter the Tunnel ID.
 7. Use no additional plugin authentication; the private local hop is already protected by the Tunnel token.
-8. Scan/refresh tools after schema changes.
+8. After a tool-schema change, update the ChatGPT-side snapshot according to scope. USER-scoped Plugins use the normal Refresh flow. For this Business workspace, first refresh the existing published app's actions in place, then read back the actions from a Branch/new chat. See `docs/chatgpt-user-plugin-schema-refresh.md` and `docs/chatgpt-business-app-schema-refresh.md`.
+
+As of 2026-09-20, OpenAI's Help Center still says Business published apps must be recreated and republished for tool/metadata changes, while this workspace has directly accepted an in-place action refresh. Do not make recreation the default here; use it only when refresh is unavailable or fails.
 
 This repository has been end-to-end tested with a Pro developer-mode plugin on both ChatGPT Web and Android Mobile.
 
@@ -423,4 +425,4 @@ pnpm test
 bash -n scripts/server.sh scripts/tunnel.sh scripts/install-launchd.sh scripts/install-openai-tunnel-client.sh
 ```
 
-After changing the tool surface, increment `TOOL_SCHEMA_VERSION` and refresh the ChatGPT plugin actions.
+After changing the tool surface, increment `TOOL_SCHEMA_VERSION` and follow the scope-specific ChatGPT schema update workflow. For this Business workspace, prefer the existing-app action refresh documented in `docs/chatgpt-business-app-schema-refresh.md`; recreation is a fallback.

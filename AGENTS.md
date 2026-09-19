@@ -8,6 +8,7 @@
 - ChatGPTとの正規接続経路はOpenAI Secure MCP Tunnelのみとする。public MCP ingressや別Tunnel方式の互換コードを追加しない。
 - HTTP MCPはloopback bind + `X-Local-Dev-MCP-Tunnel-Token`を必須の安全境界とする。`openai/subject` allowlistは必要な利用者だけが有効化する追加の防御層で、未設定時はTunnel tokenのみで動作する。allowlist有効時はfail-closedに制限し、ChatGPT Scheduled Taskで`openai/subject`が欠落する実測経路だけ観測済みのexact metadata fingerprintに限定した互換例外を許可する。stdio transportはlocal MCP client向けに独立して維持する。
 - tool schemaやTunnel起動方式を変更した場合はunit testだけで完了扱いにせず、ChatGPT WebまたはAndroidで実tool callを確認する。
+- Business Workspaceの公開済みMCP Appでtool surfaceを変更した場合、このWorkspaceではまず既存Appのactionsをin-place Refreshし、actionsのread-back後にBranch chatまたは新規chatでmodel-facing schemaを再bindして確認する。tool変更だけを理由にAppを作り直さない。2026-09-20時点のOpenAI公式文書はBusinessの公開済みAppは再作成・再公開が必要とも記載しており実測と矛盾するため、この手順はWorkspace固有の観測ルールとして扱う。Refreshが利用不能・失敗・旧snapshotのままの場合だけ再作成へfallbackする。詳細は `docs/chatgpt-business-app-schema-refresh.md` を正本とする。
 - ChatGPT Webで実tool callを促す検証では、通常は自然文で対象app名やtool目的を指定する。`@...` mentionを必須手順として扱わず、mention UI自体を検証する場合だけ使う。
 
 ## File and image transfer
