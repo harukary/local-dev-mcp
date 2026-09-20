@@ -18,3 +18,8 @@
 - ChatGPTの通常添付をlocalへ受信する場合は`artifact.receive` + `openai/fileParams`を使い、base64 chunk loopを追加しない。
 - 画像のmodel inspectionには`image.read`のinline MCP ImageContentを使う。public image URLやcustom image viewerを再導入しない。
 - `artifact.link` / `artifact.read` / `artifact.receive` の変更は、ChatGPT Androidを含む実file transferでresource resolutionまたはbyte size/SHA-256をread-backして確認する。
+
+## 大容量成果物の保管
+
+素材の受け渡し、完成buildの保管、backup・復元、容量解放では共通 `gdrive` Skillを読む。 `gdrive/` が未導入なら共通Skillのsetup手順でaccount・project対応を確認して導入する。既存成果物の保存先は `docs/gdrive-migration-20260920.md` を参照。完成buildは検査後にDriveへ保管し、同期確認と原本削除は共通toolを使う。build commandへの自動組み込み有無は既存scriptで確認する。
+他project由来のartifactは、その所有projectのDrive保存先を使う。

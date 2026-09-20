@@ -1,0 +1,12 @@
+{
+  "date": "2026-09-20",
+  "note": "Canonical Drive locations. Local originals are removed individually only after client upload confirmation and SHA-256 verification. See session migration ledgers for completion status.",
+  "files": [
+    {
+      "from": "data/release-archive/2026-09-15/sns-image-cleaner/android-release/ReadyPic-1.0.0-vc1-release-20260710.aab",
+      "to": "Google Drive/projects/sns-image-cleaner/builds/android/legacy-20260920/ReadyPic-1.0.0-vc1-release-20260710.aab",
+      "bytes": 101512709,
+      "sha256": "53437011bb6e673bdaa50ab31498a571865843f4c97ba531c9e8a46f91ebad7a"
+    }
+  ]
+}
