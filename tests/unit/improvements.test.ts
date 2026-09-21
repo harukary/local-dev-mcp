@@ -75,6 +75,15 @@ describe("capability regressions", () => {
     expect(second.stdout.trim()).toBe(join(root, "nested"));
   });
 
+  it("marks synchronous shell timeouts explicitly", async () => {
+    const { project } = fixture();
+    const runner = new ShellRunner();
+    const result = await runner.run(project, { command: "sleep 1", timeoutSeconds: 0.05 }, "test");
+    expect(result.timedOut).toBe(true);
+    expect(result.exitCode).toBeNull();
+    expect(result.durationMs).toBeLessThan(1000);
+  });
+
   it("does not change any file when a later patch conflicts", async () => {
     const { ctx } = fixture();
     writeFileSync(join(root, "a.txt"), "before");

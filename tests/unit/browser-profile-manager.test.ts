@@ -173,6 +173,32 @@ describe("BrowserProfileManager", () => {
     await expect(manager.promoteIfDominant(weaker.profileKey, async () => true)).resolves.toMatchObject({ promoted: false, reason: "candidate_does_not_dominate" });
   });
 
+  it("rejects a stale promotion candidate if the browser restarts during validation", async () => {
+    const home = await tempRoot("browser-promotion-race-");
+    const seed = await tempRoot("browser-seed-");
+    await seedChromeProfile(seed);
+    const manager = new BrowserProfileManager({ home, now: () => new Date("2026-08-29T01:00:00.000Z") });
+    await manager.initialize(seed, { seedState: "quiescent" });
+    const profile = await manager.ensureChatProfile("chatgpt-session:promotion-race");
+    await manager.recordAuthClaims(profile.profileKey, claims(["github", "google"]));
+
+    const promotion = manager.promoteIfDominant(profile.profileKey, async () => {
+      await manager.reservePort(
+        profile.profileKey,
+        { min: 18350, max: 18350 },
+        "replacement-server",
+        async () => true,
+      );
+      return true;
+    });
+
+    await expect(promotion).resolves.toMatchObject({
+      promoted: false,
+      reason: "candidate_changed_during_checkpoint",
+    });
+    expect((await manager.getOwnedProfile("chatgpt-session:promotion-race")).state).toBe("running");
+  });
+
   it("blocks a new lease while the current browser is checkpointing", async () => {
     const home = await tempRoot("browser-checkpoint-");
     const manager = new BrowserProfileManager({ home });

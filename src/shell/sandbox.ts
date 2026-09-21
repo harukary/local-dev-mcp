@@ -13,6 +13,7 @@ export interface ExecOptions {
 
 export interface ExecResult {
   exitCode: number | null;
+  timedOut: boolean;
   stdout: string;
   stderr: string;
   stdoutTruncated: boolean;
@@ -66,7 +67,9 @@ export class HostSandbox implements Sandbox {
         env: options.env ? { ...process.env, ...options.env } : process.env,
       });
 
+      let timedOut = false;
       const timer = setTimeout(() => {
+        timedOut = true;
         try { process.kill(-child.pid!, "SIGTERM"); } catch { /* ignore */ }
         setTimeout(() => {
           try { process.kill(-child.pid!, "SIGKILL"); } catch { /* ignore */ }
@@ -94,6 +97,7 @@ export class HostSandbox implements Sandbox {
         clearTimeout(timer);
         resolve({
           exitCode,
+          timedOut,
           stdout,
           stderr,
           stdoutTruncated,
@@ -106,6 +110,7 @@ export class HostSandbox implements Sandbox {
         clearTimeout(timer);
         resolve({
           exitCode: null,
+          timedOut,
           stdout,
           stderr: `Sandbox error: ${err.message}`,
           stdoutTruncated,

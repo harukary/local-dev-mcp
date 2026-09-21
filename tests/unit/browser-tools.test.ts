@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { browserSessionIdForContext, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse } from "../../src/mcp/tools/browser.js";
+import { browserSessionIdForContext, browserToolUsesOuterOperationLock, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse } from "../../src/mcp/tools/browser.js";
 
 const CHAT_ID = "chatgpt-session:chat-a";
 
@@ -55,6 +55,12 @@ function payload(result: { content: Array<{ text?: string }> }) {
 }
 
 describe("browser tools", () => {
+  it("does not hold the outer profile operation lock across browser.stop maintenance", () => {
+    expect(browserToolUsesOuterOperationLock("browser.stop")).toBe(false);
+    expect(browserToolUsesOuterOperationLock("browser.start")).toBe(true);
+    expect(browserToolUsesOuterOperationLock("browser.open")).toBe(true);
+  });
+
   it("derives one stable profile per conversation independent of project", () => {
     const first = browserSessionIdForContext("chatgpt-session:conv_123", "alpha");
 

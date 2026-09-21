@@ -34,7 +34,19 @@ const BROWSER_INSTANCE_ID = randomUUID();
 const browserOperations = new BrowserOperationCoordinator(join(BROWSER_HOME, "operation-locks"));
 const activeTabs = new ActiveTabStore(ACTIVE_TABS_DIR, browserOperations);
 
-export async function runBrowserToolOperation<T>(chatContextId: string, operation: () => Promise<T>): Promise<T> {
+export function browserToolUsesOuterOperationLock(toolName: string): boolean {
+  // browser.stop coordinates its own short critical section. Keeping the outer
+  // lock around post-stop snapshot promotion can block every browser tool for
+  // minutes even though the live profile is already idle.
+  return toolName !== "browser.stop";
+}
+
+export async function runBrowserToolOperation<T>(
+  chatContextId: string,
+  toolName: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (!browserToolUsesOuterOperationLock(toolName)) return await operation();
   return await browserOperations.run(browserProfileKey(chatContextId), operation);
 }
 
@@ -737,7 +749,12 @@ export async function handleBrowserStop(ctx: AppContext, chatContextId: string, 
   } catch (error) {
     return profileError(error);
   }
-  if (profile.state !== "running" || !profile.port) return jsonError("BROWSER_SESSION_NOT_FOUND", "No browser session found. Call browser.start first.");
+  if (profile.state === "idle" && !profile.port && !profile.pid) {
+    return jsonResult({ ok: true, action: "browser.stop", stopped: true, reason: "already_stopped" });
+  }
+  if ((profile.state !== "running" && profile.state !== "checkpointing") || !profile.port) {
+    return jsonError("BROWSER_SESSION_NOT_FOUND", "No browser session found. Call browser.start first.");
+  }
   if (!profile.instanceId || !profile.pid) return jsonError("BROWSER_PROFILE_STATE_INVALID", "The running browser lease is incomplete.");
   const lease: BrowserLease = {
     instanceId: profile.instanceId,
@@ -761,23 +778,72 @@ export async function stopManagedBrowserProfile(
   reason: ManagedBrowserStopReason,
   expectedLastUsedAt?: string,
 ) {
-  return await browserOperations.run(profileKey, () => stopManagedBrowserProfileExclusive(
+  const checkpoint = await browserOperations.run(profileKey, () => checkpointManagedBrowserProfileExclusive(
     profileKey,
     expectedLease,
-    reason,
     expectedLastUsedAt,
   ), true);
+  if ("result" in checkpoint) return checkpoint.result;
+
+  // The live browser is now stopped and the profile manifest is idle. Snapshot
+  // promotion can be expensive (multiple profile copies plus a live auth
+  // validation), so do it outside the browser operation lock. promoteIfDominant
+  // rechecks revision/state before committing; a concurrent browser.start safely
+  // invalidates this candidate instead of racing the new live session.
+  const manager = await profileManager();
+  const chrome = resolveChromeExecutable();
+  let promotion: {
+    promoted: boolean;
+    reason?: string;
+    snapshotVerification?: string;
+  } = { promoted: false, reason: "snapshot_validation_unavailable" };
+  let garbageCollectedProfiles = 0;
+  let maintenanceError: string | undefined;
+  try {
+    promotion = chrome.executable_path
+      ? await manager.promoteIfDominant(
+        profileKey,
+        (userDataDir) => validatePromotionSnapshot(
+          chrome.executable_path!,
+          userDataDir,
+          checkpoint.probes,
+          checkpoint.claims,
+        ),
+      )
+      : promotion;
+    const gc = await manager.collectGarbage();
+    garbageCollectedProfiles = gc.deletedProfileKeys.length;
+  } catch (error) {
+    maintenanceError = error instanceof Error ? error.message : String(error);
+  }
+
+  return {
+    stopped: true,
+    reason,
+    profile_retained: true,
+    auth_probes_checked: checkpoint.probes.length,
+    auth_probe_config_status: checkpoint.probeConfigStatus,
+    golden_promoted: promotion.promoted,
+    promotion_reason: promotion.reason,
+    snapshot_verification: promotion.snapshotVerification,
+    garbage_collected_profiles: garbageCollectedProfiles,
+    ...(maintenanceError ? { maintenance_error: maintenanceError } : {}),
+  };
 }
 
-async function stopManagedBrowserProfileExclusive(
+async function checkpointManagedBrowserProfileExclusive(
   profileKey: string,
   expectedLease: BrowserLease,
-  reason: ManagedBrowserStopReason,
   expectedLastUsedAt?: string,
-) {
+): Promise<
+  | { result: { stopped: boolean; reason: string } }
+  | { probes: LiveAuthProbe[]; claims: AuthClaimInput[]; probeConfigStatus: string }
+> {
   const manager = await profileManager();
   const profile = await manager.getManagedProfile(profileKey);
-  if (profile.state === "idle" && !profile.port && !profile.pid) return { stopped: true, reason: "already_stopped" };
+  if (profile.state === "idle" && !profile.port && !profile.pid) {
+    return { result: { stopped: true, reason: "already_stopped" } };
+  }
   if (!profile.port || !profile.pid || !profile.instanceId) {
     throw new BrowserProfileError("BROWSER_PROFILE_STATE_INVALID", "The running browser lease is incomplete.");
   }
@@ -786,9 +852,8 @@ async function stopManagedBrowserProfileExclusive(
   const probes = probeConfig.probes;
   if (profile.state === "running") {
     const started = await manager.beginCheckpoint(profileKey, lease, expectedLastUsedAt);
-    if (!started) return { stopped: false, reason: "recent_activity" };
-  }
-  else if (profile.state === "checkpointing") {
+    if (!started) return { result: { stopped: false, reason: "recent_activity" } };
+  } else if (profile.state === "checkpointing") {
     await manager.assertCheckpointLease(profileKey, lease);
   } else {
     throw new BrowserProfileError("BROWSER_PROFILE_BUSY", "Browser profile is not available for checkpointing.");
@@ -803,25 +868,7 @@ async function stopManagedBrowserProfileExclusive(
   await closeBrowserProcess(lease.port, lease.pid);
   await clearActiveTargetId(profileKey);
   await manager.finishCheckpoint(profileKey, lease, claims);
-  const chrome = resolveChromeExecutable();
-  const promotion = chrome.executable_path
-    ? await manager.promoteIfDominant(
-      profileKey,
-      (userDataDir) => validatePromotionSnapshot(chrome.executable_path!, userDataDir, probes, claims),
-    )
-    : { promoted: false, reason: "snapshot_validation_unavailable" };
-  const gc = await manager.collectGarbage();
-  return {
-    stopped: true,
-    reason,
-    profile_retained: true,
-    auth_probes_checked: probes.length,
-    auth_probe_config_status: probeConfig.status,
-    golden_promoted: promotion.promoted,
-    promotion_reason: promotion.reason,
-    snapshot_verification: promotion.snapshotVerification,
-    garbage_collected_profiles: gc.deletedProfileKeys.length,
-  };
+  return { probes, claims, probeConfigStatus: probeConfig.status };
 }
 
 export async function createBrowserLifecycleService(): Promise<BrowserLifecycleService> {

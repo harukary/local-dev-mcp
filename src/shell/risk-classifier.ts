@@ -27,7 +27,6 @@ const FORBIDDEN_PATTERNS: RiskRule[] = [
   { pattern: /\|\s*sh\b/, level: "forbidden", reason: "pipe to sh bypasses classifier" },
   { pattern: /\b(?:bash|sh|zsh)\s+-c\b/, level: "forbidden", reason: "nested shell command bypasses classifier" },
   { pattern: /\bdeclare\s+-[a-z]/i, level: "forbidden", reason: "declare variable injection" },
-  { pattern: /\balias\b/, level: "forbidden", reason: "alias can override commands" },
 ];
 
 const CATASTROPHIC_PATTERNS: RiskRule[] = [
@@ -146,6 +145,10 @@ export function classifyRisk(command: string, deniedPaths?: string[]): { level: 
     if (rule.pattern.test(trimmed)) {
       return { level: "forbidden", reasons: [rule.reason] };
     }
+  }
+
+  if (/(?:^|[;&|]\s*)alias(?:\s|$)/.test(shellStructure)) {
+    return { level: "forbidden", reasons: ["alias can override commands"] };
   }
 
   for (const rule of DESTRUCTIVE_PATTERNS) {

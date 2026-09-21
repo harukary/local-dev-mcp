@@ -313,6 +313,7 @@ export async function handleShellRun(
     exitCode: result.exitCode,
     durationMs: result.durationMs,
     redactions: result.redactions,
+    ...(result.timedOut ? { error: `Command timed out after ${effectiveTimeoutSeconds} seconds.` } : {}),
   };
   await ctx.auditLogger.log(entry);
 
@@ -328,18 +329,26 @@ export async function handleShellRun(
             credential_scope: result.credentialScope,
             risk_level: result.riskLevel,
             exit_code: result.exitCode,
+            timed_out: result.timedOut,
             duration_ms: result.durationMs,
             stdout: result.stdout,
             stderr: result.stderr,
             stdout_truncated: result.stdoutTruncated,
             stderr_truncated: result.stderrTruncated,
             redactions: result.redactions,
+            ...(result.timedOut ? {
+              error: {
+                code: "COMMAND_TIMEOUT",
+                message: `Command timed out after ${effectiveTimeoutSeconds} seconds. Re-run with async=true and poll shell.status instead of retrying synchronously.`,
+              },
+            } : {}),
           },
           null,
           2
         ),
       },
     ],
+    ...(result.timedOut ? { isError: true } : {}),
   };
 }
 

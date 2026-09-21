@@ -215,6 +215,56 @@ describe("handleShellRun", () => {
     expect(shellRunner.run).not.toHaveBeenCalled();
   });
 
+  it("returns a structured timeout error that directs callers to async mode", async () => {
+    const contextStore = new ChatContextStore();
+    contextStore.setCurrentProject("chat-a", "alpha");
+    const project = {
+      projectId: "alpha",
+      displayName: "Alpha",
+      hostRoot: process.cwd(),
+      sandboxRoot: process.cwd(),
+      sandboxType: "host",
+      defaultShell: "/bin/bash",
+      defaultTimeoutSeconds: 30,
+      maxTimeoutSeconds: 300,
+      networkPolicy: "ask",
+      writePolicy: "allow",
+      approvalMode: "never",
+      deniedPaths: [],
+      redactionProfile: "default",
+    };
+    const shellRunner = {
+      run: vi.fn().mockResolvedValue({
+        projectId: "alpha",
+        cwd: process.cwd(),
+        command: "sleep 60",
+        riskLevel: "read_only",
+        exitCode: null,
+        timedOut: true,
+        durationMs: 30_000,
+        stdout: "",
+        stderr: "",
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        redactions: [],
+      }),
+    };
+    const ctx = {
+      registry: { has: () => true, get: () => project, getAll: () => [project] },
+      contextStore,
+      shellRunner,
+      auditLogger: { log: vi.fn() },
+    } as unknown as AppContext;
+
+    const result = await handleShellRun(ctx, "chat-a", { command: "sleep 60", timeout_seconds: 30 });
+    const body = JSON.parse(result.content[0].text);
+    expect(result.isError).toBe(true);
+    expect(body.timed_out).toBe(true);
+    expect(body.error.code).toBe("COMMAND_TIMEOUT");
+    expect(body.error.message).toContain("async=true");
+    expect(ctx.auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({ error: "Command timed out after 30 seconds." }));
+  });
+
   it("also rejects a project default timeout above the synchronous safety limit", async () => {
     const contextStore = new ChatContextStore();
     contextStore.setCurrentProject("chat-a", "alpha");

@@ -54,6 +54,7 @@ export class ShellRunner {
       credentialScope: input.credentialScope,
       riskLevel: risk.level,
       exitCode: execResult.exitCode,
+      timedOut: execResult.timedOut,
       durationMs: execResult.durationMs,
       stdout: redactedStdout.text,
       stderr: redactedStderr.text,

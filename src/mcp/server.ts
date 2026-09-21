@@ -603,7 +603,7 @@ export function createMcpServer(ctx: AppContext): Server {
       const explicitScope = invalid ? undefined : resolveExplicitProjectScope(ctx, name, args);
       const scopeRequired = !invalid && statelessScheduledTask && supportsExplicitProjectScope(name) && explicitScope?.ok && !explicitScope.projectId;
       const executeTool = async () => name.startsWith("browser.")
-        ? await runBrowserToolOperation(chatContextId, invokeTool)
+        ? await runBrowserToolOperation(chatContextId, name, invokeTool)
         : name.startsWith("mobile.")
           ? await runMobileToolOperation(ctx, chatContextId, name, args, invokeTool)
           : await invokeTool();

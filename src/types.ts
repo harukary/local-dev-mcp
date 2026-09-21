@@ -64,6 +64,7 @@ export interface ShellRunResult {
   credentialScope?: CredentialScope;
   riskLevel: RiskLevel;
   exitCode: number | null;
+  timedOut: boolean;
   durationMs: number;
   stdout: string;
   stderr: string;
