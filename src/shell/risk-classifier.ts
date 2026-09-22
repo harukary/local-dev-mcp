@@ -4,6 +4,7 @@ interface RiskRule {
   pattern: RegExp;
   level: RiskLevel;
   reason: string;
+  scan?: "shell" | "raw";
 }
 
 const FORBIDDEN_PATTERNS: RiskRule[] = [
@@ -12,13 +13,13 @@ const FORBIDDEN_PATTERNS: RiskRule[] = [
   { pattern: /printenv/, level: "forbidden", reason: "printenv exposes all environment variables" },
   { pattern: /^env\s*$/, level: "forbidden", reason: "env exposes all environment variables" },
   { pattern: /^env\s*\|/, level: "forbidden", reason: "env exposes all environment variables" },
-  { pattern: /cat\s+(~\/)?\.ssh\//, level: "forbidden", reason: "reads SSH private key" },
-  { pattern: /cat\s+\.env/, level: "forbidden", reason: "reads .env file" },
-  { pattern: /cat\s+(~\/)?\.env/, level: "forbidden", reason: "reads .env file" },
-  { pattern: /\b(head|less|more|tail|sed|awk)\s+.*\.env/, level: "forbidden", reason: "reads .env file via pager/stream" },
-  { pattern: /\b(head|less|more|tail)\s+.*\.ssh\//, level: "forbidden", reason: "reads SSH key via pager/stream" },
-  { pattern: /\bcat\b.*\b\.ssh\/(id_|known_hosts|authorized_keys|config)/, level: "forbidden", reason: "reads SSH files" },
-  { pattern: /curl.*-d\s+@\.env/, level: "forbidden", reason: "exfiltrates .env via curl" },
+  { pattern: /cat\s+(~\/)?\.ssh\//, level: "forbidden", reason: "reads SSH private key", scan: "raw" },
+  { pattern: /cat\s+\.env/, level: "forbidden", reason: "reads .env file", scan: "raw" },
+  { pattern: /cat\s+(~\/)?\.env/, level: "forbidden", reason: "reads .env file", scan: "raw" },
+  { pattern: /\b(head|less|more|tail|sed|awk)\s+.*\.env/, level: "forbidden", reason: "reads .env file via pager/stream", scan: "raw" },
+  { pattern: /\b(head|less|more|tail)\s+.*\.ssh\//, level: "forbidden", reason: "reads SSH key via pager/stream", scan: "raw" },
+  { pattern: /\bcat\b.*\b\.ssh\/(id_|known_hosts|authorized_keys|config)/, level: "forbidden", reason: "reads SSH files", scan: "raw" },
+  { pattern: /curl.*-d\s+@\.env/, level: "forbidden", reason: "exfiltrates .env via curl", scan: "raw" },
   { pattern: /\bchmod\s+-R\s+777\s+\//, level: "forbidden", reason: "makes entire filesystem world-writable" },
   { pattern: /\brm\s+-rf\s+\/\s*$/, level: "forbidden", reason: "deletes entire filesystem" },
   { pattern: /\beval\b/, level: "forbidden", reason: "eval allows arbitrary indirect execution" },
@@ -73,12 +74,13 @@ const WRITE_PATTERNS: RiskRule[] = [
   { pattern: /\bpython(?:\d+(?:\.\d+)*)?\b/, level: "workspace_write", reason: "arbitrary Python script execution" },
   { pattern: /\bnode\b/, level: "workspace_write", reason: "arbitrary Node.js script execution" },
   { pattern: /\btsx\b/, level: "workspace_write", reason: "arbitrary TypeScript execution" },
+  { pattern: /\bsqlite3\b(?:[^"\n]*"\s*|[^'"\n]*'\s*)(?:BEGIN\s*;\s*)?(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX)\b/i, level: "workspace_write", reason: "SQLite mutation", scan: "raw" },
   { pattern: /\bmv\b/, level: "workspace_write", reason: "move/rename files" },
   { pattern: /\bcp\b/, level: "workspace_write", reason: "copy files" },
   { pattern: /\bmkdir\b/, level: "workspace_write", reason: "create directories" },
   { pattern: /\btouch\b/, level: "workspace_write", reason: "create files" },
-  { pattern: /(^|[\s;&|])\d*>>\s*(?!&)\S+/, level: "workspace_write", reason: "shell append redirect" },
-  { pattern: /(^|[\s;&|])\d*>\s*(?![>&])\S+/, level: "workspace_write", reason: "shell output redirect" },
+  { pattern: /(^|[\s;&|])\d*>>(?![ \t]*\/dev\/null(?=$|[\s;&|]))[ \t]*(?!&)\S+/, level: "workspace_write", reason: "shell append redirect" },
+  { pattern: /(^|[\s;&|])\d*>(?![>&])(?![ \t]*\/dev\/null(?=$|[\s;&|]))[ \t]*\S+/, level: "workspace_write", reason: "shell output redirect" },
 ];
 
 const COMPUTE_PATTERNS: RiskRule[] = [
@@ -142,7 +144,8 @@ export function classifyRisk(command: string, deniedPaths?: string[]): { level: 
   }
 
   for (const rule of FORBIDDEN_PATTERNS) {
-    if (rule.pattern.test(trimmed)) {
+    const target = rule.scan === "raw" ? trimmed : shellStructure;
+    if (rule.pattern.test(target)) {
       return { level: "forbidden", reasons: [rule.reason] };
     }
   }
@@ -164,7 +167,8 @@ export function classifyRisk(command: string, deniedPaths?: string[]): { level: 
   }
 
   for (const rule of WRITE_PATTERNS) {
-    if (rule.pattern.test(shellStructure)) {
+    const target = rule.scan === "raw" ? trimmed : shellStructure;
+    if (rule.pattern.test(target)) {
       return { level: "workspace_write", reasons: [rule.reason] };
     }
   }

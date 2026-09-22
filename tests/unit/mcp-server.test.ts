@@ -152,7 +152,7 @@ describe("tool schema snapshot", () => {
     const artifactReceive = snapshot.tools.find((tool) => tool.name === "artifact.receive");
     const mobileScreenshot = snapshot.tools.find((tool) => tool.name === "mobile.screenshot");
 
-    expect(snapshot.schema_version).toBe("2026-09-22.1");
+    expect(snapshot.schema_version).toBe("2026-09-23.1");
     expect(names).toContain("tool.schema");
     expect(names).toContain("image.read");
     expect(names).toContain("artifact.link");

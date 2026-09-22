@@ -2,6 +2,7 @@ import { BrowserProfileManager, type BrowserLease, type ChatProfile } from "./pr
 
 export const DEFAULT_BROWSER_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 export const DEFAULT_BROWSER_SWEEP_INTERVAL_MS = 60 * 1000;
+const DEFAULT_BROWSER_FAILURE_REPORT_INTERVAL_MS = 15 * 60 * 1000;
 const BROWSER_START_GRACE_MS = 30 * 1000;
 
 export type BrowserStopReason = "idle_timeout" | "startup_reconcile" | "server_shutdown";
@@ -33,10 +34,17 @@ type BrowserLifecycleOptions = {
   onError?: (error: unknown) => void;
 };
 
+export type BrowserLifecycleFailure = {
+  profileKey: string;
+  reason: BrowserStopReason;
+  message: string;
+};
+
 export type BrowserLifecycleSweepResult = {
   recoveredProfileKeys: string[];
   stoppedProfileKeys: string[];
   failedProfileKeys: string[];
+  failures: BrowserLifecycleFailure[];
 };
 
 export class BrowserLifecycleService {
@@ -52,6 +60,8 @@ export class BrowserLifecycleService {
   private readonly onError: (error: unknown) => void;
   private timer?: TimerHandle;
   private activeOperation: Promise<unknown> = Promise.resolve();
+  private lastFailureSignature?: string;
+  private lastFailureReportedAtMs = Number.NEGATIVE_INFINITY;
 
   constructor(options: BrowserLifecycleOptions) {
     this.manager = options.manager;
@@ -68,12 +78,11 @@ export class BrowserLifecycleService {
 
   async start(): Promise<BrowserLifecycleSweepResult> {
     const result = await this.runExclusive(() => this.sweepInternal(true));
+    this.reportFailures(result);
     if (!this.timer) {
       this.timer = this.setIntervalFn!(() => {
         void this.sweep().then((result) => {
-          if (result.failedProfileKeys.length > 0) {
-            this.onError(new Error(`Browser lifecycle sweep failed for ${result.failedProfileKeys.length} profile(s).`));
-          }
+          this.reportFailures(result);
         }).catch(this.onError);
       }, this.sweepIntervalMs);
       this.timer.unref?.();
@@ -153,6 +162,7 @@ export class BrowserLifecycleService {
   ): Promise<BrowserLifecycleSweepResult> {
     const stoppedProfileKeys: string[] = [];
     const failedProfileKeys: string[] = [];
+    const failures: BrowserLifecycleFailure[] = [];
     const results = await Promise.allSettled(candidates.map(async ({ profile, reason }) => {
       const result = await this.stopManagedBrowserProfile(
         profile.profileKey,
@@ -169,9 +179,35 @@ export class BrowserLifecycleService {
         if (result.value.stopped) stoppedProfileKeys.push(profileKey);
       } else {
         failedProfileKeys.push(profileKey);
+        failures.push({
+          profileKey,
+          reason: candidates[index]!.reason,
+          message: errorMessage(result.reason),
+        });
       }
     }
-    return { recoveredProfileKeys, stoppedProfileKeys, failedProfileKeys };
+    return { recoveredProfileKeys, stoppedProfileKeys, failedProfileKeys, failures };
+  }
+
+  private reportFailures(result: BrowserLifecycleSweepResult): void {
+    if (result.failures.length === 0) {
+      this.lastFailureSignature = undefined;
+      this.lastFailureReportedAtMs = Number.NEGATIVE_INFINITY;
+      return;
+    }
+    const signature = result.failures
+      .map((failure) => `${failure.profileKey}:${failure.reason}:${failure.message}`)
+      .sort()
+      .join("|");
+    const nowMs = this.now().getTime();
+    if (signature === this.lastFailureSignature
+      && nowMs - this.lastFailureReportedAtMs < DEFAULT_BROWSER_FAILURE_REPORT_INTERVAL_MS) return;
+    this.lastFailureSignature = signature;
+    this.lastFailureReportedAtMs = nowMs;
+    const details = result.failures
+      .map((failure) => `${failure.profileKey} (${failure.reason}): ${failure.message}`)
+      .join("; ");
+    this.onError(new Error(`Browser lifecycle sweep failed for ${result.failures.length} profile(s): ${details}`));
   }
 
   private async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -216,6 +252,11 @@ function leaseFromProfile(profile: LeasedChatProfile): BrowserLease {
 function requirePositiveDuration(value: number, name: string): number {
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive duration`);
   return value;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return String(error);
 }
 
 function processIsAlive(pid: number): boolean {

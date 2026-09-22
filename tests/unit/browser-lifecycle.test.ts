@@ -178,6 +178,49 @@ describe("BrowserLifecycleService", () => {
     );
   });
 
+  it("reports lifecycle failure details and throttles identical periodic errors", async () => {
+    let now = new Date("2026-08-30T00:00:00.000Z");
+    const manager = await managerAt(() => now);
+    const profile = await runningProfile(manager, "chatgpt-session:failing-stop", {
+      instanceId: "server-a",
+      pid: process.pid,
+      port: 18306,
+    });
+    let tick: (() => void) | undefined;
+    const timer = { unref: vi.fn() } as unknown as ReturnType<typeof setInterval>;
+    const stop = vi.fn().mockRejectedValue(new Error("checkpoint exploded"));
+    const onError = vi.fn();
+    const lifecycle = new BrowserLifecycleService({
+      manager,
+      idleTimeoutMs: 30 * 60 * 1000,
+      now: () => now,
+      isPidAlive: () => true,
+      isCdpReachable: async () => true,
+      stopManagedBrowserProfile: stop,
+      onError,
+      setIntervalFn: (callback) => { tick = callback; return timer; },
+      clearIntervalFn: vi.fn(),
+    });
+
+    await lifecycle.start();
+    expect(onError).not.toHaveBeenCalled();
+    now = new Date("2026-08-30T00:30:00.000Z");
+    tick!();
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(onError.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      message: expect.stringContaining(`${profile.profileKey} (idle_timeout): Error: checkpoint exploded`),
+    }));
+
+    tick!();
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(2));
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    now = new Date("2026-08-30T00:45:00.000Z");
+    tick!();
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(2));
+    lifecycle.stopTimer();
+  });
+
   it("uses a strict configurable idle timeout without a disable fallback", () => {
     expect(browserIdleTimeoutMsFromEnv({})).toBe(30 * 60 * 1000);
     expect(browserIdleTimeoutMsFromEnv({ LOCAL_DEV_MCP_BROWSER_IDLE_TIMEOUT_MINUTES: "45" })).toBe(45 * 60 * 1000);

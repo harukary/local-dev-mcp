@@ -35,6 +35,13 @@ describe("RiskClassifier", () => {
     expect(classifyRisk("cat source > target").level).toBe("workspace_write");
     expect(classifyRisk("echo value >> target").level).toBe("workspace_write");
     expect(classifyRisk("echo error 2>errors.log").level).toBe("workspace_write");
+    expect(classifyRisk("echo value >/dev/null").level).toBe("read_only");
+    expect(classifyRisk("cat missing 2>/dev/null | head -n 1").level).toBe("read_only");
+    expect(classifyRisk("echo value >> /dev/null").level).toBe("read_only");
+    expect(classifyRisk("echo value >/dev/null.out").level).toBe("workspace_write");
+    expect(classifyRisk("sqlite3 data.db \"UPDATE tasks SET status='done' WHERE id=1;\"").level).toBe("workspace_write");
+    expect(classifyRisk("sqlite3 data.db \"BEGIN; INSERT INTO tasks(title) VALUES('x'); COMMIT;\"").level).toBe("workspace_write");
+    expect(classifyRisk("sqlite3 data.db \"SELECT * FROM tasks WHERE title='update notes';\"").level).toBe("read_only");
   });
 
   it("classifies network commands", () => {
@@ -57,8 +64,11 @@ describe("RiskClassifier", () => {
     expect(classifyRisk("echo 'pkill node'").level).toBe("read_only");
     expect(classifyRisk("echo 'curl https://example.com'").level).toBe("read_only");
     expect(classifyRisk("rg -n 'alias' src").level).toBe("read_only");
-    expect(classifyRisk("sqlite3 data.db \"UPDATE tasks SET evidence='legacy alias retained'\"").level).toBe("read_only");
+    expect(classifyRisk("sqlite3 data.db \"SELECT 'pkill'\"").level).toBe("read_only");
     expect(classifyRisk("python3 -c 'print(\"pkill\")'").level).toBe("workspace_write");
+    expect(classifyRisk("printf 'eval summary\\n'").level).toBe("read_only");
+    expect(classifyRisk("rg -n 'eval|workflow' src").level).toBe("read_only");
+    expect(classifyRisk("node -e 'console.log(/eval|workflow/.test(\"eval\"))'").level).toBe("workspace_write");
   });
 
   it("classifies forbidden commands", () => {
@@ -73,6 +83,7 @@ describe("RiskClassifier", () => {
     expect(classifyRisk("bash -c 'echo nested'").level).toBe("forbidden");
     expect(classifyRisk("alias ll='ls -la'").level).toBe("forbidden");
     expect(classifyRisk("true; alias gs='git status'").level).toBe("forbidden");
+    expect(classifyRisk("eval echo '$HOME'").level).toBe("forbidden");
   });
 
   it("returns reasons for classification", () => {
