@@ -772,6 +772,10 @@ export async function handleBrowserStop(ctx: AppContext, chatContextId: string, 
 
 type ManagedBrowserStopReason = BrowserStopReason | "explicit_stop";
 
+export function browserStopRunsMaintenance(reason: ManagedBrowserStopReason): boolean {
+  return reason !== "server_shutdown";
+}
+
 export async function stopManagedBrowserProfile(
   profileKey: string,
   expectedLease: BrowserLease,
@@ -784,6 +788,22 @@ export async function stopManagedBrowserProfile(
     expectedLastUsedAt,
   ), true);
   if ("result" in checkpoint) return checkpoint.result;
+
+  // A service restart must not wait on promotion/GC maintenance. The chat-owned
+  // profile is already checkpointed and retained, so defer golden maintenance
+  // until a later explicit/idle stop rather than holding launchd restart open.
+  if (!browserStopRunsMaintenance(reason)) {
+    return {
+      stopped: true,
+      reason,
+      profile_retained: true,
+      auth_probes_checked: checkpoint.probes.length,
+      auth_probe_config_status: checkpoint.probeConfigStatus,
+      golden_promoted: false,
+      promotion_reason: "server_shutdown_maintenance_deferred",
+      garbage_collected_profiles: 0,
+    };
+  }
 
   // The live browser is now stopped and the profile manifest is idle. Snapshot
   // promotion can be expensive (multiple profile copies plus a live auth

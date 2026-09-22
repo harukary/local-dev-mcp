@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { browserSessionIdForContext, browserToolUsesOuterOperationLock, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse } from "../../src/mcp/tools/browser.js";
+import { browserSessionIdForContext, browserStopRunsMaintenance, browserToolUsesOuterOperationLock, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse } from "../../src/mcp/tools/browser.js";
 
 const CHAT_ID = "chatgpt-session:chat-a";
 
@@ -59,6 +59,13 @@ describe("browser tools", () => {
     expect(browserToolUsesOuterOperationLock("browser.stop")).toBe(false);
     expect(browserToolUsesOuterOperationLock("browser.start")).toBe(true);
     expect(browserToolUsesOuterOperationLock("browser.open")).toBe(true);
+  });
+
+  it("defers expensive profile maintenance only during service shutdown", () => {
+    expect(browserStopRunsMaintenance("server_shutdown")).toBe(false);
+    expect(browserStopRunsMaintenance("explicit_stop")).toBe(true);
+    expect(browserStopRunsMaintenance("idle_timeout")).toBe(true);
+    expect(browserStopRunsMaintenance("startup_reconcile")).toBe(true);
   });
 
   it("derives one stable profile per conversation independent of project", () => {
