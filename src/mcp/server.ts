@@ -964,7 +964,8 @@ export async function startHttpServer(configPath: string, port: number): Promise
     const browserOperationsIdle = beginBrowserOperationDrain();
     void (async () => {
       return await withShutdownTimeout((async () => {
-        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+        const httpCloseMode = await closeHttpServerForShutdown(httpServer);
+        if (httpCloseMode === "forced") console.error("[Server] Forced active HTTP connections closed during shutdown.");
         await browserOperationsIdle;
         return await browserLifecycle.drain();
       })(), 55_000);
@@ -977,6 +978,26 @@ export async function startHttpServer(configPath: string, port: number): Promise
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+}
+
+type ShutdownHttpServer = {
+  close(callback: () => void): unknown;
+  closeIdleConnections?: () => void;
+  closeAllConnections?: () => void;
+};
+
+export async function closeHttpServerForShutdown(
+  server: ShutdownHttpServer,
+  graceMs = 2_000,
+): Promise<"closed" | "forced"> {
+  const closed = new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+  server.closeIdleConnections?.();
+  if (await withShutdownTimeout(closed, graceMs) !== "timeout") return "closed";
+  server.closeAllConnections?.();
+  await withShutdownTimeout(closed, Math.min(graceMs, 1_000));
+  return "forced";
 }
 
 async function withShutdownTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T | "timeout"> {

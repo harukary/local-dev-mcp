@@ -183,8 +183,8 @@ export function classifyRisk(command: string, deniedPaths?: string[]): { level: 
 }
 
 export function isCatastrophicCommand(command: string): boolean {
-  const trimmed = command.trim();
-  return CATASTROPHIC_PATTERNS.some((rule) => rule.pattern.test(trimmed));
+  const shellStructure = maskQuotedLiterals(command.trim());
+  return CATASTROPHIC_PATTERNS.some((rule) => rule.pattern.test(shellStructure));
 }
 
 function checkDeniedPaths(command: string, deniedPaths: string[]): string | null {

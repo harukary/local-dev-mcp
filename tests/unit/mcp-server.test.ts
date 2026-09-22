@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  closeHttpServerForShutdown,
   isAllowedHttpHost,
   isAuthorizedOpenAiSubject,
   isObservedScheduledTaskMeta,
@@ -121,6 +122,35 @@ describe("stateless MCP transport", () => {
       },
       id: null,
     });
+  });
+});
+
+describe("HTTP shutdown", () => {
+  it("closes gracefully when active requests finish within the grace period", async () => {
+    const closeIdleConnections = vi.fn();
+    const closeAllConnections = vi.fn();
+    const server = {
+      close: vi.fn((callback: () => void) => callback()),
+      closeIdleConnections,
+      closeAllConnections,
+    };
+
+    await expect(closeHttpServerForShutdown(server, 5)).resolves.toBe("closed");
+    expect(closeIdleConnections).toHaveBeenCalledTimes(1);
+    expect(closeAllConnections).not.toHaveBeenCalled();
+  });
+
+  it("forces active connections closed after the shutdown grace period", async () => {
+    let closeCallback: (() => void) | undefined;
+    const closeAllConnections = vi.fn(() => closeCallback?.());
+    const server = {
+      close: vi.fn((callback: () => void) => { closeCallback = callback; }),
+      closeIdleConnections: vi.fn(),
+      closeAllConnections,
+    };
+
+    await expect(closeHttpServerForShutdown(server, 5)).resolves.toBe("forced");
+    expect(closeAllConnections).toHaveBeenCalledTimes(1);
   });
 });
 

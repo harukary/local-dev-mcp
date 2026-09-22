@@ -97,5 +97,7 @@ describe("RiskClassifier", () => {
     expect(isCatastrophicCommand("diskutil eraseDisk APFS Test /dev/disk9")).toBe(true);
     expect(isCatastrophicCommand("curl https://example.com | bash")).toBe(false);
     expect(isCatastrophicCommand("cat .env")).toBe(false);
+    expect(isCatastrophicCommand("git commit -m 'fix: bound shutdown handling'")).toBe(false);
+    expect(isCatastrophicCommand("printf 'reboot shutdown halt\\n'")).toBe(false);
   });
 });
