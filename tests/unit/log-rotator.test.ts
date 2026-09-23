@@ -41,7 +41,35 @@ describe("rotating log supervisor", () => {
     expect(result.status).toBe(0);
     expect(existsSync(logPath)).toBe(true);
     expect(existsSync(`${logPath}.1`)).toBe(true);
-    expect(readFileSync(logPath, "utf8").length).toBeGreaterThan(0);
-    expect(readFileSync(`${logPath}.1`, "utf8").length).toBeGreaterThan(0);
+    const current = readFileSync(logPath, "utf8");
+    const previous = readFileSync(`${logPath}.1`, "utf8");
+    expect(current.length).toBeGreaterThan(0);
+    expect(previous.length).toBeGreaterThan(0);
+    expect(`${previous}${current}`).toMatch(/\[\d{4}-\d{2}-\d{2}T[^\]]+Z\] \[stderr\] x+/);
+  });
+
+  it("timestamps complete stdout and stderr lines and flushes partial output", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-logs-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "service.log");
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/run-with-rotating-log.mjs"),
+        logPath,
+        "--",
+        process.execPath,
+        "-e",
+        "process.stdout.write('out\\npartial'); process.stderr.write('err\\n')",
+      ],
+      { encoding: "utf8" }
+    );
+
+    expect(result.status).toBe(0);
+    const log = readFileSync(logPath, "utf8");
+    expect(log).toMatch(/\[[^\]]+Z\] \[stdout\] out\n/);
+    expect(log).toMatch(/\[[^\]]+Z\] \[stdout\] partial\n/);
+    expect(log).toMatch(/\[[^\]]+Z\] \[stderr\] err\n/);
   });
 });

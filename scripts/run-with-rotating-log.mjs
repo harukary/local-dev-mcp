@@ -3,6 +3,7 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 function parsePositiveInteger(value, fallback, minimum) {
   const parsed = Number(value);
@@ -46,7 +47,7 @@ function rotate() {
   currentSize = 0;
 }
 
-function append(chunk, mirror) {
+function appendPersisted(chunk) {
   const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   let offset = 0;
 
@@ -59,8 +60,37 @@ function append(chunk, mirror) {
     currentSize += slice.length;
     offset = end;
   }
+}
 
+const streamStates = {
+  stdout: { decoder: new StringDecoder("utf8"), pending: "" },
+  stderr: { decoder: new StringDecoder("utf8"), pending: "" },
+};
+
+function appendLine(streamName, line) {
+  appendPersisted(`[${new Date().toISOString()}] [${streamName}] ${line}`);
+}
+
+function appendStream(chunk, mirror, streamName) {
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   if (tee) mirror.write(buffer);
+
+  const state = streamStates[streamName];
+  state.pending += state.decoder.write(buffer);
+  let newlineIndex;
+  while ((newlineIndex = state.pending.indexOf("\n")) >= 0) {
+    const line = state.pending.slice(0, newlineIndex + 1);
+    state.pending = state.pending.slice(newlineIndex + 1);
+    appendLine(streamName, line);
+  }
+}
+
+function flushStream(streamName) {
+  const state = streamStates[streamName];
+  state.pending += state.decoder.end();
+  if (!state.pending) return;
+  appendLine(streamName, `${state.pending}\n`);
+  state.pending = "";
 }
 
 const child = spawn(command, args, {
@@ -68,8 +98,8 @@ const child = spawn(command, args, {
   stdio: ["inherit", "pipe", "pipe"],
 });
 
-child.stdout.on("data", (chunk) => append(chunk, process.stdout));
-child.stderr.on("data", (chunk) => append(chunk, process.stderr));
+child.stdout.on("data", (chunk) => appendStream(chunk, process.stdout, "stdout"));
+child.stderr.on("data", (chunk) => appendStream(chunk, process.stderr, "stderr"));
 
 function forwardSignal(signal) {
   if (!child.killed) child.kill(signal);
@@ -85,10 +115,14 @@ function closeLog() {
 
 child.on("error", (error) => {
   spawnFailed = true;
-  append(Buffer.from(`[log-supervisor] failed to start child: ${error.message}\n`), process.stderr);
+  const message = `[log-supervisor] failed to start child: ${error.message}\n`;
+  if (tee) process.stderr.write(message);
+  appendLine("supervisor", message);
 });
 
 child.on("close", (code, signal) => {
+  flushStream("stdout");
+  flushStream("stderr");
   closeLog();
   if (spawnFailed) {
     process.exitCode = 127;

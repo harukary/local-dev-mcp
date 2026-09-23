@@ -22,11 +22,11 @@ const FORBIDDEN_PATTERNS: RiskRule[] = [
   { pattern: /curl.*-d\s+@\.env/, level: "forbidden", reason: "exfiltrates .env via curl", scan: "raw" },
   { pattern: /\bchmod\s+-R\s+777\s+\//, level: "forbidden", reason: "makes entire filesystem world-writable" },
   { pattern: /\brm\s+-rf\s+\/\s*$/, level: "forbidden", reason: "deletes entire filesystem" },
-  { pattern: /\beval\b/, level: "forbidden", reason: "eval allows arbitrary indirect execution" },
   { pattern: /base64\s+-d\s*\|/, level: "forbidden", reason: "base64 decode pipe bypasses classifier" },
   { pattern: /\|\s*bash\b/, level: "forbidden", reason: "pipe to bash bypasses classifier" },
   { pattern: /\|\s*sh\b/, level: "forbidden", reason: "pipe to sh bypasses classifier" },
   { pattern: /\b(?:bash|sh|zsh)\s+-c\b/, level: "forbidden", reason: "nested shell command bypasses classifier" },
+  { pattern: /\b(?:bash|sh|zsh)\s+<<-?\s*/, level: "forbidden", reason: "nested shell heredoc bypasses classifier" },
   { pattern: /\bdeclare\s+-[a-z]/i, level: "forbidden", reason: "declare variable injection" },
 ];
 
@@ -60,10 +60,16 @@ const NETWORK_PATTERNS: RiskRule[] = [
   { pattern: /\bcurl\b/, level: "network_or_dependency", reason: "curl makes network request" },
   { pattern: /\bwget\b/, level: "network_or_dependency", reason: "wget makes network request" },
   { pattern: /\bginit\s+clone\b|\bgit\s+clone\b/, level: "network_or_dependency", reason: "git clone accesses remote repository" },
+  { pattern: /\bginit\s+push\b|\bgit\s+push\b/, level: "network_or_dependency", reason: "git push accesses remote repository" },
+  { pattern: /\bginit\s+fetch\b|\bgit\s+fetch\b/, level: "network_or_dependency", reason: "git fetch accesses remote repository" },
+  { pattern: /\bginit\s+pull\b|\bgit\s+pull\b/, level: "network_or_dependency", reason: "git pull accesses remote repository" },
+  { pattern: /\bginit\s+ls-remote\b|\bgit\s+ls-remote\b/, level: "network_or_dependency", reason: "git ls-remote accesses remote repository" },
 ];
 
 const WRITE_PATTERNS: RiskRule[] = [
   { pattern: /\bsed\s+-i\b/, level: "workspace_write", reason: "sed in-place edit" },
+  { pattern: /\bchmod\b/, level: "workspace_write", reason: "chmod modifies file permissions" },
+  { pattern: /\btee\b/, level: "workspace_write", reason: "tee writes file output" },
   { pattern: /\bginit\s+apply\b|\bgit\s+apply\b/, level: "workspace_write", reason: "git apply modifies files" },
   { pattern: /\bginit\s+add\b|\bgit\s+add\b/, level: "workspace_write", reason: "git add stages files" },
   { pattern: /\bginit\s+commit\b|\bgit\s+commit\b/, level: "workspace_write", reason: "git commit creates snapshot" },
@@ -102,6 +108,36 @@ const COMPUTE_PATTERNS: RiskRule[] = [
   { pattern: /\blint\b/, level: "local_compute", reason: "linter" },
 ];
 
+function maskHereDocBodies(command: string): string {
+  const lines = command.split("\n");
+  const result: string[] = [];
+  let delimiter: string | null = null;
+  let stripTabs = false;
+
+  for (const line of lines) {
+    if (delimiter) {
+      const candidate = stripTabs ? line.replace(/^\t+/, "") : line;
+      if (candidate.trimEnd() === delimiter) {
+        result.push(line);
+        delimiter = null;
+        stripTabs = false;
+      } else {
+        result.push(" ".repeat(line.length));
+      }
+      continue;
+    }
+
+    result.push(line);
+    const match = line.match(/<<(-)?\s*(['"]?)([A-Za-z0-9_]+)\2/);
+    if (match) {
+      stripTabs = Boolean(match[1]);
+      delimiter = match[3];
+    }
+  }
+
+  return result.join("\n");
+}
+
 function maskQuotedLiterals(command: string): string {
   let quote: "'" | '"' | null = null;
   let escaped = false;
@@ -134,7 +170,7 @@ function maskQuotedLiterals(command: string): string {
 
 export function classifyRisk(command: string, deniedPaths?: string[]): { level: RiskLevel; reasons: string[] } {
   const trimmed = command.trim();
-  const shellStructure = maskQuotedLiterals(trimmed);
+  const shellStructure = maskQuotedLiterals(maskHereDocBodies(trimmed));
 
   if (deniedPaths?.length) {
     const denied = checkDeniedPaths(trimmed, deniedPaths);
@@ -150,6 +186,10 @@ export function classifyRisk(command: string, deniedPaths?: string[]): { level: 
     }
   }
 
+  if (containsShellCommandInvocation(shellStructure, "eval")) {
+    return { level: "forbidden", reasons: ["eval allows arbitrary indirect execution"] };
+  }
+
   if (/(?:^|[;&|]\s*)alias(?:\s|$)/.test(shellStructure)) {
     return { level: "forbidden", reasons: ["alias can override commands"] };
   }
@@ -160,16 +200,19 @@ export function classifyRisk(command: string, deniedPaths?: string[]): { level: 
     }
   }
 
-  for (const rule of NETWORK_PATTERNS) {
-    if (rule.pattern.test(shellStructure)) {
-      return { level: "network_or_dependency", reasons: [rule.reason] };
-    }
-  }
-
+  // Prefer an observable workspace mutation over network access when a compound
+  // command does both. This preserves write-policy enforcement for commands such
+  // as `curl ... > file` or `git add ... && git push`.
   for (const rule of WRITE_PATTERNS) {
     const target = rule.scan === "raw" ? trimmed : shellStructure;
     if (rule.pattern.test(target)) {
       return { level: "workspace_write", reasons: [rule.reason] };
+    }
+  }
+
+  for (const rule of NETWORK_PATTERNS) {
+    if (rule.pattern.test(shellStructure)) {
+      return { level: "network_or_dependency", reasons: [rule.reason] };
     }
   }
 
@@ -190,12 +233,8 @@ export function isCatastrophicCommand(command: string): boolean {
 function checkDeniedPaths(command: string, deniedPaths: string[]): string | null {
   const pathCandidates = extractPathCandidates(command);
   for (const pattern of deniedPaths) {
-    const regex = patternToRegex(pattern);
-    if (regex.test(command)) {
-      return `command accesses denied path: ${pattern}`;
-    }
     for (const candidate of pathCandidates) {
-      if (matchesDeniedPath(regex, candidate)) {
+      if (matchesDeniedPath(pattern, candidate)) {
         return `command accesses denied path: ${pattern}`;
       }
     }
@@ -238,13 +277,17 @@ function looksLikePathReference(value: string): boolean {
   );
 }
 
-function matchesDeniedPath(regex: RegExp, candidate: string): boolean {
-  for (const suffix of pathSuffixes(candidate)) {
-    if (regex.test(suffix)) {
-      return true;
-    }
+function matchesDeniedPath(pattern: string, candidate: string): boolean {
+  const normalizedPattern = pattern.replace(/\\/g, "/").replace(/^~\//, "").replace(/^\/+/, "");
+  const normalizedCandidate = candidate.replace(/\\/g, "/").replace(/^~\//, "").replace(/^\/+/, "");
+
+  if (!normalizedPattern.includes("/")) {
+    const segmentRegex = globPatternToRegex(normalizedPattern, false);
+    return normalizedCandidate.split("/").filter(Boolean).some((segment) => segmentRegex.test(segment));
   }
-  return false;
+
+  const pathRegex = globPatternToRegex(normalizedPattern, true);
+  return pathSuffixes(normalizedCandidate).some((suffix) => pathRegex.test(suffix));
 }
 
 function pathSuffixes(candidate: string): string[] {
@@ -259,13 +302,37 @@ function pathSuffixes(candidate: string): string[] {
   return Array.from(suffixes).filter(Boolean);
 }
 
-function patternToRegex(pattern: string): RegExp {
+function globPatternToRegex(pattern: string, allowSlash: boolean): RegExp {
   const escaped = pattern
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
     .replace(/\*\*/g, "{{GLOBSTAR}}")
-    .replace(/\*/g, "[^/]*")
-    .replace(/\?/g, "[^/]")
+    .replace(/\*/g, allowSlash ? "[^/]*" : ".*")
+    .replace(/\?/g, allowSlash ? "[^/]" : ".")
     .replace(/\{\{GLOBSTAR\}\}/g, ".*");
 
-  return new RegExp(`(?<![\\w/])${escaped}(?![\\w/])`, "i");
+  return new RegExp(`^${escaped}$`, "i");
+}
+
+function containsShellCommandInvocation(shellStructure: string, commandName: string): boolean {
+  const escapedCommand = commandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const commandPattern = new RegExp(`^${escapedCommand}(?:\\s|$)`);
+  const substitutionPattern = new RegExp("(?:\\$\\(|`)\\s*(?:command\\s+|builtin\\s+)?" + escapedCommand + "(?:\\s|$)");
+
+  if (substitutionPattern.test(shellStructure)) {
+    return true;
+  }
+
+  for (const rawSegment of shellStructure.split(/&&|\|\||[;\n|&]/)) {
+    let segment = rawSegment.trim();
+    if (!segment) continue;
+
+    segment = segment.replace(/^(?:(?:if|elif|while|until|then|do|else)\s+|!\s*)+/, "");
+    segment = segment.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*/, "");
+    segment = segment.replace(/^(?:command|builtin)\s+/, "");
+    if (commandPattern.test(segment)) {
+      return true;
+    }
+  }
+
+  return false;
 }
