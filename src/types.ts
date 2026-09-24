@@ -89,7 +89,9 @@ export interface AuditLogEntry {
   purpose?: string;
   credentialScope?: CredentialScope;
   riskLevel?: RiskLevel;
+  riskReasons?: string[];
   enforcement?: "audit_only" | "blocked" | "approval_required";
+  enforcementReason?: string;
   openAiSubjectPresent?: boolean;
   openAiSubjectHash?: string;
   openAiSubjectAuthorized?: boolean;

@@ -118,7 +118,11 @@ export async function handleShellRun(
       projectId: project.projectId,
       command: args.command,
       riskLevel: risk.level,
+      riskReasons: risk.reasons,
       enforcement: "blocked",
+      enforcementReason: risk.level === "forbidden"
+        ? "risk classifier forbids this command"
+        : `catastrophic command blocked by approval mode: ${project.approvalMode}`,
       error: `Forbidden: ${risk.reasons.join(", ")}`,
     });
 
@@ -167,7 +171,11 @@ export async function handleShellRun(
       purpose: args.purpose,
       credentialScope: args.credential_scope,
       riskLevel: risk.level,
+      riskReasons: approvalReasons,
       enforcement: "approval_required",
+      enforcementReason: approval.request!.approvalPolicy === "deny"
+        ? "project policy requires approval for a denied operation"
+        : "project policy requires explicit approval",
       approvalRequestId: approval.request!.id,
       approvalPolicy: approval.request!.approvalPolicy,
       approval: {

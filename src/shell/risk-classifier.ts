@@ -36,7 +36,6 @@ const CATASTROPHIC_PATTERNS: RiskRule[] = [
   { pattern: /\bmkfs(?:\.\w+)?\b/, level: "forbidden", reason: "formats a filesystem" },
   { pattern: /\bdd\b.*\bof=\/dev\//, level: "forbidden", reason: "writes raw data to a device" },
   { pattern: /\bdiskutil\s+(erase|partition|apfs\s+delete|apfs\s+erase)/i, level: "forbidden", reason: "destructive disk operation" },
-  { pattern: /\b(shutdown|reboot|halt)\b/, level: "forbidden", reason: "system power control" },
 ];
 
 const DESTRUCTIVE_PATTERNS: RiskRule[] = [
@@ -46,6 +45,7 @@ const DESTRUCTIVE_PATTERNS: RiskRule[] = [
   { pattern: /\bpkill\b/, level: "destructive_or_process_control", reason: "process kill by name" },
   { pattern: /\bdocker\s+rm\b/, level: "destructive_or_process_control", reason: "docker container removal" },
   { pattern: /\btmux\s+send-keys\b/, level: "destructive_or_process_control", reason: "tmux send-keys bypasses sandbox" },
+  { pattern: /\bxcrun\s+simctl\s+(?:shutdown|erase|delete|terminate)\b/, level: "destructive_or_process_control", reason: "simulator process or data control" },
 ];
 
 const NETWORK_PATTERNS: RiskRule[] = [
@@ -78,7 +78,7 @@ const WRITE_PATTERNS: RiskRule[] = [
   { pattern: /\bginit\s+reset\b|\bgit\s+reset\b/, level: "workspace_write", reason: "git reset can lose changes" },
   { pattern: /\bnpm\s+run\s+\w*format\w*/, level: "workspace_write", reason: "formatter modifies files" },
   { pattern: /\bpython(?:\d+(?:\.\d+)*)?\b/, level: "workspace_write", reason: "arbitrary Python script execution" },
-  { pattern: /\bnode\b/, level: "workspace_write", reason: "arbitrary Node.js script execution" },
+  { pattern: /\bnode\b(?!\s+--check(?:\s|$))/, level: "workspace_write", reason: "arbitrary Node.js script execution" },
   { pattern: /\btsx\b/, level: "workspace_write", reason: "arbitrary TypeScript execution" },
   { pattern: /\bsqlite3\b(?:[^"\n]*"\s*|[^'"\n]*'\s*)(?:BEGIN\s*;\s*)?(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX)\b/i, level: "workspace_write", reason: "SQLite mutation", scan: "raw" },
   { pattern: /\bmv\b/, level: "workspace_write", reason: "move/rename files" },
@@ -102,6 +102,8 @@ const COMPUTE_PATTERNS: RiskRule[] = [
   { pattern: /\bmake\b/, level: "local_compute", reason: "make" },
   { pattern: /\bdeno\s+test\b/, level: "local_compute", reason: "deno test" },
   { pattern: /\bdeno\s+check\b/, level: "local_compute", reason: "deno check" },
+  { pattern: /\bnode\s+--check(?:\s|$)/, level: "local_compute", reason: "Node.js syntax check" },
+  { pattern: /\bpnpm(?:\s+run)?\s+(?:check|test|build|typecheck|lint)\b/, level: "local_compute", reason: "pnpm validation/build script" },
   { pattern: /\bturbo\s+run\b/, level: "local_compute", reason: "turbo run" },
   { pattern: /\btc\s+--noEmit\b/, level: "local_compute", reason: "tsc typecheck" },
   { pattern: /\btypecheck\b/, level: "local_compute", reason: "typecheck script" },
@@ -226,8 +228,16 @@ export function classifyRisk(command: string, deniedPaths?: string[]): { level: 
 }
 
 export function isCatastrophicCommand(command: string): boolean {
-  const shellStructure = maskQuotedLiterals(command.trim());
-  return CATASTROPHIC_PATTERNS.some((rule) => rule.pattern.test(shellStructure));
+  const shellStructure = maskQuotedLiterals(maskHereDocBodies(command.trim()));
+  if (CATASTROPHIC_PATTERNS.some((rule) => rule.pattern.test(shellStructure))) {
+    return true;
+  }
+
+  if (["shutdown", "reboot", "halt"].some((name) => containsShellCommandInvocation(shellStructure, name))) {
+    return true;
+  }
+
+  return /\bsystemctl\s+(?:reboot|poweroff|halt)\b/.test(shellStructure) || /\blaunchctl\s+reboot\b/.test(shellStructure);
 }
 
 function checkDeniedPaths(command: string, deniedPaths: string[]): string | null {

@@ -22,6 +22,9 @@ describe("RiskClassifier", () => {
     expect(classifyRisk("vitest run").level).toBe("local_compute");
     expect(classifyRisk("make test").level).toBe("local_compute");
     expect(classifyRisk("pnpm run typecheck").level).toBe("local_compute");
+    expect(classifyRisk("pnpm check").level).toBe("local_compute");
+    expect(classifyRisk("node --check public/shipaton-db.js").level).toBe("local_compute");
+    expect(classifyRisk("pnpm check && node --check public/shipaton-db.js").level).toBe("local_compute");
   });
 
   it("classifies workspace write commands", () => {
@@ -66,6 +69,7 @@ describe("RiskClassifier", () => {
     expect(classifyRisk("kill -9 12345").level).toBe("destructive_or_process_control");
     expect(classifyRisk("pkill node").level).toBe("destructive_or_process_control");
     expect(classifyRisk("tmux send-keys -t frontend 'npm run dev' Enter").level).toBe("destructive_or_process_control");
+    expect(classifyRisk("xcrun simctl shutdown 51D12571-23CF-43AE-BCDE-34F04EEE7869").level).toBe("destructive_or_process_control");
   });
 
   it("does not treat quoted command names or eval path fragments as shell structure", () => {
@@ -120,6 +124,10 @@ describe("RiskClassifier", () => {
     expect(isCatastrophicCommand("curl https://example.com | bash")).toBe(false);
     expect(isCatastrophicCommand("cat .env")).toBe(false);
     expect(isCatastrophicCommand("git commit -m 'fix: bound shutdown handling'")).toBe(false);
+    expect(isCatastrophicCommand("git diff -- data/openai-sora-2-shutdown-lifecycle-source-dossier.md")).toBe(false);
+    expect(isCatastrophicCommand("xcrun simctl shutdown 51D12571-23CF-43AE-BCDE-34F04EEE7869")).toBe(false);
+    expect(isCatastrophicCommand("shutdown -h now")).toBe(true);
+    expect(isCatastrophicCommand("systemctl reboot")).toBe(true);
     expect(isCatastrophicCommand("printf 'reboot shutdown halt\\n'")).toBe(false);
   });
 });

@@ -68,6 +68,11 @@ describe("handleShellRun", () => {
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.content[0].text).error.code).toBe("FORBIDDEN_COMMAND");
     expect(shellRunner.run).not.toHaveBeenCalled();
+    expect(ctx.auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+      event: "blocked_command",
+      riskReasons: ["command accesses denied path: .env"],
+      enforcementReason: "risk classifier forbids this command",
+    }));
   });
 
   it("blocks catastrophic commands in catastrophic_only mode", async () => {
@@ -100,11 +105,16 @@ describe("handleShellRun", () => {
       auditLogger: { log: vi.fn() },
     } as unknown as AppContext;
 
-    const result = await handleShellRun(ctx, "chat-a", { command: "rm -rf /" });
+    const result = await handleShellRun(ctx, "chat-a", { command: "shutdown -h now" });
 
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.content[0].text).error.code).toBe("FORBIDDEN_COMMAND");
     expect(shellRunner.run).not.toHaveBeenCalled();
+    expect(ctx.auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+      event: "blocked_command",
+      riskReasons: ["default: read-only"],
+      enforcementReason: "catastrophic command blocked by approval mode: catastrophic_only",
+    }));
   });
 
   it("uses Bitwarden access without forcing approval for an otherwise safe command", async () => {
