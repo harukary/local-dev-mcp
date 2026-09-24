@@ -75,6 +75,7 @@ PORT_XML="$(xml_escape "$SERVICE_PORT")"
 SERVER_LABEL_XML="$(xml_escape "$SERVER_LABEL")"
 PERSONAL_TUNNEL_LABEL_XML="$(xml_escape "$PERSONAL_TUNNEL_LABEL")"
 BUSINESS_TUNNEL_LABEL_XML="$(xml_escape "$BUSINESS_TUNNEL_LABEL")"
+ACTIVATION_LABEL_XML="$(xml_escape "$ACTIVATION_LABEL")"
 
 write_agent() {
   local label="$1"
@@ -168,26 +169,63 @@ fi
 
 ACTIVATION_LOG="$LOG_DIR/launchd-activate.log"
 ACTIVATION_ERROR_LOG="$LOG_DIR/launchd-activate-error.log"
+ACTIVATION_PLIST="$LOG_DIR/.launchd-activate.plist"
 : > "$ACTIVATION_LOG"
 : > "$ACTIVATION_ERROR_LOG"
 
-# A completed launchctl submit job remains registered. Remove the stale helper
-# before submitting the next activation. The actual restart must be owned by
-# launchd so invoking this command through local-dev-mcp cannot strand itself
-# after booting out its own server job.
+# Remove a previously loaded one-shot helper before replacing it. The helper is
+# an explicit RunAtLoad LaunchAgent without KeepAlive; launchctl submit is not
+# used because submitted jobs get implicit keepalive semantics on macOS.
 launchctl bootout "$DOMAIN/$ACTIVATION_LABEL" 2>/dev/null || launchctl remove "$ACTIVATION_LABEL" 2>/dev/null || true
-launchctl submit \
-  -l "$ACTIVATION_LABEL" \
-  -o "$ACTIVATION_LOG" \
-  -e "$ACTIVATION_ERROR_LOG" \
-  -- /bin/bash "$PROJECT_DIR/scripts/activate-launchd-worker.sh" \
-  "$DOMAIN" \
-  "$LAUNCH_AGENTS_DIR" \
-  "$SERVER_LABEL" \
-  "$SERVICE_PORT" \
-  "$LEGACY_TUNNEL_LABEL" \
-  "$LEGACY_PERSONAL_MINI_TUNNEL_LABEL" \
-  "${TUNNEL_LABELS[@]}"
 
-echo "Activation handed off to launchd as $ACTIVATION_LABEL."
+ACTIVATION_WORKER_XML="$(xml_escape "$PROJECT_DIR/scripts/activate-launchd-worker.sh")"
+ACTIVATION_PLIST_XML="$(xml_escape "$ACTIVATION_PLIST")"
+DOMAIN_XML="$(xml_escape "$DOMAIN")"
+LAUNCH_AGENTS_DIR_XML="$(xml_escape "$LAUNCH_AGENTS_DIR")"
+LEGACY_TUNNEL_LABEL_XML="$(xml_escape "$LEGACY_TUNNEL_LABEL")"
+LEGACY_PERSONAL_MINI_TUNNEL_LABEL_XML="$(xml_escape "$LEGACY_PERSONAL_MINI_TUNNEL_LABEL")"
+ACTIVATION_LOG_XML="$(xml_escape "$ACTIVATION_LOG")"
+ACTIVATION_ERROR_LOG_XML="$(xml_escape "$ACTIVATION_ERROR_LOG")"
+TUNNEL_ARGUMENTS_XML=""
+for label in "${TUNNEL_LABELS[@]}"; do
+  TUNNEL_ARGUMENTS_XML+="    <string>$(xml_escape "$label")</string>"$'\n'
+done
+
+cat > "$ACTIVATION_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$ACTIVATION_LABEL_XML</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$ACTIVATION_WORKER_XML</string>
+    <string>$DOMAIN_XML</string>
+    <string>$LAUNCH_AGENTS_DIR_XML</string>
+    <string>$ACTIVATION_PLIST_XML</string>
+    <string>$SERVER_LABEL_XML</string>
+    <string>$PORT_XML</string>
+    <string>$LEGACY_TUNNEL_LABEL_XML</string>
+    <string>$LEGACY_PERSONAL_MINI_TUNNEL_LABEL_XML</string>
+$TUNNEL_ARGUMENTS_XML  </array>
+  <key>WorkingDirectory</key>
+  <string>$PROJECT_XML</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>$ACTIVATION_LOG_XML</string>
+  <key>StandardErrorPath</key>
+  <string>$ACTIVATION_ERROR_LOG_XML</string>
+</dict>
+</plist>
+PLIST
+chmod 600 "$ACTIVATION_PLIST"
+plutil -lint "$ACTIVATION_PLIST" >/dev/null
+launchctl bootstrap "$DOMAIN" "$ACTIVATION_PLIST"
+
+echo "Activation handed off to one-shot launchd job $ACTIVATION_LABEL."
 echo "Logs: $ACTIVATION_LOG and $ACTIVATION_ERROR_LOG"

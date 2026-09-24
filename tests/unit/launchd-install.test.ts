@@ -108,13 +108,18 @@ describe("launchd installer", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(`Activation handed off to launchd as ${labelPrefix}.activate.`);
+    expect(result.stdout).toContain(`Activation handed off to one-shot launchd job ${labelPrefix}.activate.`);
     const calls = readFileSync(launchctlLog, "utf8");
     expect(calls).toContain(`bootout gui/${process.getuid?.() ?? 0}/${labelPrefix}.activate`);
-    expect(calls).toContain(`submit -l ${labelPrefix}.activate`);
-    expect(calls).toContain("scripts/activate-launchd-worker.sh");
-    expect(calls).toContain(`${labelPrefix}.openai-tunnel-personal`);
-    expect(calls).toContain(`${labelPrefix}.openai-tunnel-business`);
+    const activationPlistPath = path.join(tempDir, "logs", ".launchd-activate.plist");
+    expect(calls).toContain(`bootstrap gui/${process.getuid?.() ?? 0} ${activationPlistPath}`);
+    expect(calls).not.toContain("submit -l");
+    const activationPlist = readFileSync(activationPlistPath, "utf8");
+    expect(activationPlist).toContain("scripts/activate-launchd-worker.sh");
+    expect(activationPlist).toContain(`${labelPrefix}.openai-tunnel-personal`);
+    expect(activationPlist).toContain(`${labelPrefix}.openai-tunnel-business`);
+    expect(activationPlist).toContain("<key>RunAtLoad</key>");
+    expect(activationPlist).not.toContain("<key>KeepAlive</key>");
   });
 
   it("restarts services from the launchd-owned activation worker", () => {
@@ -129,6 +134,8 @@ describe("launchd installer", () => {
     for (const label of ["test.server", "test.personal", "test.business", "test.legacy", "test.legacy-mini"]) {
       writeFileSync(path.join(launchAgentsDir, `${label}.plist`), "placeholder");
     }
+    const activationPlist = path.join(tempDir, "activation.plist");
+    writeFileSync(activationPlist, "placeholder");
     for (const [name, body] of [
       ["launchctl", `#!/bin/bash\nprintf '%s\\n' "$*" >> "$FAKE_LAUNCHCTL_LOG"\nexit 0\n`],
       ["curl", "#!/bin/bash\nexit 0\n"],
@@ -143,6 +150,7 @@ describe("launchd installer", () => {
       path.resolve("scripts/activate-launchd-worker.sh"),
       "gui/501",
       launchAgentsDir,
+      activationPlist,
       "test.server",
       "13461",
       "test.legacy",
@@ -168,6 +176,7 @@ describe("launchd installer", () => {
     expect(calls).toContain(`bootstrap gui/501 ${path.join(launchAgentsDir, "test.business.plist")}`);
     expect(() => readFileSync(path.join(launchAgentsDir, "test.legacy.plist"))).toThrow();
     expect(() => readFileSync(path.join(launchAgentsDir, "test.legacy-mini.plist"))).toThrow();
+    expect(() => readFileSync(activationPlist)).toThrow();
   });
 
   it("generates an optional Business Secure MCP Tunnel LaunchAgent", () => {
