@@ -16,23 +16,34 @@ LEGACY_PERSONAL_MINI_TUNNEL_LABEL="$7"
 shift 7
 TUNNEL_LABELS=("$@")
 
+wait_for_unload() {
+  local label="$1"
+  for _ in $(seq 1 240); do
+    if ! launchctl print "$DOMAIN/$label" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "Timed out waiting for $label to unload from launchd." >&2
+  return 1
+}
+
 bootstrap_with_retry() {
   local label="$1"
   local plist="$2"
   local last_error=""
-  for _ in $(seq 1 40); do
+  for _ in $(seq 1 240); do
     if last_error="$(launchctl bootstrap "$DOMAIN" "$plist" 2>&1)"; then
       return 0
     fi
-    # launchctl can report a transient bootstrap error while the job is already
-    # registered. Treat a visible job as success and let its KeepAlive policy
-    # handle process startup.
+    # wait_for_unload has already proven the old job disappeared. If the label
+    # becomes visible after a failed bootstrap, it can only be the new job.
     if launchctl print "$DOMAIN/$label" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.25
   done
-  echo "Failed to bootstrap $label after waiting for launchd to release the previous job." >&2
+  echo "Failed to bootstrap $label after launchd released the previous job." >&2
   if [ -n "$last_error" ]; then
     echo "$last_error" >&2
   fi
@@ -51,6 +62,7 @@ for label in "$SERVER_LABEL" "$LEGACY_TUNNEL_LABEL" "$LEGACY_PERSONAL_MINI_TUNNE
   launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
 done
 
+wait_for_unload "$SERVER_LABEL"
 bootstrap_with_retry "$SERVER_LABEL" "$LAUNCH_AGENTS_DIR/$SERVER_LABEL.plist"
 
 healthy=0
@@ -67,6 +79,7 @@ if [ "$healthy" -ne 1 ]; then
 fi
 
 for label in "${TUNNEL_LABELS[@]}"; do
+  wait_for_unload "$label"
   bootstrap_with_retry "$label" "$LAUNCH_AGENTS_DIR/$label.plist"
 done
 
