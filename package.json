@@ -17,7 +17,8 @@
     "tunnel": "bash scripts/tunnel.sh --run",
     "tunnel:doctor": "bash scripts/tunnel.sh --doctor",
     "tunnel:install": "bash scripts/install-openai-tunnel-client.sh",
-    "launchd:install": "bash scripts/install-launchd.sh --install-only"
+    "launchd:install": "bash scripts/install-launchd.sh --install-only",
+    "launchd:activate": "bash scripts/install-launchd.sh --activate"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

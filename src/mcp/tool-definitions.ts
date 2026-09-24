@@ -3,7 +3,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-09-24.1";
+export const TOOL_SCHEMA_VERSION = "2026-09-25.1";
 
 const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "skills.list",
@@ -291,7 +291,7 @@ export function buildToolDefinitions() {
     {
       name: "image.read",
       description:
-        "Preferred first path for model-only inspection of an image in the selected project. Use this directly whenever the model needs to view, understand, compare, or verify an image and the user did not ask to receive the file. The default preview mode keeps normal images lightweight by downscaling when needed. Do not materialize preemptively: first try image.read. If image.read returns IMAGE_TOO_LARGE, returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, fall back to artifact.link/resource materialization for inspection. Returns inline MCP ImageContent plus metadata and does not create a user-visible chat attachment. If the user asks to receive, send, show, display, or attach the image in chat, call artifact.link with the same path; use artifact.read only as a compatibility fallback when an embedded resource is explicitly needed. Path must stay inside the project root.",
+        "Preferred first path for model-only inspection of an image in the selected project. Use this directly whenever the model needs to view, understand, compare, or verify an image and the user did not ask to receive the file. The default preview mode keeps normal images lightweight by downscaling when needed. Do not materialize preemptively: first try image.read. If preview generation is unavailable or the client cannot expose inline ImageContent reliably, artifact.link/resource materialization is a fallback only when the file fits the tunnel-safe materialization limit. If IMAGE_TOO_LARGE is returned, create or request a smaller local preview instead of sending the oversized original through the Secure Tunnel. Returns inline MCP ImageContent plus metadata and does not create a user-visible chat attachment. If the user asks to receive, send, show, display, or attach the image in chat, call artifact.link with the same path when it fits the tunnel-safe limit; use artifact.read only as a compatibility fallback when an embedded resource is explicitly needed. Path must stay inside the project root.",
       inputSchema: {
         type: "object",
         properties: {
@@ -336,7 +336,7 @@ export function buildToolDefinitions() {
     {
       name: "artifact.link",
       description:
-        "User-facing file delivery: return a local project file as an MCP resource_link without embedding file bytes in the tool result. Use this when the user asks to receive, download, send, show, display, or attach a generated file or screenshot in chat. For model-only project-image inspection, call image.read first instead of materializing preemptively. artifact.link/resource materialization is a valid fallback when image.read reports IMAGE_TOO_LARGE, returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably. For model-only text inspection use workspace.read. The client can fetch the original later through resources/read when needed, keeping large base64 payloads out of normal tool-call history.",
+        "User-facing file delivery: return a local project file as an MCP resource_link without embedding file bytes in the tool result. Use this when the user asks to receive, download, send, show, display, or attach a generated file or screenshot in chat. Resource materialization is limited to 6 MiB raw file size so the later resources/read response remains below the Secure Tunnel payload limit. For model-only project-image inspection, call image.read first instead of materializing preemptively. artifact.link/resource materialization is a fallback for preview_unavailable or client-side inline-image transport failures only when the file fits that limit. For model-only text inspection use workspace.read. The client can fetch the original later through resources/read when needed, keeping large base64 payloads out of normal tool-call history.",
       inputSchema: {
         type: "object",
         properties: {
@@ -362,12 +362,12 @@ export function buildToolDefinitions() {
     {
       name: "artifact.read",
       description:
-        "Compatibility fallback that embeds a local project file directly in the MCP tool result as base64. Do not use this for model-only image inspection; call image.read directly. Avoid this for normal send/show/display/attach requests because embedded bytes remain in tool-call history; prefer artifact.link. Use only when the client cannot consume resource links or an embedded resource is explicitly required. Limited to 8 MiB per call.",
+        "Compatibility fallback that embeds a local project file directly in the MCP tool result as base64. Do not use this for model-only image inspection; call image.read directly. Avoid this for normal send/show/display/attach requests because embedded bytes remain in tool-call history; prefer artifact.link. Use only when the client cannot consume resource links or an embedded resource is explicitly required. Limited to 6 MiB raw file size per call so base64 plus MCP framing stays below the Secure Tunnel response limit.",
       inputSchema: {
         type: "object",
         properties: {
           path: { type: "string", description: "Project-relative file path, or an absolute path inside the selected project root." },
-          max_bytes: { type: "integer", description: "Maximum raw file size to embed. Defaults to and is capped at 8388608 bytes (8 MiB).", minimum: 1, maximum: 8388608 },
+          max_bytes: { type: "integer", description: "Maximum raw file size to embed. Defaults to and is capped at 6291456 bytes (6 MiB) to stay below the Secure Tunnel response limit after base64 encoding.", minimum: 1, maximum: 6291456 },
         },
         required: ["path"],
       },

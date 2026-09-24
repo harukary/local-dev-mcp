@@ -88,6 +88,18 @@ describe("handleImageRead", () => {
     expect(result.content[1]).toMatchObject({ type: "image", mimeType: "image/png", data: png.toString("base64") });
   });
 
+  it("rejects full inline images that would approach the Secure Tunnel response limit", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
+    mkdirSync(join(tmpRoot, "assets"));
+    const png = Buffer.alloc(6 * 1024 * 1024 + 1);
+    createPng(2, 3).copy(png, 0);
+    writeFileSync(join(tmpRoot, "assets", "large.png"), png);
+    const { ctx } = createContext(createProject(tmpRoot));
+    const result = await handleImageRead(ctx, "chat-a", { path: "assets/large.png", mode: "full" });
+    expect(JSON.parse(result.content[0].text).error.code).toBe("IMAGE_FULL_TOO_LARGE");
+    expect(result.isError).toBe(true);
+  });
+
   it("rejects paths outside the selected project", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-image-"));
     const { ctx } = createContext(createProject(tmpRoot));

@@ -4,8 +4,8 @@ import type { AppContext } from "../server.js";
 import type { ProjectConfig } from "../../types.js";
 import { getActiveProject, jsonError, matchesDeniedPath, sha256 } from "./dev/common.js";
 
-const DEFAULT_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
-const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_ARTIFACT_BYTES = 6 * 1024 * 1024;
+const MAX_ARTIFACT_BYTES = 6 * 1024 * 1024;
 
 const MIME_BY_EXTENSION: Record<string, string> = {
   ".pdf": "application/pdf",
@@ -83,6 +83,11 @@ export async function handleArtifactLink(
     await logArtifactFailure(ctx, chatContextId, project, args.path, "Path is not a regular file.", "artifact.link", "artifact_link_failed");
     return jsonError("NOT_A_FILE", "Path is not a regular file.");
   }
+  if (fileStat.size > MAX_ARTIFACT_BYTES) {
+    const message = `File is too large to materialize safely through the Secure MCP Tunnel (${fileStat.size} bytes). Maximum raw file size is ${MAX_ARTIFACT_BYTES} bytes.`;
+    await logArtifactFailure(ctx, chatContextId, project, args.path, message, "artifact.link", "artifact_link_failed");
+    return jsonError("ARTIFACT_TOO_LARGE_FOR_TUNNEL", message, { size_bytes: fileStat.size, max_bytes: MAX_ARTIFACT_BYTES });
+  }
 
   const fileName = basename(resolved.relativePath) || "artifact";
   const mimeType = detectMimeType(resolved.absolutePath);
@@ -147,6 +152,9 @@ export async function handleArtifactResourceRead(
   const fileStat = await stat(resolved.absolutePath).catch(() => null);
   if (!fileStat) throw new Error("File not found.");
   if (!fileStat.isFile()) throw new Error("Path is not a regular file.");
+  if (fileStat.size > MAX_ARTIFACT_BYTES) {
+    throw new Error(`ARTIFACT_TOO_LARGE_FOR_TUNNEL: resource is ${fileStat.size} bytes; maximum raw file size is ${MAX_ARTIFACT_BYTES} bytes.`);
+  }
 
   const bytes = await readFile(resolved.absolutePath);
   const mimeType = detectMimeType(resolved.absolutePath, bytes);

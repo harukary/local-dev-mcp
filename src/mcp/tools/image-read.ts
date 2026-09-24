@@ -7,6 +7,7 @@ import type { ProjectConfig } from "../../types.js";
 import { applyWorkingDirectory } from "../../project/working-directory.js";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_FULL_INLINE_IMAGE_BYTES = 6 * 1024 * 1024;
 const DEFAULT_PREVIEW_MAX_EDGE = 900;
 const PREVIEW_FULL_INLINE_MAX_BYTES = 512 * 1024;
 
@@ -73,9 +74,16 @@ export async function handleImageRead(
   }
 
   if (fileStat.size > MAX_IMAGE_BYTES) {
-    const message = `Image is too large (${fileStat.size} bytes). Maximum is ${MAX_IMAGE_BYTES} bytes.`;
+    const message = `Image is too large (${fileStat.size} bytes). Maximum source size is ${MAX_IMAGE_BYTES} bytes.`;
     await logImageRead(ctx, chatContextId, project, args.path, message);
-    return errorResult("IMAGE_TOO_LARGE", message);
+    return errorResult("IMAGE_TOO_LARGE", message, { size_bytes: fileStat.size, max_bytes: MAX_IMAGE_BYTES });
+  }
+
+  const mode = normalizeImageReadMode(args.mode);
+  if (mode === "full" && fileStat.size > MAX_FULL_INLINE_IMAGE_BYTES) {
+    const message = `Full inline image would be too large for the Secure MCP Tunnel (${fileStat.size} bytes). Maximum raw inline image size is ${MAX_FULL_INLINE_IMAGE_BYTES} bytes; use preview mode instead.`;
+    await logImageRead(ctx, chatContextId, project, args.path, message);
+    return errorResult("IMAGE_FULL_TOO_LARGE", message, { size_bytes: fileStat.size, max_bytes: MAX_FULL_INLINE_IMAGE_BYTES });
   }
 
   const bytes = await readFile(resolved.absolutePath);
@@ -86,7 +94,6 @@ export async function handleImageRead(
   }
 
   const dimensions = readImageDimensions(bytes, mimeType);
-  const mode = normalizeImageReadMode(args.mode);
   const maxPreviewEdge = normalizeMaxPreviewEdge(args.max_preview_edge);
   const inlineImage = await prepareInlineImage(bytes, mimeType, dimensions, mode, maxPreviewEdge);
   const metadata = {

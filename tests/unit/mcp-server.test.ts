@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildMcpRequestTooLargeError,
   closeHttpServerForShutdown,
+  limitMcpToolResponse,
   isAllowedHttpHost,
   isAuthorizedOpenAiSubject,
   isObservedScheduledTaskMeta,
@@ -104,6 +106,27 @@ describe("ChatGPT subject authorization", () => {
   });
 });
 
+describe("MCP transport size guards", () => {
+  it("returns a JSON-RPC error for oversized HTTP request bodies", () => {
+    expect(buildMcpRequestTooLargeError(10_000_000, 9_000_000)).toEqual({
+      jsonrpc: "2.0",
+      error: {
+        code: -32001,
+        message: "MCP request body exceeds the local 9000000-byte safety limit.",
+        data: { code: "MCP_REQUEST_TOO_LARGE", max_bytes: 9_000_000, content_length: 10_000_000 },
+      },
+      id: null,
+    });
+  });
+
+  it("replaces an oversized tool result with a bounded structured error", () => {
+    const limited = limitMcpToolResponse({ content: [{ type: "text", text: "x".repeat(100) }] }, 64);
+    expect(limited.limited).toBe(true);
+    expect(limited.attemptedResponseBytes).toBeGreaterThan(64);
+    expect(JSON.parse(limited.result.content[0].text).error.code).toBe("MCP_RESPONSE_TOO_LARGE");
+  });
+});
+
 describe("stateless MCP transport", () => {
   it("rejects standalone GET streams with 405 and advertises POST", () => {
     const json = vi.fn();
@@ -182,7 +205,7 @@ describe("tool schema snapshot", () => {
     const artifactReceive = snapshot.tools.find((tool) => tool.name === "artifact.receive");
     const mobileScreenshot = snapshot.tools.find((tool) => tool.name === "mobile.screenshot");
 
-    expect(snapshot.schema_version).toBe("2026-09-24.1");
+    expect(snapshot.schema_version).toBe("2026-09-25.1");
     expect(names).toContain("tool.schema");
     expect(names).toContain("image.read");
     expect(names).toContain("artifact.link");
@@ -203,17 +226,17 @@ describe("tool schema snapshot", () => {
     expect(imageRead?.description).toContain("Preferred first path for model-only inspection");
     expect(imageRead?.description).toContain("Do not materialize preemptively");
     expect(imageRead?.description).toContain("IMAGE_TOO_LARGE");
-    expect(imageRead?.description).toContain("preview_unavailable");
-    expect(imageRead?.description).toContain("resource materialization");
+    expect(imageRead?.description).toContain("preview generation is unavailable");
+    expect(imageRead?.description).toContain("tunnel-safe materialization limit");
     expect(imageRead?.description).toContain("artifact.link");
 
     expect(artifactLink?.annotations).toMatchObject({ readOnlyHint: true });
     expect(artifactLink?.description).toContain("resource_link");
     expect(artifactLink?.description).toContain("without embedding");
     expect(artifactLink?.description).toContain("call image.read first instead of materializing preemptively");
-    expect(artifactLink?.description).toContain("IMAGE_TOO_LARGE");
+    expect(artifactLink?.description).toContain("6 MiB");
     expect(artifactLink?.description).toContain("preview_unavailable");
-    expect(artifactLink?.description).toContain("valid fallback");
+    expect(artifactLink?.description).toContain("fallback");
     expect(artifactRead?.annotations).toMatchObject({ readOnlyHint: true });
     expect(artifactRead?.description).toContain("Compatibility fallback");
     expect(artifactRead?.description).toContain("Do not use this for model-only image inspection");

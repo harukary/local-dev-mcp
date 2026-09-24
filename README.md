@@ -284,7 +284,7 @@ pnpm launchd:install
 Activate them:
 
 ```bash
-scripts/install-launchd.sh --activate
+pnpm launchd:activate
 ```
 
 The default jobs are:
@@ -329,9 +329,9 @@ local file
 
 `artifact.link` returns only metadata plus the resource URI in the tool result, so large base64 payloads do not accumulate in normal tool-call history. The original file is resolved through MCP `resources/read` when the client chooses to fetch it.
 
-`artifact.read` remains as a compatibility fallback for clients or flows that explicitly require an embedded resource. It base64-embeds the file directly in the tool result and is limited to 8 MiB per call.
+`artifact.read` remains as a compatibility fallback for clients or flows that explicitly require an embedded resource. It base64-embeds the file directly in the tool result and is limited to 6 MiB raw file size per call so the encoded MCP response stays below the Secure Tunnel payload limit. `artifact.link` uses the same 6 MiB raw-file safety limit because the linked resource is later fetched through `resources/read`.
 
-Use `workspace.read` for text inspection and try `image.read` first for image inspection when the user does not need the file itself. Avoid preemptive `artifact.link`/materialization because it adds a transfer step and may introduce approval prompts. Fall back to resource materialization when `image.read` cannot provide usable inline ImageContent, including `IMAGE_TOO_LARGE`, `preview_unavailable`, or a client-side inline-image transport failure.
+Use `workspace.read` for text inspection and try `image.read` first for image inspection when the user does not need the file itself. Avoid preemptive `artifact.link`/materialization because it adds a transfer step and may introduce approval prompts. Fall back to resource materialization for `preview_unavailable` or a client-side inline-image transport failure only when the source fits the 6 MiB materialization limit. If `image.read` returns `IMAGE_TOO_LARGE`, create or request a smaller local preview instead of sending the oversized original through the Secure Tunnel.
 
 ### ChatGPT → development host
 
@@ -373,7 +373,7 @@ The normal-attachment flow has been end-to-end verified on ChatGPT Web and Andro
 
 ## Image Handling
 
-`image.read` is the preferred first path for model-only project-image inspection. It returns model-visible MCP `ImageContent` plus metadata without first turning the image into a user-facing attachment or materialized file. Source images above 8 MiB are currently rejected before preview generation. For accepted sources, default `preview` mode keeps the original inline only when it is at most 512 KiB and within the requested edge limit (900 px by default); otherwise supported PNG/JPEG/WebP images are downscaled to a JPEG preview. If preview creation is unavailable, the result can contain metadata without inline ImageContent. It does not create an HTTP image cache, public URL, or custom ChatGPT viewer.
+`image.read` is the preferred first path for model-only project-image inspection. It returns model-visible MCP `ImageContent` plus metadata without first turning the image into a user-facing attachment or materialized file. Source images above 8 MiB are currently rejected before preview generation. For accepted sources, default `preview` mode keeps the original inline only when it is at most 512 KiB and within the requested edge limit (900 px by default); otherwise supported PNG/JPEG/WebP images are downscaled to a JPEG preview. Explicit `full` mode is capped at 6 MiB raw image size to keep the encoded response below the Secure Tunnel payload limit. If preview creation is unavailable, the result can contain metadata without inline ImageContent. It does not create an HTTP image cache, public URL, or custom ChatGPT viewer.
 
 Modes:
 

@@ -47,6 +47,6 @@ describe("MCP server instructions", () => {
     expect(client.getInstructions()).toContain("For model-only inspection of a project image, try image.read first");
     expect(client.getInstructions()).toContain("IMAGE_TOO_LARGE");
     expect(client.getInstructions()).toContain("preview_unavailable");
-    expect(client.getInstructions()).toContain("fall back to artifact.link/resource materialization");
+    expect(client.getInstructions()).toContain("artifact.link/resource materialization is a fallback");
   });
 });

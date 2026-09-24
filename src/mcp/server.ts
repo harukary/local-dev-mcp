@@ -234,6 +234,42 @@ export function sendStatelessMcpMethodNotAllowed(res: express.Response): void {
 }
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+export const MCP_HTTP_MAX_REQUEST_BYTES = 9 * 1024 * 1024;
+export const MCP_TOOL_RESPONSE_MAX_BYTES = 9 * 1024 * 1024;
+
+export function buildMcpRequestTooLargeError(contentLength?: number, maxBytes = MCP_HTTP_MAX_REQUEST_BYTES) {
+  return {
+    jsonrpc: "2.0" as const,
+    error: {
+      code: -32001,
+      message: `MCP request body exceeds the local ${maxBytes}-byte safety limit.`,
+      data: {
+        code: "MCP_REQUEST_TOO_LARGE",
+        max_bytes: maxBytes,
+        ...(contentLength === undefined ? {} : { content_length: contentLength }),
+      },
+    },
+    id: null,
+  };
+}
+
+export function limitMcpToolResponse(result: any, maxBytes = MCP_TOOL_RESPONSE_MAX_BYTES): {
+  result: any;
+  attemptedResponseBytes: number;
+  limited: boolean;
+} {
+  const attemptedResponseBytes = Buffer.byteLength(JSON.stringify(result));
+  if (attemptedResponseBytes <= maxBytes) return { result, attemptedResponseBytes, limited: false };
+  return {
+    result: jsonError(
+      "MCP_RESPONSE_TOO_LARGE",
+      `Tool response would be ${attemptedResponseBytes} bytes, above the ${maxBytes}-byte Secure Tunnel safety limit. Reduce max_bytes/detail, use a bounded preview, or use a non-inline artifact workflow.`,
+      { response_bytes: attemptedResponseBytes, max_bytes: maxBytes }
+    ),
+    attemptedResponseBytes,
+    limited: true,
+  };
+}
 
 function isLocalhostRequest(req: express.Request): boolean {
   const host = req.hostname || req.ip;
@@ -294,7 +330,7 @@ For substantive work on a project:
 7. When two or more independent workspace.read, workspace.search, or workspace.list operations are needed, prefer one workspace.batch call.
 8. Use git.inspect/status/diff/log/show for read-only Git inspection. Use shell.run for Git writes or operations not covered by typed Git tools.
 9. For long shell jobs, reuse shell.status cursors. For normal completion polling use wait_ms=30000 and output=none; keep max_bytes small unless output is needed.
-10. For model-only inspection of a project image, try image.read first instead of materializing preemptively. If image.read returns IMAGE_TOO_LARGE, returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, fall back to artifact.link/resource materialization. Also materialize/download when a downstream operation genuinely requires file bytes.
+10. For model-only inspection of a project image, try image.read first instead of materializing preemptively. If image.read returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, artifact.link/resource materialization is a fallback only when the file is within the resource materialization size limit. If image.read reports IMAGE_TOO_LARGE, create or request a smaller local preview instead of trying to send the oversized original through the Secure Tunnel. Also materialize/download when a downstream operation genuinely requires file bytes and the file fits the tunnel-safe limit.
 `.trim();
 
 export function createMcpServer(ctx: AppContext): Server {
@@ -624,6 +660,17 @@ export function createMcpServer(ctx: AppContext): Server {
       } else {
         result = await executeTool();
       }
+      const limitedResponse = limitMcpToolResponse(result);
+      if (limitedResponse.limited) {
+        await ctx.auditLogger.log({
+          timestamp: new Date().toISOString(),
+          chatContextId,
+          tool: name,
+          event: "tool_response_too_large",
+          error: `response_bytes=${limitedResponse.attemptedResponseBytes} max_bytes=${MCP_TOOL_RESPONSE_MAX_BYTES}`,
+        });
+        result = limitedResponse.result;
+      }
       let payload = result?.structuredContent;
       if (!payload) {
         try { payload = JSON.parse(result?.content?.find((item: { type: string }) => item.type === "text")?.text ?? "null"); } catch { /* Text-only tools need no JSON result. */ }
@@ -917,13 +964,27 @@ export async function startHttpServer(configPath: string, port: number): Promise
     next();
   }
 
-  app.post("/mcp", requireHttpAuth, express.raw({ type: "*/*", limit: "1mb" }), parseAndLimitMcpRequest, (req, res) => {
+  app.post("/mcp", requireHttpAuth, express.raw({ type: "*/*", limit: MCP_HTTP_MAX_REQUEST_BYTES }), parseAndLimitMcpRequest, (req, res) => {
     handleMcpRequest(req, res, ctx).catch((err) => {
       console.error("MCP POST handler error:", err);
       if (!res.headersSent) {
         res.status(500).json({ error: "internal_error", message: String(err) });
       }
     });
+  });
+
+  app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const candidate = err as { type?: string; status?: number; statusCode?: number } | undefined;
+    if (candidate?.type !== "entity.too.large" && candidate?.status !== 413 && candidate?.statusCode !== 413) {
+      next(err);
+      return;
+    }
+    const rawContentLength = req.headers["content-length"];
+    const parsedContentLength = typeof rawContentLength === "string" ? Number.parseInt(rawContentLength, 10) : undefined;
+    const contentLength = parsedContentLength !== undefined && Number.isFinite(parsedContentLength) ? parsedContentLength : undefined;
+    console.error(`[MCP] request rejected: body too large content_length=${contentLength ?? "unknown"} max_bytes=${MCP_HTTP_MAX_REQUEST_BYTES}`);
+    res.setHeader("Cache-Control", "no-store");
+    res.status(413).json(buildMcpRequestTooLargeError(contentLength));
   });
 
   app.get("/mcp", requireHttpAuth, (_req, res) => {

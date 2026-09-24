@@ -63,6 +63,17 @@ describe("artifact.link", () => {
       blob: bytes.toString("base64"),
     }]);
   });
+
+  it("rejects links and resource reads that cannot fit safely through the Secure Tunnel", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-artifact-resource-large-"));
+    writeFileSync(join(tmpRoot, "large.bin"), Buffer.alloc(6 * 1024 * 1024 + 1));
+    const { ctx } = createContext(createProject(tmpRoot));
+
+    const link = await handleArtifactLink(ctx, "chat-a", { path: "large.bin" });
+    expect(JSON.parse(link.content[0].text).error.code).toBe("ARTIFACT_TOO_LARGE_FOR_TUNNEL");
+    await expect(handleArtifactResourceRead(ctx, "chat-a", "local-dev-artifact://alpha/large.bin"))
+      .rejects.toThrow("ARTIFACT_TOO_LARGE_FOR_TUNNEL");
+  });
 });
 
 describe("artifact.read", () => {
