@@ -241,6 +241,8 @@ activate:
 pnpm launchd:activate
 ```
 
+activate処理は、管理対象のserver/Tunnelを再起動する前に短命なlaunchd workerへhandoffします。そのため`local-dev-mcp`自身からこのcommandを実行しても、自分を`bootout`した子processが復旧処理を続ける問題を避けられます。workerによる再起動中はMCP接続が一時的に切れる場合があります。診断logは`logs/launchd-activate.log`と`logs/launchd-activate-error.log`です。
+
 既定job:
 
 ```text

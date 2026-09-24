@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -77,6 +77,97 @@ describe("launchd installer", () => {
     const server = readFileSync(path.join(tempDir, `${labelPrefix}.server.plist`), "utf8");
     expect(server).toContain("<key>LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY</key>");
     expect(server).toContain("<string>enforce</string>");
+  });
+
+  it("hands activation to an independent launchd worker", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-launchd-activate-"));
+    tempDirs.push(tempDir);
+    const launchAgentsDir = path.join(tempDir, "LaunchAgents");
+    const fakeBin = path.join(tempDir, "bin");
+    const launchctlLog = path.join(tempDir, "launchctl.log");
+    const labelPrefix = "test.local-dev-mcp";
+    mkdirSync(fakeBin, { recursive: true });
+    const fakeLaunchctl = path.join(fakeBin, "launchctl");
+    writeFileSync(fakeLaunchctl, `#!/bin/bash\nprintf '%s\\n' "$*" >> "$FAKE_LAUNCHCTL_LOG"\nexit 0\n`);
+    chmodSync(fakeLaunchctl, 0o755);
+
+    const result = spawnSync("/bin/bash", [path.resolve("scripts/install-launchd.sh"), "--activate"], {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        FAKE_LAUNCHCTL_LOG: launchctlLog,
+        LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: launchAgentsDir,
+        LOCAL_DEV_MCP_LOG_DIR: path.join(tempDir, "logs"),
+        LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: labelPrefix,
+        LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE: "1",
+        PORT: "13461",
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`Activation handed off to launchd as ${labelPrefix}.activate.`);
+    const calls = readFileSync(launchctlLog, "utf8");
+    expect(calls).toContain(`bootout gui/${process.getuid?.() ?? 0}/${labelPrefix}.activate`);
+    expect(calls).toContain(`submit -l ${labelPrefix}.activate`);
+    expect(calls).toContain("scripts/activate-launchd-worker.sh");
+    expect(calls).toContain(`${labelPrefix}.openai-tunnel-personal`);
+    expect(calls).toContain(`${labelPrefix}.openai-tunnel-business`);
+  });
+
+  it("restarts services from the launchd-owned activation worker", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-launchd-worker-"));
+    tempDirs.push(tempDir);
+    const launchAgentsDir = path.join(tempDir, "LaunchAgents");
+    const fakeBin = path.join(tempDir, "bin");
+    const launchctlLog = path.join(tempDir, "launchctl.log");
+    mkdirSync(launchAgentsDir, { recursive: true });
+    mkdirSync(fakeBin, { recursive: true });
+
+    for (const label of ["test.server", "test.personal", "test.business", "test.legacy", "test.legacy-mini"]) {
+      writeFileSync(path.join(launchAgentsDir, `${label}.plist`), "placeholder");
+    }
+    for (const [name, body] of [
+      ["launchctl", `#!/bin/bash\nprintf '%s\\n' "$*" >> "$FAKE_LAUNCHCTL_LOG"\nexit 0\n`],
+      ["curl", "#!/bin/bash\nexit 0\n"],
+      ["sleep", "#!/bin/bash\nexit 0\n"],
+    ] as const) {
+      const file = path.join(fakeBin, name);
+      writeFileSync(file, body);
+      chmodSync(file, 0o755);
+    }
+
+    const result = spawnSync("/bin/bash", [
+      path.resolve("scripts/activate-launchd-worker.sh"),
+      "gui/501",
+      launchAgentsDir,
+      "test.server",
+      "13461",
+      "test.legacy",
+      "test.legacy-mini",
+      "test.personal",
+      "test.business",
+    ], {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        FAKE_LAUNCHCTL_LOG: launchctlLog,
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Activated test.server and test.personal test.business");
+    const calls = readFileSync(launchctlLog, "utf8");
+    expect(calls).toContain("bootout gui/501/test.server");
+    expect(calls).toContain(`bootstrap gui/501 ${path.join(launchAgentsDir, "test.server.plist")}`);
+    expect(calls).toContain(`bootstrap gui/501 ${path.join(launchAgentsDir, "test.personal.plist")}`);
+    expect(calls).toContain(`bootstrap gui/501 ${path.join(launchAgentsDir, "test.business.plist")}`);
+    expect(() => readFileSync(path.join(launchAgentsDir, "test.legacy.plist"))).toThrow();
+    expect(() => readFileSync(path.join(launchAgentsDir, "test.legacy-mini.plist"))).toThrow();
   });
 
   it("generates an optional Business Secure MCP Tunnel LaunchAgent", () => {

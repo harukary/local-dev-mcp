@@ -10,6 +10,7 @@ BUSINESS_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel-business"
 BUSINESS_TUNNEL_ENABLE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE:-0}"
 LEGACY_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel"
 LEGACY_PERSONAL_MINI_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel-personal-mini"
+ACTIVATION_LABEL="$LABEL_PREFIX.activate"
 DOMAIN="gui/$(id -u)"
 MODE="install-only"
 
@@ -64,7 +65,8 @@ NODE_DIR="$(dirname "$NODE_BIN")"
 SERVICE_PATH="$NODE_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 SERVICE_PORT="${PORT:-3456}"
 SUBJECT_POLICY="${LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY:-}"
-mkdir -p "$LAUNCH_AGENTS_DIR" "$PROJECT_DIR/logs"
+LOG_DIR="${LOCAL_DEV_MCP_LOG_DIR:-$PROJECT_DIR/logs}"
+mkdir -p "$LAUNCH_AGENTS_DIR" "$LOG_DIR"
 
 PROJECT_XML="$(xml_escape "$PROJECT_DIR")"
 PATH_XML="$(xml_escape "$SERVICE_PATH")"
@@ -83,7 +85,7 @@ write_agent() {
   local plist="$LAUNCH_AGENTS_DIR/$label.plist"
   local script_xml log_xml
   script_xml="$(xml_escape "$PROJECT_DIR/scripts/$service_script")"
-  log_xml="$(xml_escape "$PROJECT_DIR/logs/$log_name")"
+  log_xml="$(xml_escape "$LOG_DIR/$log_name")"
 
   cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -164,27 +166,28 @@ if [ "$MODE" != "activate" ]; then
   exit 0
 fi
 
-for label in "$SERVER_LABEL" "$LEGACY_TUNNEL_LABEL" "$LEGACY_PERSONAL_MINI_TUNNEL_LABEL" "${TUNNEL_LABELS[@]}"; do
-  launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
-done
+ACTIVATION_LOG="$LOG_DIR/launchd-activate.log"
+ACTIVATION_ERROR_LOG="$LOG_DIR/launchd-activate-error.log"
+: > "$ACTIVATION_LOG"
+: > "$ACTIVATION_ERROR_LOG"
 
-launchctl bootstrap "$DOMAIN" "$LAUNCH_AGENTS_DIR/$SERVER_LABEL.plist"
+# A completed launchctl submit job remains registered. Remove the stale helper
+# before submitting the next activation. The actual restart must be owned by
+# launchd so invoking this command through local-dev-mcp cannot strand itself
+# after booting out its own server job.
+launchctl bootout "$DOMAIN/$ACTIVATION_LABEL" 2>/dev/null || launchctl remove "$ACTIVATION_LABEL" 2>/dev/null || true
+launchctl submit \
+  -l "$ACTIVATION_LABEL" \
+  -o "$ACTIVATION_LOG" \
+  -e "$ACTIVATION_ERROR_LOG" \
+  -- /bin/bash "$PROJECT_DIR/scripts/activate-launchd-worker.sh" \
+  "$DOMAIN" \
+  "$LAUNCH_AGENTS_DIR" \
+  "$SERVER_LABEL" \
+  "$SERVICE_PORT" \
+  "$LEGACY_TUNNEL_LABEL" \
+  "$LEGACY_PERSONAL_MINI_TUNNEL_LABEL" \
+  "${TUNNEL_LABELS[@]}"
 
-healthy=0
-for _ in $(seq 1 20); do
-  if curl -fsS "http://127.0.0.1:$SERVICE_PORT/healthz" >/dev/null 2>&1; then
-    healthy=1
-    break
-  fi
-  sleep 0.25
-done
-if [ "$healthy" -ne 1 ]; then
-  echo "MCP server did not become healthy; OpenAI Tunnel was not started." >&2
-  exit 1
-fi
-
-for label in "${TUNNEL_LABELS[@]}"; do
-  launchctl bootstrap "$DOMAIN" "$LAUNCH_AGENTS_DIR/$label.plist"
-done
-rm -f "$LAUNCH_AGENTS_DIR/$LEGACY_TUNNEL_LABEL.plist" "$LAUNCH_AGENTS_DIR/$LEGACY_PERSONAL_MINI_TUNNEL_LABEL.plist"
-echo "Activated $SERVER_LABEL and ${TUNNEL_LABELS[*]}"
+echo "Activation handed off to launchd as $ACTIVATION_LABEL."
+echo "Logs: $ACTIVATION_LOG and $ACTIVATION_ERROR_LOG"

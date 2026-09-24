@@ -287,6 +287,8 @@ Activate them:
 pnpm launchd:activate
 ```
 
+Activation is handed off to a short-lived launchd worker before the managed server and Tunnel jobs are restarted. This makes the command safe to invoke through `local-dev-mcp` itself; the MCP connection may briefly disconnect while the worker restarts the services. Activation diagnostics are written to `logs/launchd-activate.log` and `logs/launchd-activate-error.log`.
+
 The default jobs are:
 
 ```text
