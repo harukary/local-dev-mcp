@@ -285,7 +285,7 @@ local file
 
 `artifact.read`はembedded resourceが明示的に必要な場合の互換fallbackとして残します。こちらはfileをbase64でtool resultへ直接埋め込み、1 callあたり8 MiB上限です。
 
-内容確認だけなら、textは`workspace.read`、画像は`image.read`を使います。
+内容確認だけなら、textは`workspace.read`、画像はまず`image.read`を使います。通常ケースでは`artifact.link`やmaterializeを先回りして使わず、不要な転送と承認を避けます。ただし`image.read`が`IMAGE_TOO_LARGE`、inline imageなしの`preview_unavailable`、またはclient側のinline image transport不調になった場合は、resource materializationへfallbackします。
 
 ### ChatGPT → 開発ホスト
 
@@ -327,7 +327,7 @@ file_name?
 
 ## Image Handling
 
-`image.read` はmodelが確認できるMCP `ImageContent`とmetadataを返します。HTTP image cache、public URL、custom ChatGPT viewerは作りません。
+`image.read` はproject内画像をmodelだけが確認する場合の第一経路です。user-facing attachmentやmaterialized fileへ変換せず、modelが確認できるMCP `ImageContent`とmetadataを直接返します。現状は元画像が8 MiBを超えるとpreview生成前に拒否します。8 MiB以下では、既定の`preview`時に元画像が512 KiB以下かつ既定900px以内ならそのままinlineで返し、それを超える対応PNG/JPEG/WebPはJPEG previewへ縮小します。preview生成不能時はmetadataだけでinline ImageContentがない場合があります。HTTP image cache、public URL、custom ChatGPT viewerは作りません。
 
 mode:
 

@@ -331,7 +331,7 @@ local file
 
 `artifact.read` remains as a compatibility fallback for clients or flows that explicitly require an embedded resource. It base64-embeds the file directly in the tool result and is limited to 8 MiB per call.
 
-Use `workspace.read` for text inspection and `image.read` for image inspection when the user does not need the file itself.
+Use `workspace.read` for text inspection and try `image.read` first for image inspection when the user does not need the file itself. Avoid preemptive `artifact.link`/materialization because it adds a transfer step and may introduce approval prompts. Fall back to resource materialization when `image.read` cannot provide usable inline ImageContent, including `IMAGE_TOO_LARGE`, `preview_unavailable`, or a client-side inline-image transport failure.
 
 ### ChatGPT → development host
 
@@ -373,7 +373,7 @@ The normal-attachment flow has been end-to-end verified on ChatGPT Web and Andro
 
 ## Image Handling
 
-`image.read` returns model-visible MCP `ImageContent` plus metadata. It does not create an HTTP image cache, public URL, or custom ChatGPT viewer.
+`image.read` is the preferred first path for model-only project-image inspection. It returns model-visible MCP `ImageContent` plus metadata without first turning the image into a user-facing attachment or materialized file. Source images above 8 MiB are currently rejected before preview generation. For accepted sources, default `preview` mode keeps the original inline only when it is at most 512 KiB and within the requested edge limit (900 px by default); otherwise supported PNG/JPEG/WebP images are downscaled to a JPEG preview. If preview creation is unavailable, the result can contain metadata without inline ImageContent. It does not create an HTTP image cache, public URL, or custom ChatGPT viewer.
 
 Modes:
 

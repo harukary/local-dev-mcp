@@ -294,6 +294,7 @@ For substantive work on a project:
 7. When two or more independent workspace.read, workspace.search, or workspace.list operations are needed, prefer one workspace.batch call.
 8. Use git.inspect/status/diff/log/show for read-only Git inspection. Use shell.run for Git writes or operations not covered by typed Git tools.
 9. For long shell jobs, reuse shell.status cursors. For normal completion polling use wait_ms=30000 and output=none; keep max_bytes small unless output is needed.
+10. For model-only inspection of a project image, try image.read first instead of materializing preemptively. If image.read returns IMAGE_TOO_LARGE, returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, fall back to artifact.link/resource materialization. Also materialize/download when a downstream operation genuinely requires file bytes.
 `.trim();
 
 export function createMcpServer(ctx: AppContext): Server {

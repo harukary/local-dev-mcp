@@ -182,7 +182,7 @@ describe("tool schema snapshot", () => {
     const artifactReceive = snapshot.tools.find((tool) => tool.name === "artifact.receive");
     const mobileScreenshot = snapshot.tools.find((tool) => tool.name === "mobile.screenshot");
 
-    expect(snapshot.schema_version).toBe("2026-09-23.1");
+    expect(snapshot.schema_version).toBe("2026-09-24.1");
     expect(names).toContain("tool.schema");
     expect(names).toContain("image.read");
     expect(names).toContain("artifact.link");
@@ -200,13 +200,24 @@ describe("tool schema snapshot", () => {
     });
     expect(imageRead?.outputSchema).not.toHaveProperty("properties.display_url");
     expect(imageRead?.description).toContain("does not create a user-visible chat attachment");
+    expect(imageRead?.description).toContain("Preferred first path for model-only inspection");
+    expect(imageRead?.description).toContain("Do not materialize preemptively");
+    expect(imageRead?.description).toContain("IMAGE_TOO_LARGE");
+    expect(imageRead?.description).toContain("preview_unavailable");
+    expect(imageRead?.description).toContain("resource materialization");
     expect(imageRead?.description).toContain("artifact.link");
 
     expect(artifactLink?.annotations).toMatchObject({ readOnlyHint: true });
     expect(artifactLink?.description).toContain("resource_link");
     expect(artifactLink?.description).toContain("without embedding");
+    expect(artifactLink?.description).toContain("call image.read first instead of materializing preemptively");
+    expect(artifactLink?.description).toContain("IMAGE_TOO_LARGE");
+    expect(artifactLink?.description).toContain("preview_unavailable");
+    expect(artifactLink?.description).toContain("valid fallback");
     expect(artifactRead?.annotations).toMatchObject({ readOnlyHint: true });
     expect(artifactRead?.description).toContain("Compatibility fallback");
+    expect(artifactRead?.description).toContain("Do not use this for model-only image inspection");
+    expect(artifactRead?.description).toContain("call image.read directly");
     expect(artifactRead?.description).toContain("prefer artifact.link");
     expect(artifactReceive?._meta).toEqual({ "openai/fileParams": ["file"] });
     expect(artifactReceive?.annotations).toMatchObject({ readOnlyHint: false });

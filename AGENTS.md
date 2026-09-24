@@ -16,7 +16,7 @@
 - ユーザーへfileそのものを渡す場合は既定で`artifact.link`を使い、MCP `resource_link`だけをtool resultへ返す。file bytesを通常のtool historyへ埋め込まない。
 - `artifact.read`はresource linkをclientが扱えない場合の互換fallbackに限定し、通常のsend/show/display/attachでは使わない。
 - ChatGPTの通常添付をlocalへ受信する場合は`artifact.receive` + `openai/fileParams`を使い、base64 chunk loopを追加しない。
-- 画像のmodel inspectionには`image.read`のinline MCP ImageContentを使う。public image URLやcustom image viewerを再導入しない。
+- 画像のmodel inspectionはまず`image.read`のinline MCP ImageContentを使い、成功する通常ケースでは`artifact.link`、chat attachment、download、materializeを中間経路にしない。ただし`image.read`が`IMAGE_TOO_LARGE`、inline imageなしの`preview_unavailable`、またはclient側inline image transport不調になった場合は、`artifact.link`からのresource materializationをinspection fallbackとして許可する。別processでraw bytesを処理する場合もmaterialize等のfile化を使う。public image URLやcustom image viewerを再導入しない。
 - `artifact.link` / `artifact.read` / `artifact.receive` の変更は、ChatGPT Androidを含む実file transferでresource resolutionまたはbyte size/SHA-256をread-backして確認する。
 
 ## 大容量成果物の保管
