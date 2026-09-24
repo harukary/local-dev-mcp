@@ -137,7 +137,7 @@ describe("launchd installer", () => {
     const activationPlist = path.join(tempDir, "activation.plist");
     writeFileSync(activationPlist, "placeholder");
     for (const [name, body] of [
-      ["launchctl", `#!/bin/bash\nprintf '%s\\n' "$*" >> "$FAKE_LAUNCHCTL_LOG"\nexit 0\n`],
+      ["launchctl", `#!/bin/bash\nprintf '%s\\n' "$*" >> "$FAKE_LAUNCHCTL_LOG"\nif [ "$1" = "bootstrap" ] && [[ "$3" == *test.server.plist ]]; then\n  attempts="$(cat "$FAKE_BOOTSTRAP_STATE" 2>/dev/null || printf 0)"\n  if [ "$attempts" -lt 1 ]; then\n    printf 1 > "$FAKE_BOOTSTRAP_STATE"\n    echo "Bootstrap failed: 5: Input/output error" >&2\n    exit 5\n  fi\nfi\nif [ "$1" = "print" ]; then exit 1; fi\nexit 0\n`],
       ["curl", "#!/bin/bash\nexit 0\n"],
       ["sleep", "#!/bin/bash\nexit 0\n"],
     ] as const) {
@@ -163,6 +163,7 @@ describe("launchd installer", () => {
         ...process.env,
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
         FAKE_LAUNCHCTL_LOG: launchctlLog,
+        FAKE_BOOTSTRAP_STATE: path.join(tempDir, "bootstrap-state"),
       },
       encoding: "utf8",
     });
@@ -171,7 +172,8 @@ describe("launchd installer", () => {
     expect(result.stdout).toContain("Activated test.server and test.personal test.business");
     const calls = readFileSync(launchctlLog, "utf8");
     expect(calls).toContain("bootout gui/501/test.server");
-    expect(calls).toContain(`bootstrap gui/501 ${path.join(launchAgentsDir, "test.server.plist")}`);
+    const serverBootstrap = `bootstrap gui/501 ${path.join(launchAgentsDir, "test.server.plist")}`;
+    expect(calls.split("\n").filter((line) => line === serverBootstrap)).toHaveLength(2);
     expect(calls).toContain(`bootstrap gui/501 ${path.join(launchAgentsDir, "test.personal.plist")}`);
     expect(calls).toContain(`bootstrap gui/501 ${path.join(launchAgentsDir, "test.business.plist")}`);
     expect(() => readFileSync(path.join(launchAgentsDir, "test.legacy.plist"))).toThrow();

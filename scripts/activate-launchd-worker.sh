@@ -16,6 +16,29 @@ LEGACY_PERSONAL_MINI_TUNNEL_LABEL="$7"
 shift 7
 TUNNEL_LABELS=("$@")
 
+bootstrap_with_retry() {
+  local label="$1"
+  local plist="$2"
+  local last_error=""
+  for _ in $(seq 1 40); do
+    if last_error="$(launchctl bootstrap "$DOMAIN" "$plist" 2>&1)"; then
+      return 0
+    fi
+    # launchctl can report a transient bootstrap error while the job is already
+    # registered. Treat a visible job as success and let its KeepAlive policy
+    # handle process startup.
+    if launchctl print "$DOMAIN/$label" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "Failed to bootstrap $label after waiting for launchd to release the previous job." >&2
+  if [ -n "$last_error" ]; then
+    echo "$last_error" >&2
+  fi
+  return 1
+}
+
 # The installer can be invoked from local-dev-mcp itself. Give the caller time
 # to return its MCP response, then perform the disruptive restart from this
 # independent launchd-owned worker instead of a descendant of the server job.
@@ -28,10 +51,10 @@ for label in "$SERVER_LABEL" "$LEGACY_TUNNEL_LABEL" "$LEGACY_PERSONAL_MINI_TUNNE
   launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
 done
 
-launchctl bootstrap "$DOMAIN" "$LAUNCH_AGENTS_DIR/$SERVER_LABEL.plist"
+bootstrap_with_retry "$SERVER_LABEL" "$LAUNCH_AGENTS_DIR/$SERVER_LABEL.plist"
 
 healthy=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 240); do
   if curl -fsS "http://127.0.0.1:$SERVICE_PORT/healthz" >/dev/null 2>&1; then
     healthy=1
     break
@@ -44,7 +67,7 @@ if [ "$healthy" -ne 1 ]; then
 fi
 
 for label in "${TUNNEL_LABELS[@]}"; do
-  launchctl bootstrap "$DOMAIN" "$LAUNCH_AGENTS_DIR/$label.plist"
+  bootstrap_with_retry "$label" "$LAUNCH_AGENTS_DIR/$label.plist"
 done
 
 rm -f "$LAUNCH_AGENTS_DIR/$LEGACY_TUNNEL_LABEL.plist" "$LAUNCH_AGENTS_DIR/$LEGACY_PERSONAL_MINI_TUNNEL_LABEL.plist"
