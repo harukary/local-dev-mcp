@@ -124,7 +124,7 @@ describe("shared Todo MCP tools", () => {
   });
   it("publishes the Todo surface without Discord coupling", () => {
     const names = buildToolDefinitions().map((tool) => tool.name);
-    expect(TOOL_SCHEMA_VERSION).toBe("2026-09-25.2");
+    expect(TOOL_SCHEMA_VERSION).toBe("2026-09-25.3");
     expect(names).toEqual(expect.arrayContaining([
       "todo.projects",
       "todo.list",
@@ -137,6 +137,11 @@ describe("shared Todo MCP tools", () => {
       "todo.delete",
     ]));
     expect(names).not.toContain("todo.discord");
+    expect(names).toContain("git.push");
+    const gitPush = buildToolDefinitions().find((tool) => tool.name === "git.push");
+    expect(gitPush?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true });
+    expect(gitPush?.inputSchema.properties).toHaveProperty("project_id");
+    expect(gitPush?.inputSchema.required).toContain("expected_head");
     expect(names.indexOf("todo.projects")).toBeLessThan(10);
     const deletion = buildToolDefinitions().find((tool) => tool.name === "todo.delete");
     expect(deletion?.annotations).toMatchObject({ destructiveHint: true });

@@ -52,6 +52,8 @@ repository source
     - `tool.schema` のversionも確認する。
 11. harmlessな実tool callを1回通し、更新完了とする。
 
+Git pushが必要な運用では、`shell.run` の `git push` より typed `git.push` を優先する。`git.push` は現在branchの設定済みupstreamだけを対象にし、`expected_head`一致、behind拒否、force/tag/delete禁止、remote HEAD read-backを行う。特にScheduled Taskではこの狭いtool surfaceを使い、汎用shell経由の外部mutationを避ける。
+
 ## Refresh UIが見えない場合
 
 新しい `Admin -> Plugins` UIにRefreshが見えなくても、Refresh機能そのものが消えたと即断しない。

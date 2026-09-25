@@ -6,13 +6,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { handleGitInspect, handleGitLog, handleGitShow, handleGitStatus } from "../../src/mcp/tools/dev/git.js";
+import { handleGitInspect, handleGitLog, handleGitPush, handleGitShow, handleGitStatus } from "../../src/mcp/tools/dev/git.js";
 
 let root = "";
+let remoteRoot = "";
 
 afterEach(() => {
   if (root) rmSync(root, { recursive: true, force: true });
+  if (remoteRoot) rmSync(remoteRoot, { recursive: true, force: true });
   root = "";
+  remoteRoot = "";
 });
 
 function run(...args: string[]) {
@@ -28,6 +31,13 @@ function setupRepo() {
   writeFileSync(join(root, "a.txt"), "one\n");
   run("add", "a.txt");
   run("commit", "-q", "-m", "initial");
+}
+
+function setupUpstream() {
+  remoteRoot = realpathSync(mkdtempSync(join(tmpdir(), "local-dev-mcp-git-remote-")));
+  execFileSync("git", ["init", "--bare", "-q", remoteRoot]);
+  run("remote", "add", "origin", remoteRoot);
+  run("push", "-q", "-u", "origin", "main");
 }
 
 function context(): AppContext {
@@ -125,5 +135,44 @@ describe("typed git tools", () => {
     expect(shown.mode).toBe("stat");
     expect(shown.output).toContain("a.txt");
     expect(shown.truncated).toBe(false);
+  });
+
+  it("pushes only the current HEAD to its configured upstream and verifies the remote", async () => {
+    setupRepo();
+    setupUpstream();
+    writeFileSync(join(root, "a.txt"), "two\n");
+    run("add", "a.txt");
+    run("commit", "-q", "-m", "second");
+    const head = run("rev-parse", "HEAD").trim();
+    const ctx = context();
+
+    const pushed = body(await handleGitPush(ctx, "chat-a", { expected_head: head.slice(0, 12) }));
+    expect(pushed).toMatchObject({ status: "pushed", branch: "main", upstream: "origin/main", head, remote_head: head, pushed: true, verified: true, ahead_before: 1 });
+    expect(execFileSync("git", ["rev-parse", "refs/heads/main"], { cwd: remoteRoot, encoding: "utf8" }).trim()).toBe(head);
+    expect(ctx.auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({ tool: "git.push", event: "git_push_succeeded", exitCode: 0 }));
+
+    const noop = body(await handleGitPush(ctx, "chat-a", { expected_head: head }));
+    expect(noop).toMatchObject({ status: "up_to_date", pushed: false, verified: true, head, remote_head: head });
+    expect(ctx.auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({ tool: "git.push", event: "git_push_noop", exitCode: 0 }));
+  });
+
+  it("rejects a stale expected HEAD before pushing", async () => {
+    setupRepo();
+    setupUpstream();
+    const oldHead = run("rev-parse", "HEAD").trim();
+    writeFileSync(join(root, "a.txt"), "two\n");
+    run("add", "a.txt");
+    run("commit", "-q", "-m", "second");
+
+    const result = body(await handleGitPush(context(), "chat-a", { expected_head: oldHead }));
+    expect(result.error).toMatchObject({ code: "GIT_PUSH_HEAD_MISMATCH" });
+    expect(execFileSync("git", ["rev-parse", "refs/heads/main"], { cwd: remoteRoot, encoding: "utf8" }).trim()).toBe(oldHead);
+  });
+
+  it("rejects repositories without a configured upstream", async () => {
+    setupRepo();
+    const head = run("rev-parse", "HEAD").trim();
+    const result = body(await handleGitPush(context(), "chat-a", { expected_head: head }));
+    expect(result.error).toMatchObject({ code: "GIT_PUSH_NO_UPSTREAM" });
   });
 });

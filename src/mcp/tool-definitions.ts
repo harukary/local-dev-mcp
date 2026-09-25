@@ -3,7 +3,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-09-25.2";
+export const TOOL_SCHEMA_VERSION = "2026-09-25.3";
 
 const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "skills.list",
@@ -18,6 +18,7 @@ const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "git.log",
   "git.show",
   "git.diff",
+  "git.push",
   "shell.run",
   "image.read",
   "artifact.link",

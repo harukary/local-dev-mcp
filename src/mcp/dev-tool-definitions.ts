@@ -66,5 +66,18 @@ export function buildDevToolDefinitions() {
     { name: "git.log", description: "Return recent commits for a git ref, optionally scoped to one project path.", inputSchema: { type: "object", properties: { ref: { type: "string" }, path: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } } }, annotations: RO },
     { name: "git.show", description: "Show a commit/ref as a bounded patch, stat, or name-status output, optionally scoped to one project path.", inputSchema: { type: "object", properties: { ref: { type: "string" }, path: { type: "string" }, mode: { type: "string", enum: ["patch", "stat", "name-status"] }, max_bytes: { type: "integer", minimum: 1024, maximum: 2097152 } } }, annotations: RO },
     { name: "git.diff", description: "Return git diff for the selected project.", inputSchema: { type: "object", properties: { path: { type: "string" }, staged: { type: "boolean" }, stat: { type: "boolean" }, max_bytes: { type: "integer" } } }, annotations: RO },
+    {
+      name: "git.push",
+      description: "Safely push only the current branch HEAD to its already-configured upstream branch. Requires expected_head to resolve to the current local HEAD, rejects detached HEAD, missing upstream, and behind/diverged state, never force-pushes, never pushes tags, never deletes refs, and verifies the remote branch HEAD after the push. Prefer this over shell.run for normal Git pushes, especially in ChatGPT Scheduled Tasks.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          expected_head: { type: "string", minLength: 7, maxLength: 64, pattern: "^[0-9a-fA-F]+$", description: "Expected local HEAD commit SHA or unambiguous hex abbreviation obtained from git.inspect/status/log/show. The push is rejected if it does not resolve exactly to the current HEAD." },
+        },
+        required: ["expected_head"],
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
   ];
 }

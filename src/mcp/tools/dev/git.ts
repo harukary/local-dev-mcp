@@ -253,3 +253,161 @@ export async function handleGitDiff(ctx: AppContext, chatContextId: string, args
     return jsonError("GIT_DIFF_FAILED", err instanceof Error ? err.message : String(err));
   }
 }
+
+function parseRemoteHead(output: string): string | null {
+  const line = output.trim().split("\n").find(Boolean);
+  const sha = line?.split(/\s+/)[0];
+  return sha && /^[0-9a-f]{40,64}$/i.test(sha) ? sha.toLowerCase() : null;
+}
+
+export async function handleGitPush(ctx: AppContext, chatContextId: string, args: { expected_head?: string }) {
+  const project = getActiveProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+
+  const expectedHead = args.expected_head?.trim();
+  if (!expectedHead || !/^[0-9a-f]{7,64}$/i.test(expectedHead)) {
+    return jsonError("GIT_PUSH_EXPECTED_HEAD_REQUIRED", "expected_head must be a 7-64 character hexadecimal commit SHA or abbreviation.");
+  }
+
+  try {
+    const status = await readStatus(project, false);
+    if (!status.branch) return jsonError("GIT_PUSH_DETACHED_HEAD", "git.push requires a checked-out branch; detached HEAD is not supported.");
+    if (!status.upstream) return jsonError("GIT_PUSH_NO_UPSTREAM", "The current branch has no configured upstream. Configure it explicitly before using git.push.");
+    if (status.behind > 0) {
+      return jsonError("GIT_PUSH_REMOTE_AHEAD", "The configured upstream contains commits not present locally. Fetch/reconcile before pushing.", {
+        branch: status.branch,
+        upstream: status.upstream,
+        ahead: status.ahead,
+        behind: status.behind,
+      });
+    }
+
+    const [{ stdout: localHeadOut }, { stdout: expectedResolvedOut }, { stdout: remotesOut }] = await Promise.all([
+      git(project, ["rev-parse", "HEAD"]),
+      git(project, ["rev-parse", "--verify", `${expectedHead}^{commit}`]),
+      git(project, ["remote"]),
+    ]);
+    const localHead = String(localHeadOut).trim().toLowerCase();
+    const expectedResolved = String(expectedResolvedOut).trim().toLowerCase();
+    if (expectedResolved !== localHead) {
+      return jsonError("GIT_PUSH_HEAD_MISMATCH", "expected_head does not resolve to the current local HEAD; refusing to push a different commit.", {
+        expected_head: expectedResolved,
+        actual_head: localHead,
+      });
+    }
+
+    const remotes = String(remotesOut).split("\n").map((value) => value.trim()).filter(Boolean).sort((a, b) => b.length - a.length);
+    const remote = remotes.find((candidate) => status.upstream === candidate || status.upstream?.startsWith(`${candidate}/`));
+    if (!remote || status.upstream === remote) {
+      return jsonError("GIT_PUSH_INVALID_UPSTREAM", `Could not resolve configured upstream ${status.upstream} to a remote branch.`);
+    }
+    const remoteBranch = status.upstream.slice(remote.length + 1);
+    if (!remoteBranch || remoteBranch.startsWith("-") || remoteBranch.includes("..")) {
+      return jsonError("GIT_PUSH_INVALID_UPSTREAM", `Configured upstream branch is not safe to push: ${status.upstream}.`);
+    }
+    const remoteRef = `refs/heads/${remoteBranch}`;
+
+    if (status.ahead === 0) {
+      const { stdout: remoteOut } = await git(project, ["ls-remote", remote, remoteRef]);
+      const remoteHead = parseRemoteHead(String(remoteOut));
+      const verified = remoteHead === localHead;
+      await ctx.auditLogger.log({
+        timestamp: new Date().toISOString(),
+        chatContextId,
+        tool: "git.push",
+        event: "git_push_noop",
+        projectId: project.projectId,
+        cwd: project.hostRoot,
+        command: `git push ${remote} HEAD:${remoteRef}`,
+        riskLevel: "network_or_dependency",
+        enforcement: "audit_only",
+        exitCode: verified ? 0 : 1,
+        error: verified ? undefined : "Configured upstream is not ahead locally but remote HEAD does not match local HEAD.",
+      });
+      if (!verified) {
+        return jsonError("GIT_PUSH_REMOTE_MISMATCH", "Local status reported no commits ahead, but the remote branch HEAD does not match local HEAD. Fetch before retrying.", {
+          branch: status.branch,
+          upstream: status.upstream,
+          local_head: localHead,
+          remote_head: remoteHead,
+        });
+      }
+      return jsonResult({
+        project_id: project.projectId,
+        status: "up_to_date",
+        branch: status.branch,
+        upstream: status.upstream,
+        head: localHead,
+        remote_head: remoteHead,
+        pushed: false,
+        verified: true,
+      });
+    }
+
+    const startedAt = Date.now();
+    try {
+      const pushed = await git(project, ["push", "--porcelain", remote, `HEAD:${remoteRef}`]);
+      const { stdout: remoteOut } = await git(project, ["ls-remote", remote, remoteRef]);
+      const remoteHead = parseRemoteHead(String(remoteOut));
+      const verified = remoteHead === localHead;
+      await ctx.auditLogger.log({
+        timestamp: new Date().toISOString(),
+        chatContextId,
+        tool: "git.push",
+        event: verified ? "git_push_succeeded" : "git_push_verification_failed",
+        projectId: project.projectId,
+        cwd: project.hostRoot,
+        command: `git push ${remote} HEAD:${remoteRef}`,
+        riskLevel: "network_or_dependency",
+        enforcement: "audit_only",
+        exitCode: verified ? 0 : 1,
+        durationMs: Date.now() - startedAt,
+        error: verified ? undefined : "Remote HEAD did not match the pushed local HEAD during read-back.",
+      });
+      if (!verified) {
+        return jsonError("GIT_PUSH_VERIFY_FAILED", "Push returned successfully but remote HEAD verification did not match local HEAD.", {
+          branch: status.branch,
+          upstream: status.upstream,
+          local_head: localHead,
+          remote_head: remoteHead,
+        });
+      }
+      return jsonResult({
+        project_id: project.projectId,
+        status: "pushed",
+        branch: status.branch,
+        upstream: status.upstream,
+        head: localHead,
+        remote_head: remoteHead,
+        ahead_before: status.ahead,
+        pushed: true,
+        verified: true,
+        git_output: `${String(pushed.stdout)}${String(pushed.stderr)}`.trim().slice(0, 8192),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await ctx.auditLogger.log({
+        timestamp: new Date().toISOString(),
+        chatContextId,
+        tool: "git.push",
+        event: "git_push_failed",
+        projectId: project.projectId,
+        cwd: project.hostRoot,
+        command: `git push ${remote} HEAD:${remoteRef}`,
+        riskLevel: "network_or_dependency",
+        enforcement: "audit_only",
+        exitCode: 1,
+        durationMs: Date.now() - startedAt,
+        error: message,
+      });
+      return jsonError("GIT_PUSH_FAILED", message, {
+        branch: status.branch,
+        upstream: status.upstream,
+        head: localHead,
+        ahead_before: status.ahead,
+      });
+    }
+  } catch (err) {
+    return jsonError("GIT_PUSH_PREFLIGHT_FAILED", err instanceof Error ? err.message : String(err));
+  }
+}
