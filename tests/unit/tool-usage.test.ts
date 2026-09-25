@@ -73,6 +73,11 @@ describe("ToolUsageMetrics", () => {
     expect(missing.tools).toEqual([]);
 
     expect(metrics.view({ detail: "full" })).toHaveProperty("projects.alpha");
+    const filteredFull = metrics.view({ detail: "full", project_id: "alpha", recent_days: 7 }) as { detail: string; scope: { project_id: string | null }; totals: { calls: number }; tools: Array<{ name: string }> };
+    expect(filteredFull.detail).toBe("summary");
+    expect(filteredFull.scope.project_id).toBe("alpha");
+    expect(filteredFull.totals.calls).toBe(2);
+    expect(filteredFull.tools.map(tool => tool.name)).toEqual(expect.arrayContaining(["workspace.read", "workspace.search"]));
   });
 
   it("loads and continues a previous aggregate", () => {

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { browserSessionIdForContext, browserStopRunsMaintenance, browserToolUsesOuterOperationLock, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse } from "../../src/mcp/tools/browser.js";
+import { browserSessionIdForContext, browserStopRunsMaintenance, browserToolUsesOuterOperationLock, classifyBrowserFailureReason, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse } from "../../src/mcp/tools/browser.js";
 
 const CHAT_ID = "chatgpt-session:chat-a";
 
@@ -66,6 +66,13 @@ describe("browser tools", () => {
     expect(browserStopRunsMaintenance("explicit_stop")).toBe(true);
     expect(browserStopRunsMaintenance("idle_timeout")).toBe(true);
     expect(browserStopRunsMaintenance("startup_reconcile")).toBe(true);
+  });
+
+  it("classifies common browser action failures for recovery", () => {
+    expect(classifyBrowserFailureReason(new Error("locator.click: Timeout 15000ms exceeded."))).toBe("timeout");
+    expect(classifyBrowserFailureReason(new Error("strict mode violation: locator resolved to 2 elements"))).toBe("selector_ambiguous");
+    expect(classifyBrowserFailureReason(new Error("element intercepts pointer events"))).toBe("pointer_intercepted");
+    expect(classifyBrowserFailureReason(new Error("Selected browser target no longer exists"))).toBe("target_closed");
   });
 
   it("derives one stable profile per conversation independent of project", () => {

@@ -9,6 +9,7 @@ import type { ProjectConfig } from "../../types.js";
 import { applyWorkingDirectory } from "../../project/working-directory.js";
 import { handleImageRead } from "./image-read.js";
 import { observeAfterAction } from "../observation.js";
+import { structuredTextFallback } from "../output.js";
 import { requestSignal } from "../request-context.js";
 import {
   AgentDeviceCommandError,
@@ -54,7 +55,7 @@ type MobileWaitFor = { target: string; timeout_ms?: number };
 function jsonResult(value: unknown, imageContent: ImageContent[] = []): JsonResult {
   return {
     structuredContent: value,
-    content: [{ type: "text", text: JSON.stringify(value) }, ...imageContent],
+    content: [{ type: "text", text: structuredTextFallback(value) }, ...imageContent],
   };
 }
 

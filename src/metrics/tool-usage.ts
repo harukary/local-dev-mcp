@@ -198,11 +198,12 @@ export class ToolUsageMetrics {
 
   view(options: { detail?: "summary" | "full"; project_id?: string; prefix?: string; limit?: number; recent_days?: number } = {}) {
     const snapshot = this.snapshot();
-    if (options.detail === "full") return snapshot;
     const projectId = options.project_id?.trim();
     const project = projectId ? snapshot.projects[projectId] : undefined;
     const prefix = options.prefix?.trim() || "";
     const limit = Math.min(200, Math.max(1, options.limit ?? 30));
+    const hasFilter = Boolean(projectId || prefix || options.recent_days !== undefined || options.limit !== undefined);
+    if (options.detail === "full" && !hasFilter) return snapshot;
     if (options.recent_days !== undefined) {
       const recentDays = Math.min(31, Math.max(1, Math.floor(options.recent_days)));
       const today = new Date().toISOString().slice(0, 10);

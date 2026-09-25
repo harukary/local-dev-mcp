@@ -9,3 +9,17 @@ export function utf8Prefix(text: string, maxBytes: number): string {
 export function boundedInteger(value: unknown, defaultValue: number, min: number, max: number): number {
   return typeof value === "number" && Number.isSafeInteger(value) ? Math.min(max, Math.max(min, value)) : defaultValue;
 }
+
+export function structuredTextFallback(value: unknown, options: { max_full_bytes?: number; preview_bytes?: number } = {}): string {
+  const serialized = JSON.stringify(value);
+  const serializedBytes = Buffer.byteLength(serialized);
+  const maxFullBytes = Math.max(256, options.max_full_bytes ?? 4096);
+  if (serializedBytes <= maxFullBytes) return serialized;
+  const previewBytes = Math.min(maxFullBytes, Math.max(128, options.preview_bytes ?? 1024));
+  return JSON.stringify({
+    structured_content: true,
+    text_fallback_truncated: true,
+    serialized_bytes: serializedBytes,
+    preview: utf8Prefix(serialized, previewBytes),
+  });
+}

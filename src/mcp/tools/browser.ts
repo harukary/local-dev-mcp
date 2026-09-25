@@ -16,7 +16,7 @@ import { BrowserOperationCoordinator } from "../../browser/browser-operation-coo
 import { CdpClient, withCdpClient, closeCdpClients } from "../../browser/cdp-client.js";
 import { withBrowserPage, clickElement, fillElement, locatorFor, closeBrowserConnections } from "../../browser/interaction.js";
 import { observeAfterAction } from "../observation.js";
-import { utf8Prefix } from "../output.js";
+import { structuredTextFallback, utf8Prefix } from "../output.js";
 import { operationSignal } from "../request-context.js";
 import { resolveProjectPath } from "./dev/common.js";
 
@@ -93,7 +93,7 @@ class BrowserTabError extends Error {
 function jsonResult(value: unknown, imageContent: ImageContent[] = []): JsonResult {
   return {
     structuredContent: value,
-    content: [{ type: "text", text: JSON.stringify(value) }, ...imageContent],
+    content: [{ type: "text", text: structuredTextFallback(value) }, ...imageContent],
   };
 }
 
@@ -116,6 +116,52 @@ function tabError(error: unknown, fallbackCode: string, details?: unknown) {
   return error instanceof BrowserTabError
     ? jsonError(error.code, error.message, details)
     : jsonError(fallbackCode, error instanceof Error ? error.message : String(error), details);
+}
+
+export function classifyBrowserFailureReason(error: unknown): string {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (message.includes("strict mode violation")) return "selector_ambiguous";
+  if (message.includes("intercepts pointer events")) return "pointer_intercepted";
+  if (message.includes("not enabled")) return "not_enabled";
+  if (message.includes("not visible")) return "not_visible";
+  if (message.includes("detached")) return "detached";
+  if (message.includes("target page, context or browser has been closed") || message.includes("selected browser target no longer exists")) return "target_closed";
+  if (message.includes("timeout")) return "timeout";
+  return "unknown";
+}
+
+async function browserFailureObservation(session: BrowserSession, probe: { selector?: string; frame?: string; text?: string; url_contains?: string; title_contains?: string } = {}) {
+  try {
+    const target = await validateActiveTarget(session);
+    return await withBrowserPage(session.port, target.id, async page => {
+      const observation: Record<string, unknown> = { target_id: target.id, url: page.url() };
+      try { observation.title = await page.title(); } catch { /* Best-effort failure context. */ }
+      if (probe.selector) {
+        try {
+          const locator = locatorFor(page, { selector: probe.selector, frame: probe.frame });
+          const matches = await locator.count();
+          observation.selector_matches = matches;
+          if (matches > 0) {
+            observation.selector_visible = await locator.first().isVisible().catch(() => undefined);
+            observation.selector_enabled = await locator.first().isEnabled().catch(() => undefined);
+          }
+        } catch (selectorError) {
+          observation.selector_probe_error = utf8Prefix(selectorError instanceof Error ? selectorError.message : String(selectorError), 512);
+        }
+      }
+      if (probe.text || probe.url_contains || probe.title_contains) {
+        const conditions = await page.evaluate(({ text, urlContains, titleContains }) => ({
+          ...(text ? { text_found: (document.body?.innerText ?? "").includes(text) } : {}),
+          ...(urlContains ? { url_matches: location.href.includes(urlContains) } : {}),
+          ...(titleContains ? { title_matches: document.title.includes(titleContains) } : {}),
+        }), { text: probe.text, urlContains: probe.url_contains, titleContains: probe.title_contains });
+        Object.assign(observation, conditions);
+      }
+      return observation;
+    });
+  } catch (probeError) {
+    return { probe_error: utf8Prefix(probeError instanceof Error ? probeError.message : String(probeError), 512) };
+  }
 }
 
 async function readActiveTargetId(profileKey: string): Promise<string | undefined> {
@@ -1168,7 +1214,13 @@ export async function handleBrowserClick(ctx: AppContext, chatContextId: string,
     await withBrowserPage(session.port, target.id, page => clickElement(page, { selector: args.selector!, frame: args.frame }));
     return await observeBrowserAction(ctx, chatContextId, project, session, "browser.click", args, { selector: args.selector });
   } catch (error) {
-    return jsonError("BROWSER_CLICK_FAILED", error instanceof Error ? error.message : String(error), { action_applied: "unknown", retry_action: false });
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonError("BROWSER_CLICK_FAILED", message, {
+      action_applied: "unknown",
+      retry_action: false,
+      reason: classifyBrowserFailureReason(error),
+      observation: await browserFailureObservation(session, { selector: args.selector, frame: args.frame }),
+    });
   }
 }
 
@@ -1183,7 +1235,13 @@ export async function handleBrowserType(ctx: AppContext, chatContextId: string, 
     await withBrowserPage(session.port, target.id, page => fillElement(page, { selector: args.selector!, frame: args.frame, text: args.text!, submit: args.submit }));
     return await observeBrowserAction(ctx, chatContextId, project, session, "browser.type", args, { selector: args.selector, submitted: args.submit === true });
   } catch (error) {
-    return jsonError("BROWSER_TYPE_FAILED", error instanceof Error ? error.message : String(error), { action_applied: "unknown", retry_action: false });
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonError("BROWSER_TYPE_FAILED", message, {
+      action_applied: "unknown",
+      retry_action: false,
+      reason: classifyBrowserFailureReason(error),
+      observation: await browserFailureObservation(session, { selector: args.selector, frame: args.frame }),
+    });
   }
 }
 
@@ -1211,7 +1269,12 @@ export async function handleBrowserWait(ctx: AppContext, chatContextId: string, 
     });
     return jsonResult({ ok: true, project_id: project.projectId, action: "browser.wait", waited_ms: Date.now() - started });
   } catch (error) {
-    return jsonError("BROWSER_WAIT_FAILED", error instanceof Error ? error.message : String(error), { timeout_ms: timeoutMs });
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonError("BROWSER_WAIT_FAILED", message, {
+      timeout_ms: timeoutMs,
+      reason: classifyBrowserFailureReason(error),
+      observation: await browserFailureObservation(session, args),
+    });
   }
 }
 
@@ -1262,7 +1325,13 @@ export async function handleBrowserInteract(ctx: AppContext, chat: string, args:
     });
     return await observeBrowserAction(ctx, chat, project, session, "browser.interact", args, { interaction: args.action, selector: args.selector });
   } catch (error) {
-    return jsonError("BROWSER_INTERACTION_FAILED", error instanceof Error ? error.message : String(error), { action_applied: "unknown", retry_action: false });
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonError("BROWSER_INTERACTION_FAILED", message, {
+      action_applied: "unknown",
+      retry_action: false,
+      reason: classifyBrowserFailureReason(error),
+      observation: await browserFailureObservation(session, { selector: args.selector, frame: args.frame }),
+    });
   }
 }
 

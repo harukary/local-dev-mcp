@@ -4,6 +4,7 @@ import { relative, resolve, isAbsolute, dirname, matchesGlob } from "node:path";
 import type { AppContext } from "../../server.js";
 import type { ProjectConfig } from "../../../types.js";
 import { applyWorkingDirectory } from "../../../project/working-directory.js";
+import { structuredTextFallback } from "../../output.js";
 
 function asStructuredContent(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -15,7 +16,7 @@ export function jsonResult(value: unknown) {
   const structuredContent = asStructuredContent(value);
   return {
     ...(structuredContent ? { structuredContent } : {}),
-    content: [{ type: "text" as const, text: JSON.stringify(value) }],
+    content: [{ type: "text" as const, text: structuredContent ? structuredTextFallback(value) : JSON.stringify(value) }],
   };
 }
 

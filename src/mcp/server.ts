@@ -42,6 +42,7 @@ import { handleWorkspaceBatch, type ReadBatchItem } from "./tools/dev/batch.js";
 import { runMobileToolOperation } from "./tools/mobile.js";
 import { validateToolInput } from "./input-validation.js";
 import { withRequestSignal } from "./request-context.js";
+import { structuredTextFallback } from "./output.js";
 import { jsonError } from "./tools/dev/common.js";
 import { handleBrowserInteract } from "./tools/browser.js";
 import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleGitDiff } from "./tools/dev/git.js";
@@ -616,7 +617,7 @@ export function createMcpServer(ctx: AppContext): Server {
           const usage = ctx.toolUsageMetrics.view(args as { detail?: "summary" | "full"; project_id?: string; prefix?: string; limit?: number; recent_days?: number });
           return {
             structuredContent: usage,
-            content: [{ type: "text", text: JSON.stringify(usage) }],
+            content: [{ type: "text", text: structuredTextFallback(usage) }],
           };
         }
 
@@ -625,7 +626,7 @@ export function createMcpServer(ctx: AppContext): Server {
           const schema = buildToolSchemaSnapshot(args as { prefix?: string; detail?: "summary" | "full" });
           return {
             structuredContent: schema,
-            content: [{ type: "text", text: JSON.stringify(schema) }],
+            content: [{ type: "text", text: structuredTextFallback(schema) }],
           };
         }
 

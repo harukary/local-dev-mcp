@@ -3,7 +3,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-09-25.1";
+export const TOOL_SCHEMA_VERSION = "2026-09-25.2";
 
 const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "skills.list",
@@ -440,12 +440,12 @@ export function buildToolDefinitions() {
     },
     {
       name: "tool.usage",
-      description: "Return aggregated MCP tool usage metrics without recording tool arguments or outputs. Defaults to a compact top-30 lifetime summary; use recent_days (1-31 UTC calendar days), project_id, prefix, and limit for recent analysis, or detail=full for the complete aggregate.",
+      description: "Return aggregated MCP tool usage metrics without recording tool arguments or outputs. Defaults to a compact top-30 lifetime summary. project_id, prefix, recent_days, or limit always produce a bounded filtered summary even when detail=full is also supplied; unfiltered detail=full returns the complete aggregate.",
       inputSchema: { type: "object", properties: {
-        detail: { type: "string", enum: ["summary", "full"], description: "Compact summary is the default; full returns the complete aggregate." },
-        project_id: { type: "string", description: "Optional project filter for summary mode." },
-        prefix: { type: "string", description: "Optional tool-name prefix filter for summary mode, e.g. workspace. or mobile." },
-        limit: { type: "integer", minimum: 1, maximum: 200, description: "Maximum tools in summary mode. Defaults to 30." },
+        detail: { type: "string", enum: ["summary", "full"], description: "Compact summary is the default. Unfiltered full returns the complete aggregate; any filter keeps the response bounded." },
+        project_id: { type: "string", description: "Optional project filter. Supplying it keeps the response in bounded summary form." },
+        prefix: { type: "string", description: "Optional tool-name prefix filter, e.g. workspace. or mobile. Supplying it keeps the response bounded." },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "Maximum returned tools. Defaults to 30 and keeps the response bounded." },
         recent_days: { type: "integer", minimum: 1, maximum: 31, description: "Aggregate only the most recent UTC calendar days, including today. Daily buckets are retained for up to 31 days." },
       }, additionalProperties: false },
       annotations: { readOnlyHint: true, openWorldHint: false },
