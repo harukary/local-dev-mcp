@@ -124,7 +124,7 @@ describe("shared Todo MCP tools", () => {
   });
   it("publishes the Todo surface without Discord coupling", () => {
     const names = buildToolDefinitions().map((tool) => tool.name);
-    expect(TOOL_SCHEMA_VERSION).toBe("2026-09-25.3");
+    expect(TOOL_SCHEMA_VERSION).toBe("2026-09-25.4");
     expect(names).toEqual(expect.arrayContaining([
       "todo.projects",
       "todo.list",

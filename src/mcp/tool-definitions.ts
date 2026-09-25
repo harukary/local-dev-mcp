@@ -3,7 +3,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-09-25.3";
+export const TOOL_SCHEMA_VERSION = "2026-09-25.4";
 
 const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "skills.list",
@@ -314,24 +314,11 @@ export function buildToolDefinitions() {
         },
         required: ["path"],
       },
-      outputSchema: {
-        type: "object",
-        properties: {
-          project_id: { type: "string" },
-          path: { type: "string" },
-          absolute_path: { type: "string" },
-          mime_type: { type: "string" },
-          size_bytes: { type: "number" },
-          width: { type: "number" },
-          height: { type: "number" },
-          returned_image_mode: { type: "string" },
-          returned_image_mime_type: { type: "string" },
-          returned_image_size_bytes: { type: "number" },
-          returned_image_width: { type: "number" },
-          returned_image_height: { type: "number" },
-        },
-        required: ["project_id", "path", "absolute_path", "mime_type", "size_bytes", "returned_image_mode"],
-      },
+      // Intentionally omit outputSchema here. As observed with the current ChatGPT
+      // connector bridge, declaring outputSchema causes image.read to be normalized
+      // to structuredContent only, dropping MCP ImageContent from the model-facing
+      // tool result. Image-bearing tools such as mobile.screenshot work through the
+      // untyped CallToolResult path and preserve content_items, including images.
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     {

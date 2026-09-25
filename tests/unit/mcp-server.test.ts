@@ -206,7 +206,7 @@ describe("tool schema snapshot", () => {
     const mobileScreenshot = snapshot.tools.find((tool) => tool.name === "mobile.screenshot");
     const gitPush = snapshot.tools.find((tool) => tool.name === "git.push");
 
-    expect(snapshot.schema_version).toBe("2026-09-25.3");
+    expect(snapshot.schema_version).toBe("2026-09-25.4");
     expect(names).toContain("tool.schema");
     expect(names).toContain("git.push");
     expect(gitPush?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true });
@@ -221,10 +221,9 @@ describe("tool schema snapshot", () => {
     expect(names.some((name) => name.startsWith("private_notes."))).toBe(false);
 
     expect(imageRead?._meta).toBeUndefined();
-    expect(imageRead?.outputSchema).toMatchObject({
-      required: expect.arrayContaining(["project_id", "path", "returned_image_mode"]),
-    });
-    expect(imageRead?.outputSchema).not.toHaveProperty("properties.display_url");
+    // Keep image.read on the raw MCP CallToolResult path so ChatGPT preserves
+    // inline ImageContent instead of collapsing the result to structured output.
+    expect(imageRead?.outputSchema).toBeUndefined();
     expect(imageRead?.description).toContain("does not create a user-visible chat attachment");
     expect(imageRead?.description).toContain("Preferred first path for model-only inspection");
     expect(imageRead?.description).toContain("Do not materialize preemptively");

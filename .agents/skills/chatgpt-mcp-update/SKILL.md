@@ -99,3 +99,9 @@ Git pushが必要な運用では、`shell.run` の `git push` より typed `git.
 - Branch/new chatのmodel-facing tool binding
 
 `runtime=new / snapshot=old` ならRefresh不足、`runtime=new / snapshot=new / branch=old` ならBranch/rebind不足として扱う。
+
+## ImageContent compatibility
+
+`image.read` は現在、意図的に `outputSchema` を宣言しない。2026-09-25の実測で、ChatGPTのconnector bridgeは `outputSchema` がある `image.read` をstructured objectへ正規化し、MCP `content[]` のImageContentをmodel-facing resultから落とした。一方、`outputSchema` を持たない `mobile.screenshot` は同じImageContentを `content_items` として保持した。
+
+画像を返すtoolで `outputSchema` を追加・復活させる場合は、ChatGPT上の実callで画像blockがmodel-facing resultに残ることを必ず検証する。unit testでMCP `content` にimageがあるだけでは十分ではない。
