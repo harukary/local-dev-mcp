@@ -3,9 +3,13 @@ import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "nod
 import { dirname, join } from "node:path";
 import { copyChromeProfileSnapshot, type SnapshotCopyMode } from "./snapshot-copier.js";
 
-const PROFILE_RETENTION_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_PROFILE_RETENTION_MS = 72 * 60 * 60 * 1000;
+export const DEFAULT_PROFILE_QUOTA_GRACE_MS = 60 * 60 * 1000;
+export const DEFAULT_MAX_BROWSER_PROFILES = 8;
+export const DEFAULT_MAX_BROWSER_PROFILE_BYTES = 8 * 1024 * 1024 * 1024;
 const LOCK_STALE_MS = 2 * 60 * 1000;
 const CLAIM_REFRESH_MS = 6 * 60 * 60 * 1000;
+const ABANDONED_OPERATION_GRACE_MS = 15 * 60 * 1000;
 
 export type AuthClaimStatus = "authenticated" | "signed_out" | "unknown";
 
@@ -61,7 +65,27 @@ type BrowserState = {
   updatedAt: string;
 };
 
-type ManagerOptions = { home: string; now?: () => Date; lockTimeoutMs?: number; lockStaleMs?: number };
+export type BrowserResumeTab = {
+  url: string;
+  active: boolean;
+};
+
+export type BrowserResumeState = {
+  schemaVersion: 1;
+  capturedAt: string;
+  tabs: BrowserResumeTab[];
+};
+
+type ManagerOptions = {
+  home: string;
+  now?: () => Date;
+  lockTimeoutMs?: number;
+  lockStaleMs?: number;
+  profileRetentionMs?: number;
+  profileQuotaGraceMs?: number;
+  maxProfiles?: number;
+  maxProfileBytes?: number;
+};
 
 export type ChatProfile = {
   profileKey: string;
@@ -93,12 +117,20 @@ export class BrowserProfileManager {
   private readonly now: () => Date;
   private readonly lockTimeoutMs: number;
   private readonly lockStaleMs: number;
+  private readonly profileRetentionMs: number;
+  private readonly profileQuotaGraceMs: number;
+  private readonly maxProfiles: number;
+  private readonly maxProfileBytes: number;
 
   constructor(options: ManagerOptions) {
     this.home = options.home;
     this.now = options.now ?? (() => new Date());
     this.lockTimeoutMs = options.lockTimeoutMs ?? 5000;
     this.lockStaleMs = options.lockStaleMs ?? LOCK_STALE_MS;
+    this.profileRetentionMs = requirePositiveLimit(options.profileRetentionMs ?? DEFAULT_PROFILE_RETENTION_MS, "profileRetentionMs");
+    this.profileQuotaGraceMs = requirePositiveLimit(options.profileQuotaGraceMs ?? DEFAULT_PROFILE_QUOTA_GRACE_MS, "profileQuotaGraceMs");
+    this.maxProfiles = requirePositiveLimit(options.maxProfiles ?? DEFAULT_MAX_BROWSER_PROFILES, "maxProfiles");
+    this.maxProfileBytes = requirePositiveLimit(options.maxProfileBytes ?? DEFAULT_MAX_BROWSER_PROFILE_BYTES, "maxProfileBytes");
   }
 
   async initialize(
@@ -113,11 +145,19 @@ export class BrowserProfileManager {
       mkdir(join(this.home, "staging"), { recursive: true, mode: 0o700 }),
       mkdir(join(this.home, "trash"), { recursive: true, mode: 0o700 }),
     ]);
+    let existingState = false;
     try {
       await this.readState();
-      return;
+      existingState = true;
     } catch (error) {
       if (!(error instanceof BrowserProfileError) || error.code !== "BROWSER_STATE_NOT_FOUND") throw error;
+    }
+    if (existingState) {
+      await this.withLock("state", async () => {
+        await this.recoverAbandonedOperations();
+        await this.ensureResumeStates();
+      });
+      return;
     }
     if (seedProfileRoot && options.seedState !== "quiescent") {
       throw new BrowserProfileError("BROWSER_PROFILE_MIGRATION_STATE_UNKNOWN", "Legacy browser profile state was not verified as quiescent.");
@@ -127,7 +167,11 @@ export class BrowserProfileManager {
         if (error instanceof BrowserProfileError && error.code === "BROWSER_STATE_NOT_FOUND") return undefined;
         throw error;
       });
-      if (existing) return;
+      if (existing) {
+        await this.recoverAbandonedOperations();
+        await this.ensureResumeStates();
+        return;
+      }
       await this.recoverAbandonedOperations();
       if (seedProfileRoot && options.revalidateSeed && !(await options.revalidateSeed())) {
         throw new BrowserProfileError("BROWSER_PROFILE_MIGRATION_REQUIRES_STOP", "Legacy browser became active before migration.");
@@ -170,6 +214,7 @@ export class BrowserProfileManager {
         baseVerification: golden.snapshotVerification ?? "structural_only",
         };
         await this.atomicWriteJson(join(staging, "manifest.json"), manifest);
+        await this.atomicWriteJson(join(staging, "resume.json"), this.emptyResumeState(now));
         await rename(staging, destination);
         return this.publicProfile(manifest);
       } catch (error) {
@@ -280,22 +325,38 @@ export class BrowserProfileManager {
     return started;
   }
 
-  async finishCheckpoint(profileKey: string, lease: BrowserLease, claims: AuthClaimInput[]): Promise<void> {
+  async finishCheckpoint(
+    profileKey: string,
+    lease: BrowserLease,
+    claims: AuthClaimInput[],
+    tabs: BrowserResumeTab[],
+  ): Promise<void> {
     const state = await this.readState();
     const stored = this.storeAuthClaims(state.principalSalt, claims);
-    await this.updateChatManifest(profileKey, (manifest) => {
+    await this.withLock(`profile-${profileKey}`, async () => {
+      const manifest = await this.readChatManifest(profileKey);
       if (manifest.state !== "checkpointing" || !sameLease(manifest.lease, lease)) {
         throw new BrowserProfileError("BROWSER_PROFILE_BUSY", "Browser profile lease changed during checkpointing.");
       }
       const { lease: _lease, ...rest } = manifest;
-      return {
+      const lastUsedAt = this.now().toISOString();
+      await this.atomicWriteJson(this.resumeStatePath(profileKey), {
+        schemaVersion: 1,
+        capturedAt: lastUsedAt,
+        tabs: normalizeResumeTabs(tabs),
+      } satisfies BrowserResumeState);
+      await this.atomicWriteJson(this.chatManifestPath(profileKey), {
         ...rest,
         state: "idle",
         authClaims: stored,
-        lastUsedAt: this.now().toISOString(),
+        lastUsedAt,
         revision: manifest.revision + 1,
-      };
+      });
     });
+  }
+
+  async getResumeState(profileKey: string): Promise<BrowserResumeState> {
+    return await this.readResumeState(profileKey);
   }
 
   async markIdle(profileKey: string): Promise<void> {
@@ -394,43 +455,99 @@ export class BrowserProfileManager {
     snapshotBytes: number;
     copyMode: SnapshotCopyMode;
     snapshotVerification: SnapshotVerification;
+    resumableTabCount: number;
   }> {
     const profile = await this.getOwnedProfile(chatContextId);
     const manifest = await this.readChatManifest(profile.profileKey);
+    const resume = await this.readResumeState(profile.profileKey);
     return {
       profileKey: manifest.profileKey,
       state: manifest.state,
       lastUsedAt: manifest.lastUsedAt,
-      gcAfter: new Date(Date.parse(manifest.lastUsedAt) + PROFILE_RETENTION_MS).toISOString(),
+      gcAfter: new Date(Date.parse(manifest.lastUsedAt) + this.profileRetentionMs).toISOString(),
       authenticatedProbeIds: activeClaims(manifest.authClaims, this.now()).map((claim) => claim.probeId).sort(),
       baseGeneration: manifest.baseGeneration,
       snapshotBytes: manifest.snapshotBytes,
       copyMode: manifest.copyMode,
       snapshotVerification: manifest.baseVerification ?? "structural_only",
+      resumableTabCount: resume.tabs.length,
     };
   }
 
-  async collectGarbage(): Promise<{ deletedProfileKeys: string[] }> {
+  async inventory(): Promise<{
+    profileCount: number;
+    runningProfileCount: number;
+    totalSnapshotBytes: number;
+    maxProfiles: number;
+    maxProfileBytes: number;
+    retentionMs: number;
+  }> {
+    const profiles = await this.listManagedProfiles();
+    return {
+      profileCount: profiles.length,
+      runningProfileCount: profiles.filter((profile) => profile.state === "running" || profile.state === "checkpointing").length,
+      totalSnapshotBytes: profiles.reduce((total, profile) => total + profile.snapshotBytes, 0),
+      maxProfiles: this.maxProfiles,
+      maxProfileBytes: this.maxProfileBytes,
+      retentionMs: this.profileRetentionMs,
+    };
+  }
+
+  async collectGarbage(): Promise<{
+    deletedProfileKeys: string[];
+    remainingProfileCount: number;
+    remainingSnapshotBytes: number;
+    limitsSatisfied: boolean;
+  }> {
     const deletedProfileKeys: string[] = [];
+    let remainingProfileCount = 0;
+    let remainingSnapshotBytes = 0;
     await this.withLock("state", async () => {
+      const manifests: ChatProfileManifest[] = [];
       for (const entry of await readdir(this.chatRoot(), { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
-        const profileKey = entry.name;
-        const manifest = await this.readChatManifest(profileKey).catch(() => undefined);
-        if (!manifest || manifest.state !== "idle" || manifest.lease) continue;
-        if (this.now().getTime() - Date.parse(manifest.lastUsedAt) < PROFILE_RETENTION_MS) continue;
-        await this.withLock(`profile-${profileKey}`, async () => {
-          const current = await this.readChatManifest(profileKey).catch(() => undefined);
+        const manifest = await this.readChatManifest(entry.name).catch(() => undefined);
+        if (manifest) manifests.push(manifest);
+      }
+      remainingProfileCount = manifests.length;
+      remainingSnapshotBytes = manifests.reduce((total, manifest) => total + manifest.snapshotBytes, 0);
+      const candidates = manifests
+        .filter((manifest) => manifest.state === "idle" && !manifest.lease)
+        .sort((left, right) => left.lastUsedAt.localeCompare(right.lastUsedAt));
+      for (const candidate of candidates) {
+        const ageMs = this.now().getTime() - Date.parse(candidate.lastUsedAt);
+        const expired = ageMs >= this.profileRetentionMs;
+        const overQuota = remainingProfileCount > this.maxProfiles || remainingSnapshotBytes > this.maxProfileBytes;
+        if (!expired && (!overQuota || ageMs < this.profileQuotaGraceMs)) continue;
+        let deleted = false;
+        let deletedBytes = 0;
+        await this.withLock(`profile-${candidate.profileKey}`, async () => {
+          const current = await this.readChatManifest(candidate.profileKey).catch(() => undefined);
           if (!current || current.state !== "idle" || current.lease) return;
-          if (this.now().getTime() - Date.parse(current.lastUsedAt) < PROFILE_RETENTION_MS) return;
-          const trash = join(this.home, "trash", `${profileKey}-${randomUUID()}`);
-          await rename(this.chatDirectory(profileKey), trash);
+          const currentAgeMs = this.now().getTime() - Date.parse(current.lastUsedAt);
+          const currentExpired = currentAgeMs >= this.profileRetentionMs;
+          const stillOverQuota = remainingProfileCount > this.maxProfiles || remainingSnapshotBytes > this.maxProfileBytes;
+          if (!currentExpired && (!stillOverQuota || currentAgeMs < this.profileQuotaGraceMs)) return;
+          const trash = join(this.home, "trash", `${candidate.profileKey}-${randomUUID()}`);
+          await rename(this.chatDirectory(candidate.profileKey), trash);
           await rm(trash, { recursive: true, force: true });
-          deletedProfileKeys.push(profileKey);
+          await rm(join(this.home, "active-tabs", `${candidate.profileKey}.json`), { force: true });
+          deleted = true;
+          deletedBytes = current.snapshotBytes;
+          deletedProfileKeys.push(candidate.profileKey);
         });
+        if (deleted) {
+          remainingProfileCount -= 1;
+          remainingSnapshotBytes = Math.max(0, remainingSnapshotBytes - deletedBytes);
+        }
       }
     });
-    return { deletedProfileKeys };
+    return {
+      deletedProfileKeys,
+      remainingProfileCount,
+      remainingSnapshotBytes,
+      limitsSatisfied: remainingProfileCount <= this.maxProfiles && remainingSnapshotBytes <= this.maxProfileBytes,
+    };
   }
 
   private async bootstrapGolden(seedProfileRoot?: string, revalidateSeed?: () => Promise<boolean>): Promise<void> {
@@ -589,6 +706,13 @@ export class BrowserProfileManager {
 
   private readState(): Promise<BrowserState> { return this.readJson(this.statePath(), "BROWSER_STATE_NOT_FOUND"); }
   private readChatManifest(key: string): Promise<ChatProfileManifest> { return this.readJson(this.chatManifestPath(key), "BROWSER_PROFILE_NOT_FOUND"); }
+  private async readResumeState(key: string): Promise<BrowserResumeState> {
+    const resume = await this.readJson<BrowserResumeState>(this.resumeStatePath(key), "BROWSER_RESUME_STATE_NOT_FOUND");
+    if (resume.schemaVersion !== 1 || !Array.isArray(resume.tabs)) {
+      throw new BrowserProfileError("BROWSER_STATE_CORRUPT", "Browser resume state is corrupt.");
+    }
+    return { ...resume, tabs: normalizeResumeTabs(resume.tabs) };
+  }
   private readGoldenManifest(id: string): Promise<GoldenManifest> { return this.readJson(join(this.goldenDirectory(id), "manifest.json"), "BROWSER_GOLDEN_NOT_FOUND"); }
   private hashPrincipal(salt: string, principal: string): string { return createHash("sha256").update(`${salt}\0${principal.trim().toLowerCase()}`).digest("hex"); }
   private storeAuthClaims(salt: string, claims: AuthClaimInput[]): StoredAuthClaim[] {
@@ -602,12 +726,37 @@ export class BrowserProfileManager {
     }));
   }
   private async recoverAbandonedOperations(): Promise<void> {
+    const abandoned: string[] = [];
     for (const name of ["staging", "trash"]) {
       const root = join(this.home, name);
       for (const entry of await readdir(root, { withFileTypes: true })) {
-        if (entry.isDirectory()) await rm(join(root, entry.name), { recursive: true, force: true });
+        if (!entry.isDirectory()) continue;
+        const path = join(root, entry.name);
+        const ageMs = await stat(path).then((value) => Date.now() - value.mtimeMs).catch(() => 0);
+        if (ageMs >= ABANDONED_OPERATION_GRACE_MS) abandoned.push(path);
       }
     }
+    await Promise.all(abandoned.map((path) => rm(path, { recursive: true, force: true })));
+  }
+  private async ensureResumeStates(): Promise<void> {
+    for (const entry of await readdir(this.chatRoot(), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const path = this.resumeStatePath(entry.name);
+      const exists = await readFile(path, "utf8").then(() => true).catch((error) => {
+        const code = error && typeof error === "object" && "code" in error ? (error as { code?: unknown }).code : undefined;
+        if (code === "ENOENT") return false;
+        throw error;
+      });
+      if (exists) {
+        await this.readResumeState(entry.name);
+        continue;
+      }
+      const manifest = await this.readChatManifest(entry.name);
+      await this.atomicWriteJson(path, this.emptyResumeState(manifest.lastUsedAt));
+    }
+  }
+  private emptyResumeState(capturedAt: string): BrowserResumeState {
+    return { schemaVersion: 1, capturedAt, tabs: [] };
   }
   private async pruneGoldenGenerations(currentGeneration: string): Promise<void> {
     const generations: Array<{ id: string; createdAt: string }> = [];
@@ -633,6 +782,7 @@ export class BrowserProfileManager {
   private goldenRoot(): string { return join(this.home, "golden", "generations"); }
   private chatDirectory(key: string): string { return join(this.chatRoot(), key); }
   private chatManifestPath(key: string): string { return join(this.chatDirectory(key), "manifest.json"); }
+  private resumeStatePath(key: string): string { return join(this.chatDirectory(key), "resume.json"); }
   private chatUserDataDir(key: string): string { return join(this.chatDirectory(key), "user-data"); }
   private goldenDirectory(id: string): string { return join(this.goldenRoot(), id); }
   private goldenUserDataDir(id: string): string { return join(this.goldenDirectory(id), "user-data"); }
@@ -645,6 +795,32 @@ function isPidAlive(value: unknown): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+function requirePositiveLimit(value: number, name: string): number {
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be greater than 0`);
+  return value;
+}
+
+function normalizeResumeTabs(tabs: BrowserResumeTab[]): BrowserResumeTab[] {
+  const normalized = tabs.flatMap((tab) => {
+    if (!tab || typeof tab.url !== "string") return [];
+    const url = resumableUrl(tab.url);
+    return url ? [{ url, active: Boolean(tab.active) }] : [];
+  });
+  if (normalized.length === 0) return [];
+  const activeIndex = normalized.findIndex((tab) => tab.active);
+  return normalized.map((tab, index) => ({ ...tab, active: index === (activeIndex >= 0 ? activeIndex : 0) }));
+}
+
+function resumableUrl(value: string): string | undefined {
+  if (value === "about:blank") return value;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : undefined;
+  } catch {
+    return undefined;
   }
 }
 

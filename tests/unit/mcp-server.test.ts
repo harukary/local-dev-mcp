@@ -207,7 +207,7 @@ describe("tool schema snapshot", () => {
     const gitCommit = snapshot.tools.find((tool) => tool.name === "git.commit");
     const gitPush = snapshot.tools.find((tool) => tool.name === "git.push");
 
-    expect(snapshot.schema_version).toBe("2026-09-25.5");
+    expect(snapshot.schema_version).toBe("2026-09-26.1");
     expect(names).toContain("tool.schema");
     expect(names).toContain("git.commit");
     expect(gitCommit?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });

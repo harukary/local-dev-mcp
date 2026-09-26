@@ -2,6 +2,7 @@ import { BrowserProfileManager, type BrowserLease, type ChatProfile } from "./pr
 
 export const DEFAULT_BROWSER_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 export const DEFAULT_BROWSER_SWEEP_INTERVAL_MS = 60 * 1000;
+export const DEFAULT_BROWSER_PROFILE_MAINTENANCE_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_BROWSER_FAILURE_REPORT_INTERVAL_MS = 15 * 60 * 1000;
 const BROWSER_START_GRACE_MS = 30 * 1000;
 
@@ -26,6 +27,7 @@ type BrowserLifecycleOptions = {
   stopManagedBrowserProfile: StopManagedBrowserProfile;
   idleTimeoutMs?: number;
   sweepIntervalMs?: number;
+  profileMaintenanceIntervalMs?: number;
   now?: () => Date;
   isPidAlive?: (pid: number) => boolean;
   isCdpReachable?: (port: number) => Promise<boolean>;
@@ -45,6 +47,9 @@ export type BrowserLifecycleSweepResult = {
   stoppedProfileKeys: string[];
   failedProfileKeys: string[];
   failures: BrowserLifecycleFailure[];
+  garbageCollectedProfileKeys?: string[];
+  profileLimitsSatisfied?: boolean;
+  maintenanceError?: string;
 };
 
 export class BrowserLifecycleService {
@@ -52,6 +57,7 @@ export class BrowserLifecycleService {
   private readonly stopManagedBrowserProfile: StopManagedBrowserProfile;
   private readonly idleTimeoutMs: number;
   private readonly sweepIntervalMs: number;
+  private readonly profileMaintenanceIntervalMs: number;
   private readonly now: () => Date;
   private readonly isPidAlive: (pid: number) => boolean;
   private readonly isCdpReachable: (port: number) => Promise<boolean>;
@@ -62,12 +68,17 @@ export class BrowserLifecycleService {
   private activeOperation: Promise<unknown> = Promise.resolve();
   private lastFailureSignature?: string;
   private lastFailureReportedAtMs = Number.NEGATIVE_INFINITY;
+  private lastProfileMaintenanceAtMs = Number.NEGATIVE_INFINITY;
 
   constructor(options: BrowserLifecycleOptions) {
     this.manager = options.manager;
     this.stopManagedBrowserProfile = options.stopManagedBrowserProfile;
     this.idleTimeoutMs = requirePositiveDuration(options.idleTimeoutMs ?? DEFAULT_BROWSER_IDLE_TIMEOUT_MS, "idleTimeoutMs");
     this.sweepIntervalMs = requirePositiveDuration(options.sweepIntervalMs ?? DEFAULT_BROWSER_SWEEP_INTERVAL_MS, "sweepIntervalMs");
+    this.profileMaintenanceIntervalMs = requirePositiveDuration(
+      options.profileMaintenanceIntervalMs ?? DEFAULT_BROWSER_PROFILE_MAINTENANCE_INTERVAL_MS,
+      "profileMaintenanceIntervalMs",
+    );
     this.now = options.now ?? (() => new Date());
     this.isPidAlive = options.isPidAlive ?? processIsAlive;
     this.isCdpReachable = options.isCdpReachable ?? cdpIsReachable;
@@ -77,7 +88,7 @@ export class BrowserLifecycleService {
   }
 
   async start(): Promise<BrowserLifecycleSweepResult> {
-    const result = await this.runExclusive(() => this.sweepInternal(true));
+    const result = await this.runExclusive(() => this.sweepAndMaintain(true));
     this.reportFailures(result);
     if (!this.timer) {
       this.timer = this.setIntervalFn!(() => {
@@ -91,7 +102,7 @@ export class BrowserLifecycleService {
   }
 
   async sweep(): Promise<BrowserLifecycleSweepResult> {
-    return await this.runExclusive(() => this.sweepInternal(false));
+    return await this.runExclusive(() => this.sweepAndMaintain(false));
   }
 
   async drain(): Promise<BrowserLifecycleSweepResult> {
@@ -136,6 +147,23 @@ export class BrowserLifecycleService {
       }
     }
     return await this.stopProfilesWithReasons(stopCandidates, recoveredProfileKeys);
+  }
+
+  private async sweepAndMaintain(startup: boolean): Promise<BrowserLifecycleSweepResult> {
+    const result = await this.sweepInternal(startup);
+    const nowMs = this.now().getTime();
+    if (!startup && nowMs - this.lastProfileMaintenanceAtMs < this.profileMaintenanceIntervalMs) return result;
+    this.lastProfileMaintenanceAtMs = nowMs;
+    try {
+      const garbageCollection = await this.manager.collectGarbage();
+      return {
+        ...result,
+        garbageCollectedProfileKeys: garbageCollection.deletedProfileKeys,
+        profileLimitsSatisfied: garbageCollection.limitsSatisfied,
+      };
+    } catch (error) {
+      return { ...result, maintenanceError: errorMessage(error) };
+    }
   }
 
   private isIdle(profile: ChatProfile): boolean {
@@ -190,14 +218,14 @@ export class BrowserLifecycleService {
   }
 
   private reportFailures(result: BrowserLifecycleSweepResult): void {
-    if (result.failures.length === 0) {
+    if (result.failures.length === 0 && !result.maintenanceError) {
       this.lastFailureSignature = undefined;
       this.lastFailureReportedAtMs = Number.NEGATIVE_INFINITY;
       return;
     }
-    const signature = result.failures
+    const signature = [...result.failures
       .map((failure) => `${failure.profileKey}:${failure.reason}:${failure.message}`)
-      .sort()
+      .sort(), ...(result.maintenanceError ? [`maintenance:${result.maintenanceError}`] : [])]
       .join("|");
     const nowMs = this.now().getTime();
     if (signature === this.lastFailureSignature
@@ -207,7 +235,11 @@ export class BrowserLifecycleService {
     const details = result.failures
       .map((failure) => `${failure.profileKey} (${failure.reason}): ${failure.message}`)
       .join("; ");
-    this.onError(new Error(`Browser lifecycle sweep failed for ${result.failures.length} profile(s): ${details}`));
+    const parts = [
+      ...(details ? [`${result.failures.length} profile(s): ${details}`] : []),
+      ...(result.maintenanceError ? [`profile maintenance: ${result.maintenanceError}`] : []),
+    ];
+    this.onError(new Error(`Browser lifecycle sweep failed: ${parts.join("; ")}`));
   }
 
   private async runExclusive<T>(operation: () => Promise<T>): Promise<T> {

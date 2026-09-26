@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { browserSessionIdForContext, browserStopRunsMaintenance, browserToolUsesOuterOperationLock, classifyBrowserFailureReason, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse } from "../../src/mcp/tools/browser.js";
+import { browserResumeTabsFromTargets, browserSessionIdForContext, browserStartupTabs, browserStopRunsMaintenance, browserToolRefreshesIdleDeadline, browserToolUsesOuterOperationLock, classifyBrowserFailureReason, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse, isGoogleAuthInteractionRequiredUrl } from "../../src/mcp/tools/browser.js";
 
 const CHAT_ID = "chatgpt-session:chat-a";
 
@@ -59,6 +59,41 @@ describe("browser tools", () => {
     expect(browserToolUsesOuterOperationLock("browser.stop")).toBe(false);
     expect(browserToolUsesOuterOperationLock("browser.start")).toBe(true);
     expect(browserToolUsesOuterOperationLock("browser.open")).toBe(true);
+  });
+
+  it("refreshes the idle deadline for live browser work but not status polling or stop", () => {
+    expect(browserToolRefreshesIdleDeadline("browser.open")).toBe(true);
+    expect(browserToolRefreshesIdleDeadline("browser.wait")).toBe(true);
+    expect(browserToolRefreshesIdleDeadline("browser.status")).toBe(false);
+    expect(browserToolRefreshesIdleDeadline("browser.sessions")).toBe(false);
+    expect(browserToolRefreshesIdleDeadline("browser.stop")).toBe(false);
+  });
+
+  it("captures resumable tabs and restores the selected tab deterministically", () => {
+    const captured = browserResumeTabsFromTargets([
+      { id: "first", type: "page", url: "https://example.com/first" },
+      { id: "internal", type: "page", url: "chrome://settings" },
+      { id: "active", type: "page", url: "https://example.com/active" },
+      { id: "worker", type: "service_worker", url: "https://example.com/worker.js" },
+    ], "active");
+
+    expect(captured).toEqual([
+      { url: "https://example.com/first", active: false },
+      { url: "https://example.com/active", active: true },
+    ]);
+    expect(browserStartupTabs(captured)).toEqual(captured);
+    expect(browserStartupTabs(captured, "https://example.com/replacement")).toEqual([
+      { url: "https://example.com/first", active: false },
+      { url: "https://example.com/replacement", active: true },
+    ]);
+    expect(browserStartupTabs([])).toEqual([{ url: "about:blank", active: true }]);
+  });
+
+  it("recognizes the exact Google account interstitial without broad host matching", () => {
+    expect(isGoogleAuthInteractionRequiredUrl("https://www.google.com/account/about/?hl=en-US")).toBe(true);
+    expect(isGoogleAuthInteractionRequiredUrl("https://google.com/account/about")).toBe(true);
+    expect(isGoogleAuthInteractionRequiredUrl("https://myaccount.google.com/")).toBe(false);
+    expect(isGoogleAuthInteractionRequiredUrl("https://www.google.com/search?q=account")).toBe(false);
   });
 
   it("defers expensive profile maintenance only during service shutdown", () => {

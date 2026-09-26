@@ -213,8 +213,17 @@ describe("BrowserProfileManager", () => {
 
     await expect(manager.reservePort(profile.profileKey, { min: 18301, max: 18301 }, "second", async () => true))
       .rejects.toMatchObject({ code: "BROWSER_PROFILE_BUSY" });
-    await manager.finishCheckpoint(profile.profileKey, fullLease, []);
+    await manager.finishCheckpoint(profile.profileKey, fullLease, [], [
+      { url: "https://example.com/first", active: false },
+      { url: "https://example.com/active", active: true },
+    ]);
     await expect(manager.getOwnedProfile("chatgpt-session:checkpoint")).resolves.toMatchObject({ state: "idle", port: undefined });
+    await expect(manager.getResumeState(profile.profileKey)).resolves.toMatchObject({
+      tabs: [
+        { url: "https://example.com/first", active: false },
+        { url: "https://example.com/active", active: true },
+      ],
+    });
   });
 
   it("does not checkpoint an idle candidate after a newer browser operation", async () => {
@@ -285,7 +294,7 @@ describe("BrowserProfileManager", () => {
     expect(generations).toHaveLength(2);
   });
 
-  it("garbage-collects only unlocked idle profiles after 24 hours", async () => {
+  it("garbage-collects only unlocked idle profiles after 72 hours", async () => {
     const home = await tempRoot("browser-gc-");
     const seed = await tempRoot("browser-seed-");
     await seedChromeProfile(seed);
@@ -298,10 +307,92 @@ describe("BrowserProfileManager", () => {
     await manager.markRunning(running.profileKey, { instanceId: "test", pid: process.pid, port: 18300 });
     now = new Date("2026-08-30T00:00:01.000Z");
 
+    await expect(manager.collectGarbage()).resolves.toMatchObject({ deletedProfileKeys: [] });
+    now = new Date("2026-09-01T00:00:01.000Z");
+
     const result = await manager.collectGarbage();
 
     expect(result.deletedProfileKeys).toEqual([stale.profileKey]);
     await expect(stat(stale.userDataDir)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await stat(running.userDataDir)).isDirectory()).toBe(true);
+  });
+
+  it("enforces the idle profile count quota using least-recently-used order", async () => {
+    const home = await tempRoot("browser-quota-");
+    let now = new Date("2026-08-29T00:00:00.000Z");
+    const manager = new BrowserProfileManager({
+      home,
+      now: () => now,
+      maxProfiles: 2,
+      maxProfileBytes: Number.MAX_SAFE_INTEGER,
+    });
+    await manager.initialize();
+    const oldest = await manager.ensureChatProfile("chatgpt-session:oldest");
+    now = new Date("2026-08-29T00:01:00.000Z");
+    const middle = await manager.ensureChatProfile("chatgpt-session:middle");
+    now = new Date("2026-08-29T00:02:00.000Z");
+    const newest = await manager.ensureChatProfile("chatgpt-session:newest");
+    now = new Date("2026-08-29T00:32:00.000Z");
+
+    await expect(manager.collectGarbage()).resolves.toMatchObject({
+      deletedProfileKeys: [],
+      remainingProfileCount: 3,
+      limitsSatisfied: false,
+    });
+    now = new Date("2026-08-29T02:02:00.000Z");
+
+    await expect(manager.collectGarbage()).resolves.toMatchObject({
+      deletedProfileKeys: [oldest.profileKey],
+      remainingProfileCount: 2,
+      limitsSatisfied: true,
+    });
+    await expect(stat(oldest.userDataDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await stat(middle.userDataDir)).isDirectory()).toBe(true);
+    expect((await stat(newest.userDataDir)).isDirectory()).toBe(true);
+  });
+
+  it("enforces the tracked snapshot byte quota after the one-hour grace period", async () => {
+    const home = await tempRoot("browser-byte-quota-");
+    const seed = await tempRoot("browser-seed-");
+    await seedChromeProfile(seed);
+    let now = new Date("2026-08-29T00:00:00.000Z");
+    const manager = new BrowserProfileManager({
+      home,
+      now: () => now,
+      maxProfiles: 8,
+      maxProfileBytes: 1,
+    });
+    await manager.initialize(seed, { seedState: "quiescent" });
+    const profile = await manager.ensureChatProfile("chatgpt-session:byte-quota");
+    now = new Date("2026-08-29T02:00:00.000Z");
+
+    await expect(manager.collectGarbage()).resolves.toMatchObject({
+      deletedProfileKeys: [profile.profileKey],
+      remainingProfileCount: 0,
+      remainingSnapshotBytes: 0,
+      limitsSatisfied: true,
+    });
+  });
+
+  it("cleans abandoned staging and trash on every initialization and seeds resume metadata", async () => {
+    const home = await tempRoot("browser-startup-cleanup-");
+    const manager = new BrowserProfileManager({ home });
+    await manager.initialize();
+    const profile = await manager.ensureChatProfile("chatgpt-session:existing");
+    await rm(join(home, "chats", profile.profileKey, "resume.json"));
+    await mkdir(join(home, "staging", "abandoned"), { recursive: true });
+    await mkdir(join(home, "trash", "abandoned"), { recursive: true });
+    await mkdir(join(home, "staging", "in-progress"), { recursive: true });
+    await writeFile(join(home, "staging", "abandoned", "partial"), "partial");
+    const abandonedAt = new Date(Date.now() - 20 * 60 * 1000);
+    await utimes(join(home, "staging", "abandoned"), abandonedAt, abandonedAt);
+    await utimes(join(home, "trash", "abandoned"), abandonedAt, abandonedAt);
+
+    const restarted = new BrowserProfileManager({ home });
+    await restarted.initialize();
+
+    expect(await readdir(join(home, "staging"))).toEqual(["in-progress"]);
+    expect(await readdir(join(home, "trash"))).toEqual([]);
+    await expect(restarted.getResumeState(profile.profileKey)).resolves.toMatchObject({ tabs: [] });
   });
 });

@@ -86,19 +86,28 @@ keeps one profile across project changes; different chats never share a running
 profile. Browser tools fail explicitly when a chat session identity is unavailable.
 
 The first browser use in a chat copies the current immutable golden generation.
-On `browser.stop`, allowlisted live probes verify the signed-in account, the stopped
-profile is snapshotted, and a separate Chrome clone must pass the same probes before
-the snapshot can become golden. The current and previous golden generations are
-retained. Idle chat profiles that have not been used for 24 hours are removed.
+On `browser.stop`, the server saves the tab URLs, their order, and the active tab,
+then allowlisted live probes verify the signed-in account before Chrome exits. The
+chat-owned Chrome profile remains on disk, including cookies and local storage. The
+next live browser tool call automatically restarts that same profile and restores
+the saved tabs. A separate Chrome clone must pass the same probes before the
+snapshot can become golden. The current and previous golden generations are retained.
 
 Running managed browsers use a separate inactivity deadline. After 30 minutes
 without a browser tool call, the server runs the same live auth probe,
-checkpoint, and golden-promotion pipeline as `browser.stop`, then terminates
-Chrome. Set `LOCAL_DEV_MCP_BROWSER_IDLE_TIMEOUT_MINUTES` to a positive value up
-to 1440 to change this deadline. Server startup reconciles stale managed leases,
-and SIGINT/SIGTERM drains managed browsers through the same stop pipeline. These
-rules apply only to chat-owned profiles in the browser manifest; the legacy
-shared browser is not automatically terminated.
+checkpoint, tab-save, and golden-promotion pipeline as `browser.stop`, then
+terminates Chrome. A separate maintenance pass runs every 15 minutes. Suspended
+profiles are retained for 72 hours; if tracked profile snapshots exceed 8 profiles
+or 8 GiB, least-recently-used suspended profiles older than one hour are removed
+until the limit is met. Running profiles are never quota-evicted. Server startup
+also removes abandoned staging/trash directories older than 15 minutes while
+preserving current profiles and both golden generations.
+
+Set `LOCAL_DEV_MCP_BROWSER_IDLE_TIMEOUT_MINUTES` to a positive value up to 1440
+to change the suspend deadline. Server startup reconciles stale managed leases,
+and SIGINT/SIGTERM drains managed browsers through the same suspend pipeline.
+These rules apply only to chat-owned profiles in the browser manifest; ordinary
+Chrome profiles and the legacy shared browser are not automatically terminated.
 
 Use `browser.tabs` to inspect the current tab set. `browser.tab.open` creates
 and selects a tab, `browser.tab.use` selects an existing target ID, and

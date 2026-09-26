@@ -178,6 +178,27 @@ describe("BrowserLifecycleService", () => {
     );
   });
 
+  it("garbage-collects expired suspended profiles independently of browser.stop", async () => {
+    let now = new Date("2026-08-29T00:00:00.000Z");
+    const manager = await managerAt(() => now);
+    const profile = await manager.ensureChatProfile("chatgpt-session:expired");
+    now = new Date("2026-09-01T00:00:01.000Z");
+    const stop = vi.fn();
+    const lifecycle = new BrowserLifecycleService({
+      manager,
+      now: () => now,
+      stopManagedBrowserProfile: stop,
+    });
+
+    const result = await lifecycle.start();
+    lifecycle.stopTimer();
+
+    expect(result.garbageCollectedProfileKeys).toEqual([profile.profileKey]);
+    expect(result.profileLimitsSatisfied).toBe(true);
+    expect(stop).not.toHaveBeenCalled();
+    await expect(manager.getOwnedProfile("chatgpt-session:expired")).rejects.toMatchObject({ code: "BROWSER_PROFILE_NOT_FOUND" });
+  });
+
   it("reports lifecycle failure details and throttles identical periodic errors", async () => {
     let now = new Date("2026-08-30T00:00:00.000Z");
     const manager = await managerAt(() => now);

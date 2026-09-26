@@ -8,7 +8,7 @@ import { createServer } from "node:net";
 import type { AppContext } from "../server.js";
 import type { ProjectConfig } from "../../types.js";
 import { applyWorkingDirectory } from "../../project/working-directory.js";
-import { BrowserProfileError, BrowserProfileManager, browserProfileKey, type AuthClaimInput, type BrowserLease } from "../../browser/profile-manager.js";
+import { BrowserProfileError, BrowserProfileManager, browserProfileKey, type AuthClaimInput, type BrowserLease, type BrowserResumeTab } from "../../browser/profile-manager.js";
 import { loadLiveAuthProbeConfiguration, runLiveAuthProbes, type LiveAuthProbe } from "../../browser/auth-probes.js";
 import { BrowserLifecycleService, browserIdleTimeoutMsFromEnv, type BrowserStopReason } from "../../browser/browser-lifecycle.js";
 import { ActiveTabStore } from "../../browser/active-tab-store.js";
@@ -41,13 +41,34 @@ export function browserToolUsesOuterOperationLock(toolName: string): boolean {
   return toolName !== "browser.stop";
 }
 
+export function browserToolRefreshesIdleDeadline(toolName: string): boolean {
+  return toolName.startsWith("browser.")
+    && toolName !== "browser.status"
+    && toolName !== "browser.sessions"
+    && toolName !== "browser.stop";
+}
+
 export async function runBrowserToolOperation<T>(
   chatContextId: string,
   toolName: string,
   operation: () => Promise<T>,
 ): Promise<T> {
   if (!browserToolUsesOuterOperationLock(toolName)) return await operation();
-  return await browserOperations.run(browserProfileKey(chatContextId), operation);
+  try {
+    return await browserOperations.run(browserProfileKey(chatContextId), operation);
+  } finally {
+    if (browserToolRefreshesIdleDeadline(toolName)) await recordBrowserActivity(chatContextId);
+  }
+}
+
+async function recordBrowserActivity(chatContextId: string): Promise<void> {
+  try {
+    const manager = await profileManager();
+    const profile = await manager.getOptionalOwnedProfile(chatContextId);
+    if (profile?.state === "running") await manager.touch(profile.profileKey);
+  } catch {
+    // Activity tracking must never replace the browser tool's primary result.
+  }
 }
 
 export async function beginBrowserOperationDrain(): Promise<void> {
@@ -369,11 +390,77 @@ async function listTargets(port: number): Promise<ChromeTarget[]> {
   return await fetchJson<ChromeTarget[]>(`http://127.0.0.1:${port}/json/list`);
 }
 
+export function browserResumeTabsFromTargets(
+  targets: Array<Pick<ChromeTarget, "id" | "type" | "url">>,
+  activeTargetId?: string,
+): BrowserResumeTab[] {
+  const tabs = targets.flatMap((target) => {
+    if (target.type !== "page" || !target.url || !isResumableBrowserUrl(target.url)) return [];
+    return [{ url: target.url, active: target.id === activeTargetId }];
+  });
+  if (tabs.length === 0) return [];
+  const activeIndex = tabs.findIndex((tab) => tab.active);
+  return tabs.map((tab, index) => ({ ...tab, active: index === (activeIndex >= 0 ? activeIndex : 0) }));
+}
+
+export function browserStartupTabs(resumeTabs: BrowserResumeTab[], requestedUrl?: string): BrowserResumeTab[] {
+  const tabs = resumeTabs
+    .filter((tab) => isResumableBrowserUrl(tab.url))
+    .map((tab) => ({ url: tab.url, active: Boolean(tab.active) }));
+  if (tabs.length === 0) return [{ url: requestedUrl ?? "about:blank", active: true }];
+  const selectedIndex = Math.max(0, tabs.findIndex((tab) => tab.active));
+  const planned = tabs.map((tab, index) => ({ ...tab, active: index === selectedIndex }));
+  if (requestedUrl) planned[selectedIndex] = { url: requestedUrl, active: true };
+  return planned;
+}
+
+export function isGoogleAuthInteractionRequiredUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.hostname === "google.com" || url.hostname === "www.google.com")
+      && (url.pathname === "/account/about" || url.pathname === "/account/about/");
+  } catch {
+    return false;
+  }
+}
+
+function isResumableBrowserUrl(value: string): boolean {
+  if (value === "about:blank") return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function newTarget(port: number, url = "about:blank"): Promise<ChromeTarget> {
   const endpoint = `http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`;
   const response = await fetch(endpoint, { method: "PUT", signal: operationSignal(5000) });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${endpoint}`);
   return await response.json() as ChromeTarget;
+}
+
+async function newBackgroundTarget(port: number, url = "about:blank"): Promise<ChromeTarget> {
+  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(`http://127.0.0.1:${port}/json/version`);
+  if (!version.webSocketDebuggerUrl) throw new Error("Chrome did not expose a browser CDP endpoint.");
+  const client = new CdpClient(version.webSocketDebuggerUrl);
+  await client.connect();
+  let targetId: string;
+  try {
+    const created = await client.send<{ targetId?: string }>("Target.createTarget", { url, background: true });
+    targetId = created.targetId ?? "";
+  } finally {
+    client.close();
+  }
+  if (!targetId) throw new Error("Chrome did not create a background page target.");
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const target = (await listTargets(port)).find((candidate) => candidate.id === targetId);
+    if (target?.webSocketDebuggerUrl) return target;
+    await sleep(50);
+  }
+  throw new Error("Chrome background page target did not become ready.");
 }
 
 async function closeTarget(port: number, targetId: string): Promise<void> {
@@ -382,14 +469,11 @@ async function closeTarget(port: number, targetId: string): Promise<void> {
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}: close target`);
 }
 
-async function waitForOnlyPageTarget(port: number, targetId: string, timeoutMs = 2000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const pageTargetIds = (await listTargets(port)).filter((target) => target.type === "page").map((target) => target.id);
-    if (pageTargetIds.length === 1 && pageTargetIds[0] === targetId) return;
-    await sleep(50);
-  }
-  throw new Error("Chrome retained redundant initial page targets.");
+async function activateTargetBestEffort(port: number, targetId?: string): Promise<void> {
+  if (!targetId) return;
+  await fetch(`http://127.0.0.1:${port}/json/activate/${encodeURIComponent(targetId)}`, {
+    signal: operationSignal(5000),
+  }).catch(() => undefined);
 }
 
 async function findPageTarget(port: number, targetId: string): Promise<ChromeTarget | undefined> {
@@ -474,8 +558,12 @@ async function evaluate<T = unknown>(session: BrowserSession, expression: string
   });
 }
 
-async function observeAuthProbe(port: number, probe: LiveAuthProbe): Promise<{ status: "authenticated" | "signed_out" | "unknown"; principal?: string }> {
-  const target = await newTarget(port, "about:blank");
+async function observeAuthProbe(
+  port: number,
+  probe: LiveAuthProbe,
+  previousTargetId?: string,
+): Promise<{ status: "authenticated" | "signed_out" | "unknown"; principal?: string }> {
+  const target = await newBackgroundTarget(port, "about:blank");
   if (!target.webSocketDebuggerUrl) throw new Error("Auth probe target did not expose a CDP websocket");
   const client = new CdpClient(target.webSocketDebuggerUrl);
   await client.connect();
@@ -507,6 +595,7 @@ async function observeAuthProbe(port: number, probe: LiveAuthProbe): Promise<{ s
       if (value?.authenticated && principal && authenticatedHost === probe.authenticatedHost) {
         return { status: "authenticated", principal };
       }
+      if (value?.url && isGoogleAuthInteractionRequiredUrl(value.url)) return { status: "unknown" };
       if (value?.signedOut || (value?.url && probe.signedOutUrlPattern && new RegExp(probe.signedOutUrlPattern).test(value.url))) {
         return { status: "signed_out" };
       }
@@ -516,6 +605,7 @@ async function observeAuthProbe(port: number, probe: LiveAuthProbe): Promise<{ s
   } finally {
     client.close();
     await fetchJson(`http://127.0.0.1:${port}/json/close/${target.id}`).catch(() => undefined);
+    await activateTargetBestEffort(port, previousTargetId);
   }
 }
 
@@ -660,20 +750,35 @@ export async function handleBrowserStatus(ctx: AppContext, chatContextId: string
     const manager = new BrowserProfileManager({ home: BROWSER_HOME });
     const profile = await manager.getOptionalOwnedProfile(chatContextId);
     const status = profile ? await manager.statusForChat(chatContextId) : undefined;
+    const inventory = await manager.inventory();
+    const lifecycleState = status?.state === "idle"
+      ? "suspended"
+      : status?.state === "checkpointing"
+        ? "suspending"
+        : status?.state ?? "not_created";
     return jsonResult({
       project_id: project.projectId,
       backend: "chrome-devtools-protocol",
       chrome_available: chrome.available,
       port_range: { min: PORT_MIN, max: PORT_MAX },
       profile: {
-        state: status?.state ?? "not_created",
+        state: lifecycleState,
         last_used_at: status?.lastUsedAt,
         gc_after: status?.gcAfter,
+        resumable_tab_count: status?.resumableTabCount ?? 0,
         authenticated_probe_ids: status?.authenticatedProbeIds ?? [],
         snapshot_size_bytes: status?.snapshotBytes,
         snapshot_copy_mode: status?.copyMode,
         snapshot_verification: status?.snapshotVerification,
         running: profile?.state === "running",
+      },
+      retention: {
+        hours: inventory.retentionMs / (60 * 60 * 1000),
+        max_profiles: inventory.maxProfiles,
+        max_profile_bytes: inventory.maxProfileBytes,
+        current_profiles: inventory.profileCount,
+        running_profiles: inventory.runningProfileCount,
+        current_snapshot_bytes: inventory.totalSnapshotBytes,
       },
       auth_probe_config: await loadLiveAuthProbeConfiguration(AUTH_PROBE_CONFIG).then((config) => ({ status: config.status, count: config.probes.length })),
       artifact_dir: "generated/local-dev-mcp/browser",
@@ -721,6 +826,12 @@ export async function handleBrowserStart(ctx: AppContext, chatContextId: string,
   if (profile.state === "checkpointing") {
     return jsonError("BROWSER_PROFILE_BUSY", "The browser profile is being checkpointed. Retry after browser.stop completes.");
   }
+  let resumeTabs: BrowserResumeTab[];
+  try {
+    resumeTabs = (await manager.getResumeState(profile.profileKey)).tabs;
+  } catch (error) {
+    return profileError(error);
+  }
   let port: number;
   try {
     port = await manager.reservePort(profile.profileKey, { min: PORT_MIN, max: PORT_MAX }, BROWSER_INSTANCE_ID, canListen);
@@ -737,15 +848,26 @@ export async function handleBrowserStart(ctx: AppContext, chatContextId: string,
   ], { detached: true, stdio: "ignore" });
   child.unref();
   let version;
+  let restoredTabCount = 0;
   try {
     version = await waitForCdp(port, 10_000);
-    const activeTarget = await newTarget(port, url ?? "about:blank");
-    if (activeTarget.type !== "page") throw new Error("Chrome did not create a page target.");
-    const redundantTargets = (await listTargets(port)).filter((target) => target.type === "page" && target.id !== activeTarget.id);
-    await Promise.all(redundantTargets.map((target) => closeTarget(port, target.id)));
-    await waitForOnlyPageTarget(port, activeTarget.id);
+    const initialTargets = (await listTargets(port)).filter((target) => target.type === "page");
+    const plannedTabs = browserStartupTabs(resumeTabs, url);
+    const restoredTargets: ChromeTarget[] = [];
+    for (const plannedTab of plannedTabs) {
+      const target = await newTarget(port, plannedTab.url);
+      if (target.type !== "page") throw new Error("Chrome did not create a page target.");
+      restoredTargets.push(target);
+    }
+    await Promise.all(initialTargets.map((target) => closeTarget(port, target.id)));
+    const activeIndex = Math.max(0, plannedTabs.findIndex((tab) => tab.active));
+    const activeTarget = restoredTargets[activeIndex];
+    if (!activeTarget) throw new Error("Chrome did not restore an active page target.");
+    const activate = await fetch(`http://127.0.0.1:${port}/json/activate/${encodeURIComponent(activeTarget.id)}`, { signal: operationSignal(5000) });
+    if (!activate.ok) throw new Error(`${activate.status} ${activate.statusText}: activate restored target`);
     await writeActiveTargetId(profile.profileKey, activeTarget.id);
     await manager.markRunning(profile.profileKey, { instanceId: BROWSER_INSTANCE_ID, pid: child.pid ?? 0, port });
+    restoredTabCount = restoredTargets.length;
   } catch (error) {
     if (child.pid) try { process.kill(child.pid); } catch { /* ignore */ }
     await clearActiveTargetId(profile.profileKey);
@@ -760,6 +882,7 @@ export async function handleBrowserStart(ctx: AppContext, chatContextId: string,
     port,
     url,
     browser: version.Browser,
+    restored_tabs: restoredTabCount,
     snapshot_size_bytes: profile.snapshotBytes,
     snapshot_copy_mode: profile.copyMode,
     snapshot_verification: profile.snapshotVerification,
@@ -835,7 +958,7 @@ export async function stopManagedBrowserProfile(
   ), true);
   if ("result" in checkpoint) return checkpoint.result;
 
-  // A service restart must not wait on promotion/GC maintenance. The chat-owned
+  // A service restart must not wait on promotion maintenance. The chat-owned
   // profile is already checkpointed and retained, so defer golden maintenance
   // until a later explicit/idle stop rather than holding launchd restart open.
   if (!browserStopRunsMaintenance(reason)) {
@@ -847,7 +970,7 @@ export async function stopManagedBrowserProfile(
       auth_probe_config_status: checkpoint.probeConfigStatus,
       golden_promoted: false,
       promotion_reason: "server_shutdown_maintenance_deferred",
-      garbage_collected_profiles: 0,
+      profile_gc: "periodic",
     };
   }
 
@@ -863,7 +986,6 @@ export async function stopManagedBrowserProfile(
     reason?: string;
     snapshotVerification?: string;
   } = { promoted: false, reason: "snapshot_validation_unavailable" };
-  let garbageCollectedProfiles = 0;
   let maintenanceError: string | undefined;
   try {
     promotion = chrome.executable_path
@@ -877,8 +999,6 @@ export async function stopManagedBrowserProfile(
         ),
       )
       : promotion;
-    const gc = await manager.collectGarbage();
-    garbageCollectedProfiles = gc.deletedProfileKeys.length;
   } catch (error) {
     maintenanceError = error instanceof Error ? error.message : String(error);
   }
@@ -892,7 +1012,7 @@ export async function stopManagedBrowserProfile(
     golden_promoted: promotion.promoted,
     promotion_reason: promotion.reason,
     snapshot_verification: promotion.snapshotVerification,
-    garbage_collected_profiles: garbageCollectedProfiles,
+    profile_gc: "periodic",
     ...(maintenanceError ? { maintenance_error: maintenanceError } : {}),
   };
 }
@@ -916,6 +1036,8 @@ async function checkpointManagedBrowserProfileExclusive(
   const lease = expectedLease;
   const probeConfig = await loadLiveAuthProbeConfiguration(AUTH_PROBE_CONFIG);
   const probes = probeConfig.probes;
+  const activeTargetId = await readActiveTargetId(profileKey);
+  const resumeTabs = browserResumeTabsFromTargets(await listTargets(lease.port), activeTargetId);
   if (profile.state === "running") {
     const started = await manager.beginCheckpoint(profileKey, lease, expectedLastUsedAt);
     if (!started) return { result: { stopped: false, reason: "recent_activity" } };
@@ -924,16 +1046,10 @@ async function checkpointManagedBrowserProfileExclusive(
   } else {
     throw new BrowserProfileError("BROWSER_PROFILE_BUSY", "Browser profile is not available for checkpointing.");
   }
-  const claims = await runLiveAuthProbes(probes, (probe) => observeAuthProbe(lease.port, probe));
-  try {
-    const targets = await listTargets(lease.port);
-    await Promise.all(targets.filter((target) => target.type === "page").map((target) => fetchJson(`http://127.0.0.1:${lease.port}/json/close/${target.id}`).catch(() => undefined)));
-  } catch {
-    // Fall back to terminating the owned browser process.
-  }
+  const claims = await runLiveAuthProbes(probes, (probe) => observeAuthProbe(lease.port, probe, activeTargetId));
   await closeBrowserProcess(lease.port, lease.pid);
   await clearActiveTargetId(profileKey);
-  await manager.finishCheckpoint(profileKey, lease, claims);
+  await manager.finishCheckpoint(profileKey, lease, claims, resumeTabs);
   return { probes, claims, probeConfigStatus: probeConfig.status };
 }
 
