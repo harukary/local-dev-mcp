@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 8 ]; then
-  echo "usage: activate-launchd-worker.sh DOMAIN LAUNCH_AGENTS_DIR ACTIVATION_PLIST SERVER_LABEL SERVICE_PORT LEGACY_TUNNEL_LABEL LEGACY_PERSONAL_MINI_TUNNEL_LABEL TUNNEL_LABEL..." >&2
+  echo "usage: activate-launchd-worker.sh DOMAIN LAUNCH_AGENTS_DIR ACTIVATION_PLIST SERVER_LABEL SERVICE_PORT LEGACY_TUNNEL_LABEL LEGACY_PERSONAL_MINI_TUNNEL_LABEL PERSONAL_TUNNEL_LABEL [TUNNEL_LABEL...]" >&2
   exit 64
 fi
 
@@ -13,7 +13,8 @@ SERVER_LABEL="$4"
 SERVICE_PORT="$5"
 LEGACY_TUNNEL_LABEL="$6"
 LEGACY_PERSONAL_MINI_TUNNEL_LABEL="$7"
-shift 7
+PERSONAL_TUNNEL_LABEL="$8"
+shift 8
 TUNNEL_LABELS=("$@")
 
 wait_for_unload() {
@@ -58,7 +59,7 @@ sleep 1
 # soon as launchd has loaded the job so no stale handoff file remains.
 rm -f "$ACTIVATION_PLIST"
 
-for label in "$SERVER_LABEL" "$LEGACY_TUNNEL_LABEL" "$LEGACY_PERSONAL_MINI_TUNNEL_LABEL" "${TUNNEL_LABELS[@]}"; do
+for label in "$SERVER_LABEL" "$LEGACY_TUNNEL_LABEL" "$LEGACY_PERSONAL_MINI_TUNNEL_LABEL" "$PERSONAL_TUNNEL_LABEL" "${TUNNEL_LABELS[@]}"; do
   launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
 done
 
@@ -84,4 +85,13 @@ for label in "${TUNNEL_LABELS[@]}"; do
 done
 
 rm -f "$LAUNCH_AGENTS_DIR/$LEGACY_TUNNEL_LABEL.plist" "$LAUNCH_AGENTS_DIR/$LEGACY_PERSONAL_MINI_TUNNEL_LABEL.plist"
+personal_enabled=0
+for label in "${TUNNEL_LABELS[@]}"; do
+  if [ "$label" = "$PERSONAL_TUNNEL_LABEL" ]; then
+    personal_enabled=1
+  fi
+done
+if [ "$personal_enabled" -eq 0 ]; then
+  rm -f "$LAUNCH_AGENTS_DIR/$PERSONAL_TUNNEL_LABEL.plist"
+fi
 echo "Activated $SERVER_LABEL and ${TUNNEL_LABELS[*]}"

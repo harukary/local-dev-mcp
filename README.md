@@ -152,6 +152,8 @@ Start the stdio MCP transport for a local MCP client:
 pnpm dev
 ```
 
+`skills.list` and `skills.read` use `CODEX_HOME` for Codex Skills, defaulting to `~/.haru/.codex`. Set `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` to select the skill origin manifest; relative paths resolve under `CODEX_HOME`, and the default is `.haru-context-origins.json`. When generating LaunchAgents, set these environment variables to pass them into the server plist.
+
 ## OpenAI Secure MCP Tunnel
 
 ### Architecture
@@ -306,6 +308,8 @@ io.local-dev-mcp.openai-tunnel-personal
 ```
 
 When `LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE=1` is set during install, `io.local-dev-mcp.openai-tunnel-business` is added. Legacy `io.local-dev-mcp.openai-tunnel` and `io.local-dev-mcp.openai-tunnel-personal-mini` jobs are retired and removed during `--activate`.
+
+On a host that uses only the Business Tunnel, set `LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_ENABLE=0` during activation. The Personal Tunnel is enabled by default.
 
 The server and Tunnel clients are separate processes, so Tunnel reconnects do not restart the MCP server.
 

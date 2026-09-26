@@ -206,11 +206,15 @@ function buildSkillRoots(cwd: string): SkillRoot[] {
 }
 
 function codexSkillsRoot(): string {
-  return resolve(process.env.CODEX_HOME?.trim() || join(homedir(), ".haru", ".codex"), "skills");
+  return join(codexHome(), "skills");
 }
 
 function codexSystemSkillsRoot(): string {
   return join(codexSkillsRoot(), ".system");
+}
+
+function codexHome(): string {
+  return resolve(process.env.CODEX_HOME?.trim() || join(homedir(), ".haru", ".codex"));
 }
 
 async function listSkillFiles(
@@ -247,7 +251,7 @@ async function walk(
 type OriginManifest = { version: number; skills?: Record<string, "common" | "private_user"> };
 
 function loadOriginManifest(): OriginManifest | null {
-  const manifestPath = join(resolve(process.env.CODEX_HOME?.trim() || join(homedir(), ".haru", ".codex")), ".haru-context-origins.json");
+  const manifestPath = resolve(codexHome(), process.env.LOCAL_DEV_MCP_SKILL_ORIGINS_FILE?.trim() || ".haru-context-origins.json");
   try {
     const parsed = JSON.parse(requireText(manifestPath)) as OriginManifest;
     return parsed.version === 1 ? parsed : null;

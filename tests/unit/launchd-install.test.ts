@@ -69,6 +69,8 @@ describe("launchd installer", () => {
         LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: tempDir,
         LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: labelPrefix,
         LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY: "enforce",
+        CODEX_HOME: path.join(tempDir, ".codex"),
+        LOCAL_DEV_MCP_SKILL_ORIGINS_FILE: ".codex-skill-origins.json",
       },
       encoding: "utf8",
     });
@@ -77,6 +79,10 @@ describe("launchd installer", () => {
     const server = readFileSync(path.join(tempDir, `${labelPrefix}.server.plist`), "utf8");
     expect(server).toContain("<key>LOCAL_DEV_MCP_OPENAI_SUBJECT_POLICY</key>");
     expect(server).toContain("<string>enforce</string>");
+    expect(server).toContain("<key>CODEX_HOME</key>");
+    expect(server).toContain(`<string>${tempDir}/.codex</string>`);
+    expect(server).toContain("<key>LOCAL_DEV_MCP_SKILL_ORIGINS_FILE</key>");
+    expect(server).toContain("<string>.codex-skill-origins.json</string>");
   });
 
   it("hands activation to an independent launchd worker", () => {
@@ -170,15 +176,16 @@ describe("launchd installer", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Activated test.server and test.personal test.business");
+    expect(result.stdout).toContain("Activated test.server and test.business");
     const calls = readFileSync(launchctlLog, "utf8");
     expect(calls).toContain("bootout gui/501/test.server");
     const serverPrint = "print gui/501/test.server";
     expect(calls.split("\n").filter((line) => line === serverPrint).length).toBeGreaterThanOrEqual(3);
     const serverBootstrap = `bootstrap gui/501 ${path.join(launchAgentsDir, "test.server.plist")}`;
     expect(calls.split("\n").filter((line) => line === serverBootstrap)).toHaveLength(2);
-    expect(calls).toContain(`bootstrap gui/501 ${path.join(launchAgentsDir, "test.personal.plist")}`);
+    expect(calls).not.toContain(`bootstrap gui/501 ${path.join(launchAgentsDir, "test.personal.plist")}`);
     expect(calls).toContain(`bootstrap gui/501 ${path.join(launchAgentsDir, "test.business.plist")}`);
+    expect(() => readFileSync(path.join(launchAgentsDir, "test.personal.plist"))).toThrow();
     expect(() => readFileSync(path.join(launchAgentsDir, "test.legacy.plist"))).toThrow();
     expect(() => readFileSync(path.join(launchAgentsDir, "test.legacy-mini.plist"))).toThrow();
     expect(() => readFileSync(activationPlist)).toThrow();
@@ -198,6 +205,7 @@ describe("launchd installer", () => {
         LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: launchAgentsDir,
         LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: labelPrefix,
         LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE: "1",
+        LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_ENABLE: "0",
         PORT: "13461",
       },
       encoding: "utf8",
@@ -205,6 +213,7 @@ describe("launchd installer", () => {
 
     expect(result.status).toBe(0);
     const businessTunnel = readFileSync(path.join(launchAgentsDir, `${labelPrefix}.openai-tunnel-business.plist`), "utf8");
+    expect(() => readFileSync(path.join(launchAgentsDir, `${labelPrefix}.openai-tunnel-personal.plist`))).toThrow();
 
     expect(businessTunnel).toContain("scripts/tunnel.sh");
     expect(businessTunnel).toContain("logs/openai-tunnel-business.log");

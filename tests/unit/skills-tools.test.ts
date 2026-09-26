@@ -9,6 +9,7 @@ import { handleSkillsList, handleSkillsRead } from "../../src/mcp/tools/skills.j
 
 let tmpRoot = "";
 const previousCodexHome = process.env.CODEX_HOME;
+const previousSkillOriginsFile = process.env.LOCAL_DEV_MCP_SKILL_ORIGINS_FILE;
 
 afterEach(() => {
   if (tmpRoot) {
@@ -19,6 +20,11 @@ afterEach(() => {
     delete process.env.CODEX_HOME;
   } else {
     process.env.CODEX_HOME = previousCodexHome;
+  }
+  if (previousSkillOriginsFile === undefined) {
+    delete process.env.LOCAL_DEV_MCP_SKILL_ORIGINS_FILE;
+  } else {
+    process.env.LOCAL_DEV_MCP_SKILL_ORIGINS_FILE = previousSkillOriginsFile;
   }
 });
 
@@ -67,6 +73,18 @@ function writeSkill(path: string, name: string, description: string) {
 }
 
 describe("skills tools", () => {
+  it("reads an origin manifest selected relative to CODEX_HOME", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-skills-"));
+    const codexHome = join(tmpRoot, ".codex");
+    process.env.CODEX_HOME = codexHome;
+    process.env.LOCAL_DEV_MCP_SKILL_ORIGINS_FILE = ".codex-skill-origins.json";
+    writeSkill(join(codexHome, "skills", "user-skill"), "user-skill", "User workflow");
+    writeFileSync(join(codexHome, ".codex-skill-origins.json"), JSON.stringify({ version: 1, skills: { "user-skill": "private_user" } }));
+
+    const listed = payload(await handleSkillsList(createContext(createProject(tmpRoot)), "chat-a", { scope: "user" }));
+    expect(listed.skills).toContainEqual(expect.objectContaining({ name: "user-skill", origin: "private_user" }));
+  });
+
   it("uses the selected nested cwd and reads its folded YAML metadata and references", async () => {
     tmpRoot = realpathSync(mkdtempSync(join(tmpdir(), "local-dev-mcp-skills-")));
     process.env.CODEX_HOME = join(tmpRoot, ".codex");

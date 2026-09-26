@@ -111,6 +111,8 @@ local MCP clientからstdioで使う場合:
 pnpm dev
 ```
 
+`skills.list` / `skills.read` のCodex Skills参照先は `CODEX_HOME` で指定できます。未設定時は `~/.haru/.codex` を使います。Skillsの由来ファイルは `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` で指定でき、相対パスは `CODEX_HOME` を基準に解決します。未設定時は `.haru-context-origins.json` です。LaunchAgentを再生成する場合も、この2つの環境変数を指定するとserverのplistへ引き継がれます。
+
 ## OpenAI Secure MCP Tunnel
 
 ### 構成
@@ -251,6 +253,8 @@ io.local-dev-mcp.openai-tunnel-personal
 ```
 
 `LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE=1`を付けると`io.local-dev-mcp.openai-tunnel-business`も生成します。旧`io.local-dev-mcp.openai-tunnel`と`io.local-dev-mcp.openai-tunnel-personal-mini`は廃止し、`--activate`時に停止・削除します。
+
+Business Tunnelだけを使うホストでは、起動時に`LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_ENABLE=0`を指定します。既定ではPersonal Tunnelも起動します。
 
 serverとTunnel clientは別processなので、Tunnel reconnectでMCP serverまで再起動しません。
 
