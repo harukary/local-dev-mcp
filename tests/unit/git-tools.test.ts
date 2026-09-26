@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { handleGitInspect, handleGitLog, handleGitPush, handleGitShow, handleGitStatus } from "../../src/mcp/tools/dev/git.js";
+import { handleGitCommit, handleGitInspect, handleGitLog, handleGitPush, handleGitShow, handleGitStatus } from "../../src/mcp/tools/dev/git.js";
 
 let root = "";
 let remoteRoot = "";
@@ -135,6 +135,77 @@ describe("typed git tools", () => {
     expect(shown.mode).toBe("stat");
     expect(shown.output).toContain("a.txt");
     expect(shown.truncated).toBe(false);
+  });
+
+  it("commits exactly the verified staged snapshot and preserves unstaged/untracked work", async () => {
+    setupRepo();
+    writeFileSync(join(root, "a.txt"), "staged\n");
+    run("add", "a.txt");
+    writeFileSync(join(root, "a.txt"), "staged\nunstaged\n");
+    writeFileSync(join(root, "b.txt"), "untracked\n");
+    const ctx = context();
+    const before = body(await handleGitStatus(ctx, "chat-a", {}));
+    const previousHead = run("rev-parse", "HEAD").trim();
+
+    const committed = body(await handleGitCommit(ctx, "chat-a", {
+      expected_head: previousHead,
+      expected_staged_fingerprint: before.staged_fingerprint,
+      message: "test: typed commit",
+    }));
+
+    expect(committed).toMatchObject({
+      status: "committed",
+      branch: "main",
+      previous_head: previousHead,
+      staged_fingerprint: before.staged_fingerprint,
+      committed_paths: ["a.txt"],
+      verified: true,
+    });
+    expect(committed.head).not.toBe(previousHead);
+    expect(run("show", "HEAD:a.txt")).toBe("staged\n");
+    expect(run("status", "--short")).toContain(" M a.txt");
+    expect(run("status", "--short")).toContain("?? b.txt");
+    expect(ctx.auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({ tool: "git.commit", event: "git_commit_succeeded", exitCode: 0 }));
+  });
+
+  it("rejects commit when the staged snapshot changed after inspection", async () => {
+    setupRepo();
+    writeFileSync(join(root, "a.txt"), "staged\n");
+    run("add", "a.txt");
+    const ctx = context();
+    const before = body(await handleGitStatus(ctx, "chat-a", {}));
+    const head = run("rev-parse", "HEAD").trim();
+    writeFileSync(join(root, "b.txt"), "later\n");
+    run("add", "b.txt");
+
+    const result = body(await handleGitCommit(ctx, "chat-a", {
+      expected_head: head,
+      expected_staged_fingerprint: before.staged_fingerprint,
+      message: "test: stale staged state",
+    }));
+
+    expect(result.error).toMatchObject({ code: "GIT_COMMIT_STAGED_MISMATCH" });
+    expect(run("rev-parse", "HEAD").trim()).toBe(head);
+  });
+
+  it("rejects commit when HEAD changed after inspection", async () => {
+    setupRepo();
+    writeFileSync(join(root, "a.txt"), "staged\n");
+    run("add", "a.txt");
+    const ctx = context();
+    const before = body(await handleGitStatus(ctx, "chat-a", {}));
+    const oldHead = run("rev-parse", "HEAD").trim();
+    run("commit", "-q", "-m", "other commit");
+    writeFileSync(join(root, "a.txt"), "next\n");
+    run("add", "a.txt");
+
+    const result = body(await handleGitCommit(ctx, "chat-a", {
+      expected_head: oldHead,
+      expected_staged_fingerprint: before.staged_fingerprint,
+      message: "test: stale head",
+    }));
+
+    expect(result.error).toMatchObject({ code: "GIT_COMMIT_HEAD_MISMATCH" });
   });
 
   it("pushes only the current HEAD to its configured upstream and verifies the remote", async () => {

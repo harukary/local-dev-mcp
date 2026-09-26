@@ -43,6 +43,7 @@ describe("MCP server instructions", () => {
     expect(client.getInstructions()).toContain("Do not read unrelated skills");
     expect(client.getInstructions()).toContain("Do not call skills.list again unless the project changes");
     expect(client.getInstructions()).toContain("Use git.inspect/status/diff/log/show for read-only Git inspection");
+    expect(client.getInstructions()).toContain("Use git.commit for normal commits of an already-reviewed staged snapshot");
     expect(client.getInstructions()).toContain("Use git.push for normal pushes of the current branch to its configured upstream");
     expect(client.getInstructions()).toContain("wait_ms=30000 and output=none");
     expect(client.getInstructions()).toContain("For model-only inspection of a project image, try image.read first");

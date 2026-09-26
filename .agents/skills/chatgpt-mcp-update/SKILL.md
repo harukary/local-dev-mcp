@@ -52,7 +52,7 @@ repository source
     - `tool.schema` のversionも確認する。
 11. harmlessな実tool callを1回通し、更新完了とする。
 
-Git pushが必要な運用では、`shell.run` の `git push` より typed `git.push` を優先する。`git.push` は現在branchの設定済みupstreamだけを対象にし、`expected_head`一致、behind拒否、force/tag/delete禁止、remote HEAD read-backを行う。特にScheduled Taskではこの狭いtool surfaceを使い、汎用shell経由の外部mutationを避ける。
+Gitの通常finalizationでは、`shell.run` の `git commit` / `git push` より typed `git.commit` / `git.push` を優先する。`git.commit` は `git.status` / `git.inspect` で取得した `expected_head` と `staged_fingerprint` の一致を要求し、現在のstaged snapshotだけを通常commitする。amend、hook bypass、sign、merge/rebase/cherry-pick/revert中のcommit、unstaged/untrackedの取り込みは行わない。`git.push` は現在branchの設定済みupstreamだけを対象にし、`expected_head`一致、behind拒否、force/tag/delete禁止、remote HEAD read-backを行う。特にScheduled Taskではこの狭いtool surfaceを使い、汎用shell経由のGit finalizationを避ける。
 
 ## Refresh UIが見えない場合
 

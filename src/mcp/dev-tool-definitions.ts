@@ -67,6 +67,21 @@ export function buildDevToolDefinitions() {
     { name: "git.show", description: "Show a commit/ref as a bounded patch, stat, or name-status output, optionally scoped to one project path.", inputSchema: { type: "object", properties: { ref: { type: "string" }, path: { type: "string" }, mode: { type: "string", enum: ["patch", "stat", "name-status"] }, max_bytes: { type: "integer", minimum: 1024, maximum: 2097152 } } }, annotations: RO },
     { name: "git.diff", description: "Return git diff for the selected project.", inputSchema: { type: "object", properties: { path: { type: "string" }, staged: { type: "boolean" }, stat: { type: "boolean" }, max_bytes: { type: "integer" } } }, annotations: RO },
     {
+      name: "git.commit",
+      description: "Commit exactly the currently staged Git snapshot on the checked-out branch. Requires expected_head and expected_staged_fingerprint from a preceding git.status or git.inspect call plus a single-line message. Rejects detached HEAD, empty staged state, merge/rebase/cherry-pick/revert state, stale HEAD, and changed staged content. Does not amend, bypass hooks, sign, stage files, include unstaged changes, or touch untracked files. Prefer this over shell.run for normal commits, especially in ChatGPT Scheduled Tasks.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          expected_head: { type: "string", minLength: 7, maxLength: 64, pattern: "^[0-9a-fA-F]+$", description: "Expected local HEAD commit SHA or unambiguous hex abbreviation from git.status/git.inspect." },
+          expected_staged_fingerprint: { type: "string", minLength: 64, maxLength: 64, pattern: "^[0-9a-fA-F]{64}$", description: "Exact staged snapshot fingerprint returned by git.status/git.inspect. The commit is rejected if the staged index changed." },
+          message: { type: "string", minLength: 1, maxLength: 200, description: "Single-line commit message. Newlines and control characters are rejected." },
+        },
+        required: ["expected_head", "expected_staged_fingerprint", "message"],
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    {
       name: "git.push",
       description: "Safely push only the current branch HEAD to its already-configured upstream branch. Requires expected_head to resolve to the current local HEAD, rejects detached HEAD, missing upstream, and behind/diverged state, never force-pushes, never pushes tags, never deletes refs, and verifies the remote branch HEAD after the push. Prefer this over shell.run for normal Git pushes, especially in ChatGPT Scheduled Tasks.",
       inputSchema: {

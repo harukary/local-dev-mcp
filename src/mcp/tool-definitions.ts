@@ -3,7 +3,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-09-25.4";
+export const TOOL_SCHEMA_VERSION = "2026-09-25.5";
 
 const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "skills.list",
@@ -18,6 +18,7 @@ const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "git.log",
   "git.show",
   "git.diff",
+  "git.commit",
   "git.push",
   "shell.run",
   "image.read",
@@ -166,7 +167,7 @@ export function buildToolDefinitions() {
     {
       name: "shell.run",
       description:
-        "Fallback escape hatch for operations not covered by typed tools. Prefer workspace.*, git.*, browser.*, mobile.*, and todo.* when they support the task. Use git.inspect/status/diff/log/show for read-only Git inspection; reserve shell.run for Git writes or unsupported compound operations. For file edits, prefer workspace.patch over Python/Node/Ruby heredocs or text-replacement scripts. If work is in a git worktree, select it once with project.select working_dir in interactive chats, or pass project_id + working_dir directly in stateless Scheduled Tasks. Use shell.run for builds, tests, deploys, installs, custom scripts, or unsupported operations. For any command likely to exceed about 30 seconds, use async=true. For normal completion polling call shell.status with wait_ms=30000 and output=none; when output matters, reuse cursor. Do not create repeated sleep + ps polling commands.",
+        "Fallback escape hatch for operations not covered by typed tools. Prefer workspace.*, git.*, browser.*, mobile.*, and todo.* when they support the task. Use git.inspect/status/diff/log/show for read-only Git inspection, git.commit for committing the verified staged snapshot, and git.push for publishing the verified current HEAD. Reserve shell.run for Git writes not covered by typed tools or unsupported compound operations. For file edits, prefer workspace.patch over Python/Node/Ruby heredocs or text-replacement scripts. If work is in a git worktree, select it once with project.select working_dir in interactive chats, or pass project_id + working_dir directly in stateless Scheduled Tasks. Use shell.run for builds, tests, deploys, installs, custom scripts, or unsupported operations. For any command likely to exceed about 30 seconds, use async=true. For normal completion polling call shell.status with wait_ms=30000 and output=none; when output matters, reuse cursor. Do not create repeated sleep + ps polling commands.",
       inputSchema: {
         type: "object",
         properties: {

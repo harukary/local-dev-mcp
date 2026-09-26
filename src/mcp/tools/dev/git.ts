@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import type { AppContext } from "../../server.js";
 import { getActiveProject, jsonError, jsonResult, resolveProjectPath } from "./common.js";
 import { git, boundedGit } from "./git-core.js";
@@ -87,6 +90,29 @@ async function readStatus(project: Parameters<typeof git>[0], includeUntracked =
   return parsePorcelainV2(String(stdout));
 }
 
+async function readStagedSnapshot(project: Parameters<typeof git>[0]) {
+  const { stdout } = await git(project, ["diff", "--cached", "--raw", "--no-abbrev", "--no-renames", "-z"]);
+  const raw = String(stdout);
+  const { stdout: namesOut } = await git(project, ["diff", "--cached", "--name-only", "--no-renames", "-z"]);
+  const paths = String(namesOut).split("\0").filter(Boolean);
+  return {
+    fingerprint: createHash("sha256").update(raw).digest("hex"),
+    paths,
+    empty: paths.length === 0,
+  };
+}
+
+async function hasGitOperationState(project: Parameters<typeof git>[0]) {
+  for (const marker of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"]) {
+    const { stdout } = await git(project, ["rev-parse", "--git-path", marker]);
+    const candidate = String(stdout).trim();
+    if (!candidate) continue;
+    const absolute = isAbsolute(candidate) ? candidate : resolve(project.hostRoot, candidate);
+    if (existsSync(absolute)) return marker;
+  }
+  return null;
+}
+
 function validateRef(ref: string | undefined): string | null {
   const value = ref?.trim() || "HEAD";
   if (value.startsWith("-")) return null;
@@ -128,8 +154,11 @@ export async function handleGitStatus(ctx: AppContext, chatContextId: string, ar
   const project = getActiveProject(ctx, chatContextId);
   if ("error" in project) return project.error;
   try {
-    const status = await readStatus(project, args?.include_untracked !== false);
-    return jsonResult({ project_id: project.projectId, ...status });
+    const [status, staged] = await Promise.all([
+      readStatus(project, args?.include_untracked !== false),
+      readStagedSnapshot(project),
+    ]);
+    return jsonResult({ project_id: project.projectId, ...status, staged_fingerprint: staged.fingerprint, staged_paths: staged.paths });
   } catch (err) {
     return jsonError("GIT_STATUS_FAILED", err instanceof Error ? err.message : String(err));
   }
@@ -155,16 +184,20 @@ export async function handleGitInspect(
       ? Promise.resolve({ stdout: "", stderr: "" })
       : git(project, ["diff", "--stat"]);
 
-    const [status, logResult, worktreeResult, diffStatResult] = await Promise.all([
+    const stagedPromise = readStagedSnapshot(project);
+    const [status, logResult, worktreeResult, diffStatResult, staged] = await Promise.all([
       statusPromise,
       logPromise,
       worktreesPromise,
       diffStatPromise,
+      stagedPromise,
     ]);
 
     return jsonResult({
       project_id: project.projectId,
       ...status,
+      staged_fingerprint: staged.fingerprint,
+      staged_paths: staged.paths,
       recent_commits: parseLog(String(logResult.stdout)),
       worktrees: args.include_worktrees === false ? undefined : parseWorktrees(String(worktreeResult.stdout)),
       diff_stat: args.include_diff_stat === false ? undefined : String(diffStatResult.stdout).trim(),
@@ -251,6 +284,124 @@ export async function handleGitDiff(ctx: AppContext, chatContextId: string, args
     return jsonResult({ project_id: project.projectId, diff: bounded.output, truncated: bounded.truncated });
   } catch (err) {
     return jsonError("GIT_DIFF_FAILED", err instanceof Error ? err.message : String(err));
+  }
+}
+
+export async function handleGitCommit(ctx: AppContext, chatContextId: string, args: { expected_head?: string; expected_staged_fingerprint?: string; message?: string }) {
+  const project = getActiveProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+
+  const expectedHead = args.expected_head?.trim();
+  const expectedFingerprint = args.expected_staged_fingerprint?.trim().toLowerCase();
+  const message = args.message?.trim();
+  if (!expectedHead || !/^[0-9a-f]{7,64}$/i.test(expectedHead)) {
+    return jsonError("GIT_COMMIT_EXPECTED_HEAD_REQUIRED", "expected_head must be a 7-64 character hexadecimal commit SHA or abbreviation.");
+  }
+  if (!expectedFingerprint || !/^[0-9a-f]{64}$/.test(expectedFingerprint)) {
+    return jsonError("GIT_COMMIT_STAGED_FINGERPRINT_REQUIRED", "expected_staged_fingerprint must be the 64-character SHA-256 returned by git.status or git.inspect.");
+  }
+  if (!message || message.length > 200 || /[\r\n\0-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(message)) {
+    return jsonError("GIT_COMMIT_INVALID_MESSAGE", "message must be a non-empty single line of at most 200 characters without control characters.");
+  }
+
+  try {
+    const status = await readStatus(project, true);
+    if (!status.branch) return jsonError("GIT_COMMIT_DETACHED_HEAD", "git.commit requires a checked-out branch; detached HEAD is not supported.");
+    const operation = await hasGitOperationState(project);
+    if (operation) return jsonError("GIT_COMMIT_OPERATION_IN_PROGRESS", `Refusing to commit while Git operation state ${operation} is present.`);
+
+    const [{ stdout: localHeadOut }, { stdout: expectedResolvedOut }, { stdout: unmergedOut }, staged] = await Promise.all([
+      git(project, ["rev-parse", "HEAD"]),
+      git(project, ["rev-parse", "--verify", `${expectedHead}^{commit}`]),
+      git(project, ["diff", "--name-only", "--diff-filter=U", "-z"]),
+      readStagedSnapshot(project),
+    ]);
+    const localHead = String(localHeadOut).trim().toLowerCase();
+    const expectedResolved = String(expectedResolvedOut).trim().toLowerCase();
+    if (expectedResolved !== localHead) {
+      return jsonError("GIT_COMMIT_HEAD_MISMATCH", "expected_head does not resolve to the current local HEAD; refusing to commit on a changed base.", {
+        expected_head: expectedResolved,
+        actual_head: localHead,
+      });
+    }
+    if (String(unmergedOut).length > 0) return jsonError("GIT_COMMIT_UNMERGED", "Refusing to commit while unresolved merge entries are present.");
+    if (staged.empty) return jsonError("GIT_COMMIT_NOTHING_STAGED", "There are no staged changes to commit.");
+    if (staged.fingerprint !== expectedFingerprint) {
+      return jsonError("GIT_COMMIT_STAGED_MISMATCH", "The staged snapshot changed since it was inspected; refusing to commit.", {
+        expected_staged_fingerprint: expectedFingerprint,
+        actual_staged_fingerprint: staged.fingerprint,
+        staged_paths: staged.paths,
+      });
+    }
+
+    const startedAt = Date.now();
+    try {
+      const committed = await git(project, ["commit", "--no-gpg-sign", "-m", message]);
+      const { stdout: newHeadOut } = await git(project, ["rev-parse", "HEAD"]);
+      const newHead = String(newHeadOut).trim().toLowerCase();
+      const { stdout: committedRawOut } = await git(project, ["diff", "--raw", "--no-abbrev", "--no-renames", "-z", localHead, newHead]);
+      const committedFingerprint = createHash("sha256").update(String(committedRawOut)).digest("hex");
+      const verified = newHead !== localHead && committedFingerprint === expectedFingerprint;
+      const after = await readStatus(project, true);
+      await ctx.auditLogger.log({
+        timestamp: new Date().toISOString(),
+        chatContextId,
+        tool: "git.commit",
+        event: verified ? "git_commit_succeeded" : "git_commit_verification_failed",
+        projectId: project.projectId,
+        cwd: project.hostRoot,
+        command: `git commit <verified-staged-snapshot>`,
+        riskLevel: "workspace_write",
+        enforcement: "audit_only",
+        exitCode: verified ? 0 : 1,
+        durationMs: Date.now() - startedAt,
+        error: verified ? undefined : "Committed tree did not match the verified staged snapshot.",
+      });
+      if (!verified) {
+        return jsonError("GIT_COMMIT_VERIFY_FAILED", "Git created a commit, but its diff did not match the verified staged snapshot. Review the repository before continuing.", {
+          previous_head: localHead,
+          new_head: newHead,
+          expected_staged_fingerprint: expectedFingerprint,
+          committed_fingerprint: committedFingerprint,
+        });
+      }
+      return jsonResult({
+        project_id: project.projectId,
+        status: "committed",
+        branch: status.branch,
+        previous_head: localHead,
+        head: newHead,
+        staged_fingerprint: expectedFingerprint,
+        committed_paths: staged.paths,
+        remaining_files: after.files,
+        commit_output: `${String(committed.stdout)}${String(committed.stderr)}`.trim().slice(0, 8192),
+        verified: true,
+      });
+    } catch (err) {
+      const messageText = err instanceof Error ? err.message : String(err);
+      await ctx.auditLogger.log({
+        timestamp: new Date().toISOString(),
+        chatContextId,
+        tool: "git.commit",
+        event: "git_commit_failed",
+        projectId: project.projectId,
+        cwd: project.hostRoot,
+        command: `git commit <verified-staged-snapshot>`,
+        riskLevel: "workspace_write",
+        enforcement: "audit_only",
+        exitCode: 1,
+        durationMs: Date.now() - startedAt,
+        error: messageText,
+      });
+      return jsonError("GIT_COMMIT_FAILED", messageText, {
+        branch: status.branch,
+        head: localHead,
+        staged_fingerprint: staged.fingerprint,
+        staged_paths: staged.paths,
+      });
+    }
+  } catch (err) {
+    return jsonError("GIT_COMMIT_PREFLIGHT_FAILED", err instanceof Error ? err.message : String(err));
   }
 }
 

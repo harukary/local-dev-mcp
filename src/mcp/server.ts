@@ -45,7 +45,7 @@ import { withRequestSignal } from "./request-context.js";
 import { structuredTextFallback } from "./output.js";
 import { jsonError } from "./tools/dev/common.js";
 import { handleBrowserInteract } from "./tools/browser.js";
-import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleGitDiff, handleGitPush } from "./tools/dev/git.js";
+import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleGitDiff, handleGitCommit, handleGitPush } from "./tools/dev/git.js";
 import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserToolOperation, handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserTabOpen, handleBrowserTabUse, handleBrowserTabClose, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete } from "./tools/todo.js";
@@ -329,7 +329,7 @@ For substantive work on a project:
 5. Do not read unrelated skills.
 6. Do not call skills.list again unless the project changes, the Skills runtime is reloaded, or the available Skills may otherwise have changed.
 7. When two or more independent workspace.read, workspace.search, or workspace.list operations are needed, prefer one workspace.batch call.
-8. Use git.inspect/status/diff/log/show for read-only Git inspection. Use git.push for normal pushes of the current branch to its configured upstream; provide the expected local HEAD. Use shell.run only for other Git writes or operations not covered by typed Git tools.
+8. Use git.inspect/status/diff/log/show for read-only Git inspection. Use git.commit for normal commits of an already-reviewed staged snapshot; provide expected_head and expected_staged_fingerprint from git.status/git.inspect. Use git.push for normal pushes of the current branch to its configured upstream; provide the expected local HEAD. Use shell.run only for other Git writes or operations not covered by typed Git tools.
 9. For long shell jobs, reuse shell.status cursors. For normal completion polling use wait_ms=30000 and output=none; keep max_bytes small unless output is needed.
 10. For model-only inspection of a project image, try image.read first instead of materializing preemptively. If image.read returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, artifact.link/resource materialization is a fallback only when the file is within the resource materialization size limit. If image.read reports IMAGE_TOO_LARGE, create or request a smaller local preview instead of trying to send the oversized original through the Secure Tunnel. Also materialize/download when a downstream operation genuinely requires file bytes and the file fits the tunnel-safe limit.
 `.trim();
@@ -418,6 +418,9 @@ export function createMcpServer(ctx: AppContext): Server {
 
         case "git.diff":
           return await handleGitDiff(ctx, chatContextId, args as { path?: string; staged?: boolean; stat?: boolean; max_bytes?: number });
+
+        case "git.commit":
+          return await handleGitCommit(ctx, chatContextId, args as { expected_head?: string; expected_staged_fingerprint?: string; message?: string });
 
         case "git.push":
           return await handleGitPush(ctx, chatContextId, args as { expected_head?: string });

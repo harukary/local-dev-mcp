@@ -204,10 +204,13 @@ describe("tool schema snapshot", () => {
     const artifactRead = snapshot.tools.find((tool) => tool.name === "artifact.read");
     const artifactReceive = snapshot.tools.find((tool) => tool.name === "artifact.receive");
     const mobileScreenshot = snapshot.tools.find((tool) => tool.name === "mobile.screenshot");
+    const gitCommit = snapshot.tools.find((tool) => tool.name === "git.commit");
     const gitPush = snapshot.tools.find((tool) => tool.name === "git.push");
 
-    expect(snapshot.schema_version).toBe("2026-09-25.4");
+    expect(snapshot.schema_version).toBe("2026-09-25.5");
     expect(names).toContain("tool.schema");
+    expect(names).toContain("git.commit");
+    expect(gitCommit?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });
     expect(names).toContain("git.push");
     expect(gitPush?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true });
     expect(names).toContain("image.read");
