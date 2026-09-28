@@ -39,6 +39,7 @@ import { handleWorkspaceList } from "./tools/dev/workspace-list.js";
 import { handleWorkspaceSearch } from "./tools/dev/workspace-search.js";
 import { handleWorkspacePatch } from "./tools/dev/workspace-patch.js";
 import { handleWorkspaceBatch, type ReadBatchItem } from "./tools/dev/batch.js";
+import { handlePagesDeploy } from "./tools/dev/deploy.js";
 import { runMobileToolOperation } from "./tools/mobile.js";
 import { validateToolInput } from "./input-validation.js";
 import { withRequestSignal } from "./request-context.js";
@@ -329,7 +330,7 @@ For substantive work on a project:
 5. Do not read unrelated skills.
 6. Do not call skills.list again unless the project changes, the Skills runtime is reloaded, or the available Skills may otherwise have changed.
 7. When two or more independent workspace.read, workspace.search, or workspace.list operations are needed, prefer one workspace.batch call.
-8. Use git.inspect/status/diff/log/show for read-only Git inspection. Use git.commit for normal commits of an already-reviewed staged snapshot; provide expected_head and expected_staged_fingerprint from git.status/git.inspect. Use git.push for normal pushes of the current branch to its configured upstream; provide the expected local HEAD. Use shell.run only for other Git writes or operations not covered by typed Git tools.
+8. Use git.inspect/status/diff/log/show for read-only Git inspection. Use git.commit for normal commits of an already-reviewed staged snapshot; provide expected_head and expected_staged_fingerprint from git.status/git.inspect. Use git.push for normal pushes of the current branch to its configured upstream; provide the expected local HEAD. Use deploy.pages.preflight and deploy.pages for Cloudflare Pages projects that expose the deploy:pages script; in Scheduled Tasks prefer these typed deployment tools over credential-scoped shell.run. Use shell.run only for other Git writes or operations not covered by typed tools.
 9. For long shell jobs, reuse shell.status cursors. For normal completion polling use wait_ms=30000 and output=none; keep max_bytes small unless output is needed.
 10. For model-only inspection of a project image, try image.read first instead of materializing preemptively. If image.read returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, artifact.link/resource materialization is a fallback only when the file is within the resource materialization size limit. If image.read reports IMAGE_TOO_LARGE, create or request a smaller local preview instead of trying to send the oversized original through the Secure Tunnel. Also materialize/download when a downstream operation genuinely requires file bytes and the file fits the tunnel-safe limit.
 `.trim();
@@ -403,6 +404,12 @@ export function createMcpServer(ctx: AppContext): Server {
         case "workspace.patch":
           return await handleWorkspacePatch(ctx, chatContextId, args as { patches?: Array<{ path?: string; expected_sha256?: string; replacement?: string }>; dry_run?: boolean });
 
+
+        case "deploy.pages.preflight":
+          return await handlePagesDeploy(ctx, chatContextId, args as { expected_head?: string }, "preflight");
+
+        case "deploy.pages":
+          return await handlePagesDeploy(ctx, chatContextId, args as { expected_head?: string }, "production");
 
         case "git.inspect":
           return await handleGitInspect(ctx, chatContextId, args as { include_untracked?: boolean; recent_commits?: number; include_worktrees?: boolean; include_diff_stat?: boolean });
