@@ -61,33 +61,6 @@ export function buildDevToolDefinitions() {
       annotations: WA,
     },
 
-    {
-      name: "deploy.pages.preflight",
-      description: "Run the selected project's fixed package.json deploy:pages script in preflight-only mode with Bitwarden credentials injected internally. Requires expected_head to match the selected Git worktree HEAD. Use this before any Cloudflare Pages public mutation, especially in Scheduled Tasks; do not substitute credential-scoped shell.run when this tool is available.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          expected_head: { type: "string", minLength: 7, maxLength: 64, pattern: "^[0-9a-fA-F]+$", description: "Expected deployment worktree HEAD from git.status or git.inspect." },
-        },
-        required: ["expected_head"],
-        additionalProperties: false,
-      },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-    },
-    {
-      name: "deploy.pages",
-      description: "Deploy the selected Git worktree to Cloudflare Pages through its fixed package.json deploy:pages script with Bitwarden credentials injected internally. Requires expected_head to match the selected worktree HEAD and refuses nested archive/copy directories. Use after build verification and push; this is the preferred production path in Scheduled Tasks.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          expected_head: { type: "string", minLength: 7, maxLength: 64, pattern: "^[0-9a-fA-F]+$", description: "Expected deployment worktree HEAD from git.status or git.inspect." },
-        },
-        required: ["expected_head"],
-        additionalProperties: false,
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-    },
-
     { name: "git.inspect", description: "Inspect repository state in one call: branch/upstream/ahead-behind, changed files, recent commits, worktrees, and diff stat. Prefer this over bundling multiple read-only git shell commands.", inputSchema: { type: "object", properties: { include_untracked: { type: "boolean" }, recent_commits: { type: "integer", minimum: 0, maximum: 20 }, include_worktrees: { type: "boolean" }, include_diff_stat: { type: "boolean" } } }, annotations: RO },
     { name: "git.status", description: "Return structured git status, upstream, and ahead/behind counts for the selected project.", inputSchema: { type: "object", properties: { include_untracked: { type: "boolean" } } }, annotations: RO },
     { name: "git.log", description: "Return recent commits for a git ref, optionally scoped to one project path.", inputSchema: { type: "object", properties: { ref: { type: "string" }, path: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } } }, annotations: RO },

@@ -206,23 +206,14 @@ describe("tool schema snapshot", () => {
     const mobileScreenshot = snapshot.tools.find((tool) => tool.name === "mobile.screenshot");
     const gitCommit = snapshot.tools.find((tool) => tool.name === "git.commit");
     const gitPush = snapshot.tools.find((tool) => tool.name === "git.push");
-    const deployPreflight = snapshot.tools.find((tool) => tool.name === "deploy.pages.preflight");
-    const deployPages = snapshot.tools.find((tool) => tool.name === "deploy.pages");
-
-    expect(snapshot.schema_version).toBe("2026-09-28.1");
+    expect(snapshot.schema_version).toBe("2026-10-01.1");
     expect(names).toContain("tool.schema");
     expect(names).toContain("git.commit");
     expect(gitCommit?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });
     expect(names).toContain("git.push");
     expect(gitPush?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true });
-    expect(names).toContain("deploy.pages.preflight");
-    expect(deployPreflight?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true });
-    expect(deployPreflight?.inputSchema.required).toContain("expected_head");
-    expect(deployPreflight?.inputSchema.properties).toHaveProperty("project_id");
-    expect(names).toContain("deploy.pages");
-    expect(deployPages?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true });
-    expect(deployPages?.inputSchema.required).toContain("expected_head");
-    expect(deployPages?.inputSchema.properties).toHaveProperty("project_id");
+    expect(names).not.toContain("deploy.pages.preflight");
+    expect(names).not.toContain("deploy.pages");
     expect(names).toContain("image.read");
     expect(names).toContain("artifact.link");
     expect(names).toContain("artifact.read");
