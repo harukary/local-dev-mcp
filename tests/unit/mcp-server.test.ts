@@ -196,6 +196,7 @@ describe("tool schema snapshot", () => {
   it("publishes the Secure Tunnel-era tool surface", () => {
     const snapshot = buildToolSchemaSnapshot();
     const names = snapshot.tools.map((tool) => tool.name);
+    const projectSelect = snapshot.tools.find((tool) => tool.name === "project.select");
     const shellRun = snapshot.tools.find((tool) => tool.name === "shell.run");
     const workspacePatch = snapshot.tools.find((tool) => tool.name === "workspace.patch");
     const workspaceRead = snapshot.tools.find((tool) => tool.name === "workspace.read");
@@ -206,7 +207,8 @@ describe("tool schema snapshot", () => {
     const mobileScreenshot = snapshot.tools.find((tool) => tool.name === "mobile.screenshot");
     const gitCommit = snapshot.tools.find((tool) => tool.name === "git.commit");
     const gitPush = snapshot.tools.find((tool) => tool.name === "git.push");
-    expect(snapshot.schema_version).toBe("2026-10-01.1");
+    expect(snapshot.schema_version).toBe("2026-10-02.1");
+    expect(projectSelect?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
     expect(names).toContain("tool.schema");
     expect(names).toContain("git.commit");
     expect(gitCommit?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });

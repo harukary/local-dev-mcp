@@ -3,7 +3,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-10-01.1";
+export const TOOL_SCHEMA_VERSION = "2026-10-02.1";
 
 const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "skills.list",
@@ -94,7 +94,7 @@ export function buildToolDefinitions() {
         },
         required: ["project_id"],
       },
-      annotations: { readOnlyHint: false, openWorldHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     {
       name: "project.current",
