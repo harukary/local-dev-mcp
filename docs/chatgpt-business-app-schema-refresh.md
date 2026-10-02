@@ -1,6 +1,6 @@
 # ChatGPT Business Workspace App / MCP schema refresh behavior
 
-Last verified: 2026-09-25
+Last verified: 2026-10-02
 
 This note records how we currently update the **workspace-published `local-dev` / MCP app in the harukary Business workspace** when the MCP tool surface changes.
 
@@ -25,6 +25,8 @@ We directly observed the following in the harukary Business workspace on 2026-09
 6. Executing that current refresh flow updated the existing `local-dev` action snapshot in place from the old `artifact.read` 8 MiB description to the new 6 MiB description.
 7. A Branch chat created after that refresh exposed the 6 MiB tool schema and runtime schema version `2026-09-25.1`.
 8. Uploading the same Plugin package as version `1.0.1` did **not** refresh the MCP action snapshot: the package version changed while the old 8 MiB action description remained until actions were refreshed separately.
+9. On 2026-10-02, after `project.select` changed to return composed global + project/worktree agent instructions, the runtime was activated with schema version `2026-10-02.3`, the existing workspace app action snapshot was refreshed in place, and the updated `project.select` description was read back from the workspace connector configuration.
+10. A Branch chat created after that refresh returned both instruction sources from `project.select` (`$CODEX_HOME/AGENTS.md` followed by the project `AGENTS.md`) and included the newly published global instructions, confirming that the branch had rebound to the refreshed action/runtime behavior.
 
 Concrete verification from the `sodateai` app:
 
@@ -47,7 +49,7 @@ For an externally visible MCP tool-surface change:
 7. Refresh that app's actions in place. Prefer a visible Refresh control when present. If the newer Plugin UI hides it, inspect the current ChatGPT app-management client flow rather than substituting a package-version upload or recreating the app.
 8. Read back the app's action list and verify the expected tools/inputs/descriptions are present and the removed or old values are gone.
 9. Create a **Branch chat** or a completely new chat so the conversation gets a fresh model-facing tool binding.
-10. Verify the exact tool names/input fields visible in that branch before destructive work.
+10. Verify the exact tool names/input fields visible in that branch before destructive work. For `project.select`, also perform a harmless call and confirm its returned `agent_instructions.sources` and effective instruction content when agent-instruction behavior changed.
 
 The expected state flow is:
 

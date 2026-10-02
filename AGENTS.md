@@ -3,6 +3,11 @@
 - 返答は、上位のユーザー指示が別言語を指定しない限り日本語で行う。
 - このrepoの主なruntime clientはChatGPTであり、WebだけでなくChatGPT Androidからの実利用も互換性対象として扱う。
 
+## Documentation
+
+- 実装・運用仕様を変更した場合は、その変更と同じ作業内でREADMEおよび該当する`docs/`を更新し、常に現在の仕様と一致させる。古い仕様を現行手順として残さない。過去の実測事実を残す必要がある場合は、観測日を明記した履歴・互換性資料として現在仕様と区別する。
+- ChatGPT固有の未文書化挙動を実測した場合は、再現条件・観測日・現在の運用ルール・検証方法を`docs/`へ記録する。tool/runtime/action snapshot/conversation bindingのように複数層がある仕様は、どの層の事実かを明記する。
+
 ## ChatGPT transport
 
 - ChatGPTとの正規接続経路はOpenAI Secure MCP Tunnelのみとする。public MCP ingressや別Tunnel方式の互換コードを追加しない。

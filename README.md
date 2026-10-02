@@ -72,6 +72,8 @@ Core tool families include:
 
 Prefer typed tools over broad shell commands:
 
+- start interactive project work with `project.select`; it returns the effective global and project/worktree agent instructions for that selection
+- `project.select` composes `$CODEX_HOME/AGENTS.md` first and the selected project/worktree `AGENTS.md` second, so project/worktree instructions take precedence on conflicts; see [`docs/project-select-agent-instructions.md`](docs/project-select-agent-instructions.md)
 - use `project.inspect` rather than filesystem discovery for the active project
 - use bounded `workspace.read`, `workspace.list`, and `workspace.search` rather than large shell scans
 - use typed `git.*` tools for common repository inspection
@@ -153,7 +155,7 @@ Start the stdio MCP transport for a local MCP client:
 pnpm dev
 ```
 
-`skills.list` and `skills.read` use `CODEX_HOME` for Codex Skills, defaulting to `~/.haru/.codex`. Set `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` to select the skill origin manifest; relative paths resolve under `CODEX_HOME`, and the default is `.haru-context-origins.json`. When generating LaunchAgents, set these environment variables to pass them into the server plist.
+`skills.list`, `skills.read`, and the global agent-instruction source used by `project.select` use `CODEX_HOME`, defaulting to `~/.haru/.codex`. The global instruction file is `$CODEX_HOME/AGENTS.md`. Set `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` to select the skill origin manifest; relative paths resolve under `CODEX_HOME`, and the default is `.haru-context-origins.json`. When generating LaunchAgents, set these environment variables to pass them into the server plist.
 
 ## OpenAI Secure MCP Tunnel
 
