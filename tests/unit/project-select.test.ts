@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -69,6 +69,52 @@ describe("handleProjectSelect", () => {
     expect(second.structuredContent).toMatchObject({ changed: false });
     expect(save).toHaveBeenCalledTimes(1);
     expect(audit).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the project AGENTS.md as working instructions", async () => {
+    const project = makeProject();
+    writeFileSync(join(root, "AGENTS.md"), "# Project instructions\n\n- Use typed tools.\n", "utf8");
+    const { ctx } = makeContext(project);
+
+    const result = await handleProjectSelect(ctx, "chat-a", { project_id: "alpha" });
+
+    expect(payload(result)).toMatchObject({
+      agent_instructions: {
+        path: "AGENTS.md",
+        content: "# Project instructions\n\n- Use typed tools.\n",
+        truncated: false,
+      },
+    });
+  });
+
+  it("prefers AGENTS.md in the selected working directory", async () => {
+    const project = makeProject();
+    mkdirSync(join(root, ".worktree", "feature-x"), { recursive: true });
+    writeFileSync(join(root, "AGENTS.md"), "root instructions", "utf8");
+    writeFileSync(join(root, ".worktree", "feature-x", "AGENTS.md"), "worktree instructions", "utf8");
+    const { ctx } = makeContext(project);
+
+    const result = await handleProjectSelect(ctx, "chat-a", {
+      project_id: "alpha",
+      working_dir: ".worktree/feature-x",
+    });
+
+    expect(payload(result)).toMatchObject({
+      agent_instructions: {
+        path: ".worktree/feature-x/AGENTS.md",
+        content: "worktree instructions",
+        truncated: false,
+      },
+    });
+  });
+
+  it("returns null when no AGENTS.md exists", async () => {
+    const project = makeProject();
+    const { ctx } = makeContext(project);
+
+    const result = await handleProjectSelect(ctx, "chat-a", { project_id: "alpha" });
+
+    expect(payload(result)).toMatchObject({ agent_instructions: null });
   });
 
   it("persists a project-relative working directory for worktree-style operation", async () => {
