@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   attachTurnRequestMeta,
   buildTurnPausedResponse,
+  INTERACTIVE_TURN_LIMIT_MS,
   InteractiveTurnLeaseManager,
   resolveTurnLeaseKey,
   resolveTurnRequestId,
 } from "../../src/mcp/turn-lease.js";
 
 describe("interactive turn lease", () => {
+  it("uses a 30-minute default lease", () => {
+    expect(INTERACTIVE_TURN_LIMIT_MS).toBe(30 * 60 * 1000);
+  });
+
   it("extracts the request-group prefix from Secure Tunnel X-Request-Id values", () => {
     expect(resolveTurnRequestId("7389d8db-cace-4280-ab09-8fbfa6ebec82/2jlw")).toBe(
       "7389d8db-cace-4280-ab09-8fbfa6ebec82",
