@@ -51,6 +51,7 @@ import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, ha
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete } from "./tools/todo.js";
 import { hashOpenAiSubject, OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiSubjectAuthConfig, resolveOpenAiSubjectPolicy, resolveOpenAiTunnelAuthConfig, verifyOpenAiSubject, verifyOpenAiTunnelToken, type OpenAiSubjectPolicy, type OpenAiTunnelAuthConfig } from "./auth.js";
 import { resolveWorkingDirectory } from "../project/working-directory.js";
+import { attachTurnRequestMeta, buildTurnPausedResponse, InteractiveTurnLeaseManager, resolveTurnLeaseKey } from "./turn-lease.js";
 
 export interface AppContext {
   configPath: string;
@@ -59,6 +60,7 @@ export interface AppContext {
   shellRunner: ShellRunner;
   auditLogger: AuditLogger;
   toolUsageMetrics: ToolUsageMetrics;
+  turnLeaseManager: InteractiveTurnLeaseManager;
   allowedOpenAiSubject?: string;
   openAiSubjectPolicy?: OpenAiSubjectPolicy;
 }
@@ -316,8 +318,9 @@ async function createAppContext(
   const shellRunner = new ShellRunner();
   const auditLogger = new AuditLogger("./logs/audit.jsonl");
   const toolUsageMetrics = new ToolUsageMetrics("./logs/tool-usage.json");
+  const turnLeaseManager = new InteractiveTurnLeaseManager();
 
-  return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics, allowedOpenAiSubject, openAiSubjectPolicy };
+  return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics, turnLeaseManager, allowedOpenAiSubject, openAiSubjectPolicy };
 }
 
 export const SERVER_INSTRUCTIONS = `
@@ -331,7 +334,8 @@ For substantive work on a project:
 7. When two or more independent workspace.read, workspace.search, or workspace.list operations are needed, prefer one workspace.batch call.
 8. Use git.inspect/status/diff/log/show for read-only Git inspection. Use git.commit for normal commits of an already-reviewed staged snapshot; provide expected_head and expected_staged_fingerprint from git.status/git.inspect. Use git.push for normal pushes of the current branch to its configured upstream; provide the expected local HEAD. Deployment is project-specific: follow the selected repo's deployment contract rather than assuming a generic local-dev deployment tool. Use shell.run only for Git writes or project operations not covered by typed tools.
 9. For long shell jobs, reuse shell.status cursors. For normal completion polling use wait_ms=30000 and output=none; keep max_bytes small unless output is needed.
-10. For model-only inspection of a project image, try image.read first instead of materializing preemptively. If image.read returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, artifact.link/resource materialization is a fallback only when the file is within the resource materialization size limit. If image.read reports IMAGE_TOO_LARGE, create or request a smaller local preview instead of trying to send the oversized original through the Secure Tunnel. Also materialize/download when a downstream operation genuinely requires file bytes and the file fits the tunnel-safe limit.
+10. Interactive ChatGPT turns have a 15-minute local-dev lease measured from the first local-dev tool call in that turn. If any local-dev tool returns status=turn_paused, treat it as an intentional turn boundary rather than an error: do not call local-dev again in the same assistant turn, do not alter or shorten the workflow because of the pause, and resume the unchanged workflow after the user sends the next message.
+11. For model-only inspection of a project image, try image.read first instead of materializing preemptively. If image.read returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, artifact.link/resource materialization is a fallback only when the file is within the resource materialization size limit. If image.read reports IMAGE_TOO_LARGE, create or request a smaller local preview instead of trying to send the oversized original through the Secure Tunnel. Also materialize/download when a downstream operation genuinely requires file bytes and the file fits the tunnel-safe limit.
 `.trim();
 
 export function createMcpServer(ctx: AppContext): Server {
@@ -644,6 +648,8 @@ export function createMcpServer(ctx: AppContext): Server {
         }
       };
       const invalid = validateToolInput(name, args);
+      const turnLeaseKey = statelessScheduledTask ? undefined : resolveTurnLeaseKey(chatContextId, meta);
+      const turnLease = turnLeaseKey ? ctx.turnLeaseManager.check(turnLeaseKey) : undefined;
       const explicitScope = invalid ? undefined : resolveExplicitProjectScope(ctx, name, args);
       const scopeRequired = !invalid && statelessScheduledTask && supportsExplicitProjectScope(name) && explicitScope?.ok && !explicitScope.projectId;
       const executeTool = async () => name.startsWith("browser.")
@@ -653,7 +659,16 @@ export function createMcpServer(ctx: AppContext): Server {
           : await invokeTool();
 
       let result: any;
-      if (invalid) {
+      if (turnLease?.paused) {
+        result = buildTurnPausedResponse(name, turnLease);
+        await ctx.auditLogger.log({
+          timestamp: new Date().toISOString(),
+          chatContextId,
+          tool: name,
+          event: "interactive_turn_paused",
+          error: `elapsed_ms=${turnLease.elapsedMs} limit_ms=${turnLease.limitMs}`,
+        });
+      } else if (invalid) {
         result = jsonError("INVALID_ARGUMENT", invalid);
       } else if (explicitScope && !explicitScope.ok) {
         result = explicitScope.result;
@@ -1087,7 +1102,9 @@ async function handleMcpRequest(
   ctx: AppContext
 ): Promise<void> {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  const parsed = req.method === "POST" ? res.locals.mcpParsed : undefined;
+  const parsed = req.method === "POST"
+    ? attachTurnRequestMeta(res.locals.mcpParsed, req.headers["x-request-id"])
+    : undefined;
   debugMcpLog(`[MCP] stateless request sessionId=${sessionId ?? "(none)"} isInit=${isInitializeRequest(parsed)}`);
 
   const transport = new StreamableHTTPServerTransport({
