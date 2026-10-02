@@ -1,4 +1,5 @@
 import { lstat, open } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import type { AppContext } from "../server.js";
 import type { AuditLogEntry } from "../../types.js";
@@ -6,37 +7,82 @@ import { resolveWorkingDirectory } from "../../project/working-directory.js";
 
 const MAX_AGENT_INSTRUCTIONS_BYTES = 64 * 1024;
 
-async function readAgentInstructions(projectRoot: string, workingRoot: string) {
+type AgentInstructionSource = {
+  scope: "global" | "project";
+  path: string;
+  content: string;
+  truncated: boolean;
+};
+
+async function readInstructionFile(
+  path: string,
+  displayPath: string,
+  scope: AgentInstructionSource["scope"]
+): Promise<AgentInstructionSource | null> {
+  try {
+    const info = await lstat(path);
+    if (!info.isFile()) return null;
+
+    const bytesToRead = Math.min(info.size, MAX_AGENT_INSTRUCTIONS_BYTES);
+    const buffer = Buffer.alloc(bytesToRead);
+    const file = await open(path, "r");
+    try {
+      const { bytesRead } = await file.read(buffer, 0, bytesToRead, 0);
+      return {
+        scope,
+        path: displayPath,
+        content: buffer.subarray(0, bytesRead).toString("utf8"),
+        truncated: info.size > MAX_AGENT_INSTRUCTIONS_BYTES,
+      };
+    } finally {
+      await file.close();
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw error;
+  }
+}
+
+async function readProjectAgentInstructions(projectRoot: string, workingRoot: string) {
   const candidates = workingRoot === projectRoot
     ? [join(projectRoot, "AGENTS.md")]
     : [join(workingRoot, "AGENTS.md"), join(projectRoot, "AGENTS.md")];
 
   for (const path of candidates) {
-    try {
-      const info = await lstat(path);
-      if (!info.isFile()) continue;
-
-      const bytesToRead = Math.min(info.size, MAX_AGENT_INSTRUCTIONS_BYTES);
-      const buffer = Buffer.alloc(bytesToRead);
-      const file = await open(path, "r");
-      try {
-        const { bytesRead } = await file.read(buffer, 0, bytesToRead, 0);
-        return {
-          path: relative(projectRoot, path).replace(/\\/g, "/") || "AGENTS.md",
-          content: buffer.subarray(0, bytesRead).toString("utf8"),
-          truncated: info.size > MAX_AGENT_INSTRUCTIONS_BYTES,
-        };
-      } finally {
-        await file.close();
-      }
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") continue;
-      throw error;
-    }
+    const source = await readInstructionFile(
+      path,
+      relative(projectRoot, path).replace(/\\/g, "/") || "AGENTS.md",
+      "project"
+    );
+    if (source) return source;
   }
 
   return null;
+}
+
+async function readAgentInstructions(projectRoot: string, workingRoot: string) {
+  const codexHome = process.env.CODEX_HOME?.trim() || join(homedir(), ".haru", ".codex");
+  const [globalInstructions, projectInstructions] = await Promise.all([
+    readInstructionFile(join(codexHome, "AGENTS.md"), "$CODEX_HOME/AGENTS.md", "global"),
+    readProjectAgentInstructions(projectRoot, workingRoot),
+  ]);
+  const sources = [globalInstructions, projectInstructions].filter(
+    (source): source is AgentInstructionSource => source !== null
+  );
+  if (sources.length === 0) return null;
+
+  const primary = projectInstructions ?? globalInstructions!;
+  const content = sources.length === 1
+    ? sources[0].content
+    : `${sources.map((source) => source.content.replace(/\n+$/u, "")).join("\n\n")}\n`;
+
+  return {
+    path: primary.path,
+    content,
+    truncated: sources.some((source) => source.truncated),
+    sources: sources.map(({ scope, path, truncated }) => ({ scope, path, truncated })),
+  };
 }
 
 function jsonResult(value: Record<string, unknown>) {

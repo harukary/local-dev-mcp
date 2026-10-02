@@ -1,17 +1,29 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import { handleProjectSelect } from "../../src/mcp/tools/project-select.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
 
 let root = "";
+let codexHome = "";
+let previousCodexHome: string | undefined;
+
+beforeEach(() => {
+  previousCodexHome = process.env.CODEX_HOME;
+  codexHome = mkdtempSync(join(tmpdir(), "local-dev-codex-home-"));
+  process.env.CODEX_HOME = codexHome;
+});
 
 afterEach(() => {
   if (root) rmSync(root, { recursive: true, force: true });
+  if (codexHome) rmSync(codexHome, { recursive: true, force: true });
   root = "";
+  codexHome = "";
+  if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = previousCodexHome;
 });
 
 function makeProject(): ProjectConfig {
@@ -83,6 +95,27 @@ describe("handleProjectSelect", () => {
         path: "AGENTS.md",
         content: "# Project instructions\n\n- Use typed tools.\n",
         truncated: false,
+      },
+    });
+  });
+
+  it("merges global AGENTS.md before project instructions", async () => {
+    const project = makeProject();
+    writeFileSync(join(codexHome, "AGENTS.md"), "# Global instructions\n\n- Queue heavy work.\n", "utf8");
+    writeFileSync(join(root, "AGENTS.md"), "# Project instructions\n\n- Use typed tools.\n", "utf8");
+    const { ctx } = makeContext(project);
+
+    const result = await handleProjectSelect(ctx, "chat-a", { project_id: "alpha" });
+
+    expect(payload(result)).toMatchObject({
+      agent_instructions: {
+        path: "AGENTS.md",
+        content: "# Global instructions\n\n- Queue heavy work.\n\n# Project instructions\n\n- Use typed tools.\n",
+        truncated: false,
+        sources: [
+          { scope: "global", path: "$CODEX_HOME/AGENTS.md", truncated: false },
+          { scope: "project", path: "AGENTS.md", truncated: false },
+        ],
       },
     });
   });

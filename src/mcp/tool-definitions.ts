@@ -3,7 +3,7 @@ import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-10-02.2";
+export const TOOL_SCHEMA_VERSION = "2026-10-02.3";
 
 const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "skills.list",
@@ -79,7 +79,7 @@ export function buildToolDefinitions() {
     {
       name: "project.select",
       description:
-        "Select the current project and optional project-relative working directory for all project-scoped tools in an interactive chat context. The result also returns the applicable AGENTS.md as agent_instructions when present; treat it as project-specific working instructions. Use working_dir for a git worktree (for example .worktree/feature-x) instead of wrapping typed tools in cd or pnpm worktree:run. The selection persists; call this again only when switching project or working directory. Do not use project.select in stateless Scheduled Tasks; pass project_id and optional working_dir on every project-scoped call instead.",
+        "Select the current project and optional project-relative working directory for all project-scoped tools in an interactive chat context. The result also returns agent_instructions composed from the global $CODEX_HOME/AGENTS.md followed by the applicable project/worktree AGENTS.md when present; apply both, with the later project/worktree instructions taking precedence when they conflict. Use working_dir for a git worktree (for example .worktree/feature-x) instead of wrapping typed tools in cd or pnpm worktree:run. The selection persists; call this again only when switching project or working directory. Do not use project.select in stateless Scheduled Tasks; pass project_id and optional working_dir on every project-scoped call instead.",
       inputSchema: {
         type: "object",
         properties: {
