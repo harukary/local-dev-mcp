@@ -77,6 +77,7 @@ Prefer typed tools over broad shell commands:
 - use typed `git.*` tools for common repository inspection
 - use `shell.run` for builds, tests, deploys, installs, and unsupported operations
 - use `shell.run` with `async=true` for work that may exceed roughly 30 seconds, then poll `shell.status`
+- interactive ChatGPT turns use a 15-minute local-dev lease; after expiry, the next local-dev call returns `turn_paused` without changing or cancelling the workflow. See [`docs/chatgpt-interactive-turn-lease.md`](docs/chatgpt-interactive-turn-lease.md)
 - use `tool.schema` after server/tool changes when ChatGPT has stale action metadata
 
 ## Browser Profiles
