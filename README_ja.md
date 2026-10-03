@@ -357,7 +357,7 @@ project entryでは少なくとも次を管理します。
 - denied paths
 - redaction profile
 
-conversation単位の選択は`project.select`で保持します。project-sensitiveな操作でcontextが不明なら`project.current`を確認します。
+conversation単位の選択は`project.select`で保持します。global + project/worktreeのagent instructions全文は`structuredContent`だけに返し、text fallbackにはmetadataだけを返して会話履歴への二重投入を避けます。project-sensitiveな操作でcontextが不明なら`project.current`を確認します。
 
 ## 物理モバイル端末の自動操作
 

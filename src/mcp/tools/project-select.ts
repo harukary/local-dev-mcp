@@ -86,9 +86,22 @@ async function readAgentInstructions(projectRoot: string, workingRoot: string) {
 }
 
 function jsonResult(value: Record<string, unknown>) {
+  const agentInstructions = value.agent_instructions;
+  const textValue = agentInstructions && typeof agentInstructions === "object"
+    ? {
+        ...value,
+        agent_instructions: {
+          path: (agentInstructions as { path?: unknown }).path,
+          truncated: (agentInstructions as { truncated?: unknown }).truncated,
+          sources: (agentInstructions as { sources?: unknown }).sources,
+          content: "[available in structuredContent]",
+        },
+      }
+    : value;
+
   return {
     structuredContent: value,
-    content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify(textValue, null, 2) }],
   };
 }
 

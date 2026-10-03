@@ -45,8 +45,8 @@ function makeProject(): ProjectConfig {
   };
 }
 
-function payload(result: { content: Array<{ text?: string }> }) {
-  return JSON.parse(result.content[0].text ?? "{}");
+function payload(result: { structuredContent?: unknown }) {
+  return result.structuredContent as Record<string, unknown>;
 }
 
 function makeContext(project: ProjectConfig) {
@@ -118,6 +118,13 @@ describe("handleProjectSelect", () => {
         ],
       },
     });
+    const textFallback = JSON.parse(result.content[0].text ?? "{}");
+    expect(textFallback.agent_instructions).toMatchObject({
+      path: "AGENTS.md",
+      content: "[available in structuredContent]",
+    });
+    expect(result.content[0].text).not.toContain("# Global instructions");
+    expect(result.content[0].text).not.toContain("# Project instructions");
   });
 
   it("prefers AGENTS.md in the selected working directory", async () => {

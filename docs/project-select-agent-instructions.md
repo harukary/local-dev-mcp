@@ -70,6 +70,8 @@ When at least one instruction source exists, `project.select` returns `agent_ins
 
 `path` remains the primary project/worktree instruction path when one exists, preserving compatibility with clients that previously treated `agent_instructions.path` as a single project file. If only the global file exists, it becomes the primary path. If neither source exists, `agent_instructions` is `null`.
 
+The complete `agent_instructions.content` is emitted only in MCP `structuredContent`. The parallel text `content` block keeps the normal selection metadata and instruction source metadata, but replaces the instruction body with `[available in structuredContent]`. This prevents the same AGENTS payload from being inserted twice into ChatGPT's model-visible tool result while keeping a readable fallback for clients that display only text content.
+
 Each source is read up to 64 KiB. `truncated` is true when any included source exceeded that limit, while each entry in `sources` reports truncation for that individual file.
 
 ## Scope and ownership
