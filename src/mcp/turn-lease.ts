@@ -1,5 +1,5 @@
 const TURN_REQUEST_META_KEY = "local-dev/turn-request-id";
-export const INTERACTIVE_TURN_LIMIT_MS = 30 * 60 * 1000;
+export const INTERACTIVE_TURN_LIMIT_MS = 20 * 60 * 1000;
 
 type TurnLeaseState = {
   startedAtMs: number;

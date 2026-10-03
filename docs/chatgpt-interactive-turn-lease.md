@@ -8,7 +8,7 @@ The lease is a transport-safety boundary. It must not change implementation choi
 
 ## Behavior
 
-- The default lease duration is 30 minutes.
+- The default lease duration is 20 minutes.
 - Timing starts at the first local-dev tool call in an interactive ChatGPT assistant turn.
 - Work proceeds normally until the lease expires.
 - A tool call already in progress is never interrupted by the lease.
@@ -17,7 +17,7 @@ The lease is a transport-safety boundary. It must not change implementation choi
 - ChatGPT must not retry local-dev again in the same assistant turn.
 - Existing background jobs continue running.
 - ChatGPT returns control to the user.
-- The next user message creates a new assistant turn with a fresh 30-minute lease.
+- The next user message creates a new assistant turn with a fresh 20-minute lease.
 - The original workflow resumes unchanged from the same point.
 - Scheduled Tasks are excluded from the interactive lease.
 
@@ -53,8 +53,8 @@ When the lease has expired, the requested tool is skipped and local-dev returns 
   "reason": "interactive_turn_time_limit",
   "requested_tool": "shell.status",
   "tool_call_executed": false,
-  "elapsed_seconds": 1812,
-  "turn_limit_seconds": 1800,
+  "elapsed_seconds": 1212,
+  "turn_limit_seconds": 1200,
   "retry_in_same_turn": false,
   "resume_on_next_user_turn": true,
   "preserve_workflow": true,
@@ -79,9 +79,9 @@ The implementation lives in:
 - `src/mcp/server.ts`
 - `tests/unit/turn-lease.test.ts`
 
-`InteractiveTurnLeaseManager` stores the first-call timestamp for each turn key and marks that turn as paused once 1,800 seconds have elapsed.
+`InteractiveTurnLeaseManager` stores the first-call timestamp for each turn key and marks that turn as paused once 1,200 seconds have elapsed.
 
-The lease check happens before tool execution. A long-running tool call may cross the 30-minute boundary and still finish normally; execution pauses only when the next local-dev call arrives.
+The lease check happens before tool execution. A long-running tool call may cross the 20-minute boundary and still finish normally; execution pauses only when the next local-dev call arrives.
 
 ## Verification
 
@@ -90,7 +90,7 @@ The behavior is covered by focused unit tests for:
 - Secure Tunnel request-group extraction;
 - interactive-only lease metadata injection;
 - per-turn lease isolation;
-- the 30-minute default limit;
+- the 20-minute default limit;
 - non-error `turn_paused` response semantics.
 
 Server and instruction tests, TypeScript typechecking, and the production build should also pass before deployment.
@@ -101,4 +101,4 @@ If `turn_paused` appears unexpectedly early, inspect whether Secure Tunnel is ch
 
 If ChatGPT continues calling local-dev after receiving `turn_paused`, check that the current server instructions are loaded. A new Branch/chat forces a new ChatGPT MCP context and is useful after server-instruction changes.
 
-The 30-minute value is a turn boundary, not a work-planning heuristic. Do not skip tests, shorten implementation, or change task priority as the lease approaches expiry.
+The 20-minute value is a turn boundary, not a work-planning heuristic. Do not skip tests, shorten implementation, or change task priority as the lease approaches expiry.
