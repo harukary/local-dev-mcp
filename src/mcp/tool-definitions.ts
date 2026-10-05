@@ -2,8 +2,9 @@ import { buildDevToolDefinitions } from "./dev-tool-definitions.js";
 import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
+import { buildRepoActionToolDefinitions } from "./repo-action-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-10-02.3";
+export const TOOL_SCHEMA_VERSION = "2026-10-06.1";
 
 const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "skills.list",
@@ -20,6 +21,9 @@ const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "git.diff",
   "git.commit",
   "git.push",
+  "repo.action.list",
+  "repo.action.read",
+  "repo.action.write",
   "shell.run",
   "image.read",
   "artifact.link",
@@ -162,6 +166,7 @@ export function buildToolDefinitions() {
     },
     ...buildTodoToolDefinitions(),
     ...buildDevToolDefinitions(),
+    ...buildRepoActionToolDefinitions(),
     ...buildBrowserToolDefinitions(),
     ...buildMobileToolDefinitions(),
     {

@@ -49,6 +49,7 @@ import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleG
 import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserToolOperation, handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserTabOpen, handleBrowserTabUse, handleBrowserTabClose, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete } from "./tools/todo.js";
+import { handleRepoActionList, handleRepoActionRead, handleRepoActionWrite } from "./tools/repo-action.js";
 import { hashOpenAiSubject, OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiSubjectAuthConfig, resolveOpenAiSubjectPolicy, resolveOpenAiTunnelAuthConfig, verifyOpenAiSubject, verifyOpenAiTunnelToken, type OpenAiSubjectPolicy, type OpenAiTunnelAuthConfig } from "./auth.js";
 import { resolveWorkingDirectory } from "../project/working-directory.js";
 import { attachTurnRequestMeta, buildTurnPausedResponse, InteractiveTurnLeaseManager, resolveTurnLeaseKey } from "./turn-lease.js";
@@ -429,6 +430,14 @@ export function createMcpServer(ctx: AppContext): Server {
         case "git.push":
           return await handleGitPush(ctx, chatContextId, args as { expected_head?: string });
 
+        case "repo.action.list":
+          return await handleRepoActionList(ctx, chatContextId);
+
+        case "repo.action.read":
+          return await handleRepoActionRead(ctx, chatContextId, args as { action?: string; args?: Record<string, unknown> });
+
+        case "repo.action.write":
+          return await handleRepoActionWrite(ctx, chatContextId, args as { action?: string; args?: Record<string, unknown> });
 
         case "browser.status":
           return await handleBrowserStatus(ctx, chatContextId);

@@ -2,7 +2,7 @@
 
 ![local-dev-mcp System Architecture](docs/local-dev-mcp-system-overview-en.png)
 
-`local-dev-mcp` is a private MCP server for operating a trusted development workstation from ChatGPT. It exposes registered projects through typed project, workspace, git, browser, mobile, Todo, artifact, and controlled shell tools.
+`local-dev-mcp` is a private MCP server for operating a trusted development workstation from ChatGPT. It exposes registered projects through typed project, workspace, git, repository-action, browser, mobile, Todo, artifact, and controlled shell tools.
 
 For ChatGPT, the canonical transport is **OpenAI Secure MCP Tunnel**. The HTTP MCP server listens on loopback only and does not expose a public MCP endpoint.
 
@@ -39,6 +39,7 @@ Important runtime rules:
 - The local tunnel token is shared only between `tunnel-client` and `local-dev-mcp`.
 - The OpenAI Tunnel runtime API key and local tunnel token are never embedded in launchd plist files.
 - `shell.run` remains the fallback escape hatch; prefer typed tools whenever possible.
+- repositories can opt into closed-world local actions through `.local-dev/actions.json` and `repo.action.list/read/write`; arbitrary shell text is not accepted by that surface.
 - denied-path checks apply to file reads, writes, artifact transfer, and project-scoped operations.
 - raw artifact bytes and temporary file download URLs are not written to normal audit logs.
 
@@ -57,6 +58,7 @@ Core tool families include:
 - `project.*` — select, inspect, and reload registered projects
 - `workspace.*` — bounded file listing, reading, searching, and patching
 - `git.*` — structured repository status, diff, history, and commit inspection
+- `repo.action.*` — repository-declared local read/write actions backed by `.local-dev/actions.json`; see [`docs/repo-actions.md`](docs/repo-actions.md)
 - `shell.*` — managed shell execution, approvals, background jobs, and cancellation
 - `browser.*` — Chrome DevTools Protocol browser automation
 - `mobile.*` — iOS/Android inspection and interaction
@@ -77,7 +79,8 @@ Prefer typed tools over broad shell commands:
 - use `project.inspect` rather than filesystem discovery for the active project
 - use bounded `workspace.read`, `workspace.list`, and `workspace.search` rather than large shell scans
 - use typed `git.*` tools for common repository inspection
-- use `shell.run` for builds, tests, deploys, installs, and unsupported operations
+- use `repo.action.list` to discover repository-declared actions, then `repo.action.read` / `repo.action.write` for known local operations
+- use `shell.run` for builds, tests, deploys, installs, and unsupported or ad-hoc operations
 - use `shell.run` with `async=true` for work that may exceed roughly 30 seconds, then poll `shell.status`
 - interactive ChatGPT turns use a 20-minute local-dev lease; after expiry, the next local-dev call returns `turn_paused` without changing or cancelling the workflow. See [`docs/chatgpt-interactive-turn-lease.md`](docs/chatgpt-interactive-turn-lease.md)
 - use `tool.schema` after server/tool changes when ChatGPT has stale action metadata

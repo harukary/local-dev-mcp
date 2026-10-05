@@ -2,7 +2,7 @@
 
 ![local-dev-mcp システム構成](docs/local-dev-mcp-system-overview-ja.png)
 
-`local-dev-mcp` は、信頼した開発用PCを ChatGPT から操作するための private MCP server です。登録した project に対して、project / workspace / git / browser / mobile / Todo / artifact / controlled shell の typed tool を提供します。
+`local-dev-mcp` は、信頼した開発用PCを ChatGPT から操作するための private MCP server です。登録した project に対して、project / workspace / git / repository action / browser / mobile / Todo / artifact / controlled shell の typed tool を提供します。
 
 ChatGPT との正規接続経路は **OpenAI Secure MCP Tunnel** です。HTTP MCP server は loopback のみで待ち受け、public な MCP endpoint は公開しません。
 
@@ -39,6 +39,7 @@ runtime の重要ルール:
 - local tunnel token は `tunnel-client` と `local-dev-mcp` の間だけで共有する
 - Tunnel runtime API key と local tunnel token を launchd plist に埋め込まない
 - `shell.run` は fallback escape hatch とし、可能な限り typed tool を優先する
+- repository は `.local-dev/actions.json` と `repo.action.list/read/write` で closed-world なlocal actionをopt-inでき、このsurfaceでは任意shell文字列を受け取らない
 - denied-path check を file read/write、artifact transfer、project-scoped operation に適用する
 - artifact本体や一時 file download URL を通常のaudit logへ保存しない
 
@@ -57,6 +58,7 @@ MCP server側でもproject policyとshell risk policyを適用します。ChatGP
 - `project.*` — project選択・確認・reload
 - `workspace.*` — boundedなlist/read/search/patch
 - `git.*` — status/diff/history/commit inspection
+- `repo.action.*` — `.local-dev/actions.json` でrepositoryが宣言するlocal read/write action。詳細は [`docs/repo-actions.md`](docs/repo-actions.md)
 - `shell.*` — shell実行、approval、background job、cancel
 - `browser.*` — Chrome DevTools Protocol browser automation
 - `mobile.*` — iOS/Android確認・操作
@@ -75,7 +77,8 @@ broadなshell commandよりtyped toolを優先します。
 - active project確認はfilesystem探索ではなく`project.inspect`
 - 大規模なshell scanではなくboundedな`workspace.read` / `workspace.list` / `workspace.search`
 - 一般的なGit確認はtyped `git.*`
-- build/test/deploy/install/未対応操作では`shell.run`
+- 既知のlocal operationは`repo.action.list`でcatalogを確認し、`repo.action.read` / `repo.action.write`を使う
+- build/test/deploy/install/未対応またはad-hoc操作では`shell.run`
 - 約30秒を超えそうな処理は`shell.run(async=true)`で開始し、`shell.status`でpoll
 - server/tool変更後にChatGPT側schemaが古い場合は`tool.schema`とPlugin Refreshを使う
 
