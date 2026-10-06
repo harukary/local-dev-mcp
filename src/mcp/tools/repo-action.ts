@@ -130,6 +130,59 @@ function validateActionDefinition(id: string, rawAction: unknown) {
       }
     }
   }
+
+  const closedWorld = validateClosedWorldExecution(id, action as unknown as RepoAction);
+  if (!closedWorld.ok) return closedWorld;
+  return { ok: true as const };
+}
+
+function executableBasename(executable: string): string {
+  return executable.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? executable.toLowerCase();
+}
+
+function validateClosedWorldExecution(id: string, action: RepoAction) {
+  const base = executableBasename(action.executable);
+  const argv = action.argv ?? [];
+  const fixed = argv.filter((token): token is string => typeof token === "string");
+  const shellExecutables = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
+  const dispatchExecutables = new Set(["env", "xargs"]);
+
+  if (shellExecutables.has(base) || base === "eval") {
+    return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} may not invoke a shell/eval executable. Repository actions must execute a fixed program directly.`);
+  }
+  if (dispatchExecutables.has(base)) {
+    return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} may not use generic command dispatch executable ${base}.`);
+  }
+
+  const evalFlags: Record<string, Set<string>> = {
+    node: new Set(["-e", "--eval", "-p", "--print"]),
+    bun: new Set(["-e", "--eval", "-p", "--print"]),
+    deno: new Set(["eval"]),
+    python: new Set(["-c"]),
+    python3: new Set(["-c"]),
+    perl: new Set(["-e"]),
+    ruby: new Set(["-e"]),
+    php: new Set(["-r"]),
+  };
+  const forbiddenFlags = evalFlags[base];
+  if (forbiddenFlags && fixed.some((token) => forbiddenFlags.has(token))) {
+    return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} may not use interpreter eval/code flags through repo.action.`);
+  }
+
+  if (base === "find" && fixed.some((token) => token === "-exec" || token === "-execdir")) {
+    return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} may not use find -exec/-execdir through repo.action.`);
+  }
+
+  if (["pnpm", "npm", "yarn", "bun"].includes(base)) {
+    for (let index = 0; index < argv.length - 1; index += 1) {
+      const token = argv[index];
+      const next = argv[index + 1];
+      if (typeof token === "string" && ["exec", "dlx", "x"].includes(token) && typeof next !== "string") {
+        return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} may not select a package-manager executable from model input.`);
+      }
+    }
+  }
+
   return { ok: true as const };
 }
 
@@ -146,10 +199,6 @@ function publicActions(loaded: LoadedManifest) {
     }));
 }
 
-function quoteShellArg(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
 function encodeParam(actionId: string, param: string, value: unknown, encoding: "scalar" | "json") {
   if (encoding === "json") {
     const encoded = JSON.stringify(value);
@@ -160,24 +209,24 @@ function encodeParam(actionId: string, param: string, value: unknown, encoding: 
   throw new Error(`Action ${actionId} parameter ${param} must be a scalar or use encoding=json.`);
 }
 
-function buildCommand(id: string, action: RepoAction, args: Record<string, unknown>): string {
-  const tokens = [action.executable];
+function buildArgv(id: string, action: RepoAction, args: Record<string, unknown>): string[] {
+  const values: string[] = [];
   for (const token of action.argv ?? []) {
     if (typeof token === "string") {
-      tokens.push(token);
+      values.push(token);
       continue;
     }
     if (!Object.hasOwn(args, token.param)) {
       throw new Error(`Action ${id} missing argv parameter: ${token.param}`);
     }
-    tokens.push(encodeParam(id, token.param, args[token.param], token.encoding ?? "scalar"));
+    values.push(encodeParam(id, token.param, args[token.param], token.encoding ?? "scalar"));
   }
-  return tokens.map(quoteShellArg).join(" ");
+  return values;
 }
 
 function buildRiskCommand(action: RepoAction): string {
   const tokens = [action.executable, ...(action.argv ?? []).map((token) => typeof token === "string" ? token : "__repo_action_param__")];
-  return tokens.map(quoteShellArg).join(" ");
+  return tokens.join(" ");
 }
 
 function validateActionArgs(id: string, action: RepoAction, args: Record<string, unknown>) {
@@ -234,9 +283,9 @@ async function executeAction(
   const invalidArgs = validateActionArgs(args.action, action, actionArgs);
   if (invalidArgs) return invalidArgs;
 
-  let command: string;
+  let argv: string[];
   try {
-    command = buildCommand(args.action, action, actionArgs);
+    argv = buildArgv(args.action, action, actionArgs);
   } catch (error) {
     return jsonError("ACTION_ARGUMENT_INVALID", error instanceof Error ? error.message : String(error));
   }
@@ -265,8 +314,10 @@ async function executeAction(
     });
   }
 
-  const result = await ctx.shellRunner.run(project, {
-    command,
+  const result = await ctx.shellRunner.runArgv(project, {
+    executable: action.executable,
+    args: argv,
+    riskCommand,
     timeoutSeconds: action.timeout_seconds,
     purpose: action.description ?? args.action,
   }, chatContextId);

@@ -11,6 +11,14 @@ export interface ExecOptions {
   env?: Record<string, string>;
 }
 
+export interface ExecArgvOptions {
+  executable: string;
+  args: string[];
+  cwd?: string;
+  timeoutMs?: number;
+  env?: Record<string, string>;
+}
+
 export interface ExecResult {
   exitCode: number | null;
   timedOut: boolean;
@@ -23,6 +31,7 @@ export interface ExecResult {
 
 export interface Sandbox {
   exec(options: ExecOptions): Promise<ExecResult>;
+  execArgv(options: ExecArgvOptions): Promise<ExecResult>;
   getCwd(): string;
   getLabel(): string;
 }
@@ -55,15 +64,28 @@ export class HostSandbox implements Sandbox {
   }
 
   async exec(options: ExecOptions): Promise<ExecResult> {
+    return await this.execProcess(this.shell, ["-lc", options.command], options);
+  }
+
+  async execArgv(options: ExecArgvOptions): Promise<ExecResult> {
+    return await this.execProcess(options.executable, options.args, options);
+  }
+
+  private async execProcess(
+    executable: string,
+    args: string[],
+    options: Pick<ExecOptions, "cwd" | "timeoutMs" | "env">
+  ): Promise<ExecResult> {
     const start = Date.now();
     const timeout = options.timeoutMs ?? 30_000;
     const workdir = options.cwd || this.hostRoot;
 
     return new Promise((resolve) => {
-      const child = spawn(this.shell, ["-lc", options.command], {
+      const child = spawn(executable, args, {
         cwd: workdir,
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,
+        shell: false,
         env: options.env ? { ...process.env, ...options.env } : process.env,
       });
 

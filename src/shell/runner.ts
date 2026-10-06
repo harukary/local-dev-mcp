@@ -1,4 +1,4 @@
-import type { ShellRunInput, ShellRunResult, ProjectConfig } from "../types.js";
+import type { ShellRunInput, ShellArgvRunInput, ShellRunResult, ProjectConfig } from "../types.js";
 import { createSandbox, type Sandbox } from "./sandbox.js";
 import { classifyRisk } from "./risk-classifier.js";
 import { redactOutput } from "./redactor.js";
@@ -31,7 +31,6 @@ export class ShellRunner {
     );
 
     const risk = classifyRisk(input.command, project.deniedPaths);
-
     const sandbox = this.getSandbox(project);
     const execResult = await sandbox.exec({
       command: input.command,
@@ -39,20 +38,56 @@ export class ShellRunner {
       env: input.env,
     });
 
-    const sensitiveValues = Object.values(input.env ?? {});
+    return this.buildResult(project, sandbox.getCwd(), input.command, input.purpose, input.credentialScope, risk.level, execResult, input.env);
+  }
+
+  async runArgv(
+    project: ProjectConfig,
+    input: ShellArgvRunInput,
+    chatContextId: string
+  ): Promise<ShellRunResult> {
+    const timeoutMs = Math.min(
+      (input.timeoutSeconds ?? project.defaultTimeoutSeconds) * 1000,
+      project.maxTimeoutSeconds * 1000
+    );
+
+    const risk = classifyRisk(input.riskCommand, project.deniedPaths);
+    const sandbox = this.getSandbox(project);
+    const execResult = await sandbox.execArgv({
+      executable: input.executable,
+      args: input.args,
+      timeoutMs,
+      env: input.env,
+    });
+
+    const displayCommand = JSON.stringify([input.executable, ...input.args]);
+    return this.buildResult(project, sandbox.getCwd(), displayCommand, input.purpose, undefined, risk.level, execResult, input.env);
+  }
+
+  private buildResult(
+    project: ProjectConfig,
+    cwd: string,
+    command: string,
+    purpose: string | undefined,
+    credentialScope: ShellRunInput["credentialScope"] | undefined,
+    riskLevel: ShellRunResult["riskLevel"],
+    execResult: Awaited<ReturnType<Sandbox["exec"]>>,
+    env?: Record<string, string>
+  ): ShellRunResult {
+    const sensitiveValues = Object.values(env ?? {});
     const redactedStdout = redactOutput(execResult.stdout, project.redactionProfile, sensitiveValues);
     const redactedStderr = redactOutput(execResult.stderr, project.redactionProfile, sensitiveValues);
 
     const allRedactions = [...redactedStdout.redactions, ...redactedStderr.redactions];
     const mergedRedactions = mergeRedactions(allRedactions);
 
-    const result: ShellRunResult = {
+    return {
       projectId: project.projectId,
-      cwd: sandbox.getCwd(),
-      command: input.command,
-      purpose: input.purpose,
-      credentialScope: input.credentialScope,
-      riskLevel: risk.level,
+      cwd,
+      command,
+      purpose,
+      credentialScope,
+      riskLevel,
       exitCode: execResult.exitCode,
       timedOut: execResult.timedOut,
       durationMs: execResult.durationMs,
@@ -62,8 +97,6 @@ export class ShellRunner {
       stderrTruncated: execResult.stderrTruncated,
       redactions: mergedRedactions,
     };
-
-    return result;
   }
 }
 

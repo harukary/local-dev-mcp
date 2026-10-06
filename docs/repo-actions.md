@@ -47,7 +47,7 @@ Example:
 }
 ```
 
-`argv` accepts fixed string tokens and structured parameter references. Parameter values are shell-quoted by local-dev-mcp; repositories do not accept arbitrary command text from the model through this surface. Use `encoding: "json"` when an object or array must be passed as one JSON argument.
+`argv` accepts fixed string tokens and structured parameter references. local-dev-mcp executes the declared executable directly with an argv array (`shell=false`); parameter values are never interpolated into a shell command. Use `encoding: "json"` when an object or array must be passed as one JSON argument.
 
 ## Tools
 
@@ -65,11 +65,13 @@ The first version is intentionally narrow:
 - actions are repository-owned and identified by a stable action ID
 - structured inputs are validated against the action's `input_schema`
 - `network: true` actions are rejected; external or credential-backed operations continue to use their existing repository contract for now
-- catastrophic, forbidden, or mode-inconsistent resolved commands are rejected
+- repository actions execute through direct process spawning with `shell=false`; they do not pass through the shell-string execution path
+- shell/eval executables, interpreter eval flags, `find -exec`, generic dispatch executables such as `env`/`xargs`, and package-manager commands whose executable name comes from model input are rejected at manifest-load time
+- catastrophic, forbidden, or mode-inconsistent fixed command structures are rejected
 - `repo.action.write` requires `write_policy=allow`
 - `shell.run` remains available for unsupported operations
 
-Internally the action is still executed by the existing sandbox/process runner. The difference is the model-facing capability boundary: executable and argv structure come from trusted repository configuration rather than from an arbitrary shell command supplied by the model.
+The process/sandbox infrastructure is shared with `shell.run`, but the execution contract is different: the executable is repository-owned, argv positions are repository-owned, and model values occupy only schema-validated argv slots. This keeps the action surface closed-world instead of renaming arbitrary shell execution.
 
 ## Rollback
 

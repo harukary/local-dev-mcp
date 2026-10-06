@@ -48,6 +48,15 @@ export interface ShellRunInput {
   env?: Record<string, string>;
 }
 
+export interface ShellArgvRunInput {
+  executable: string;
+  args: string[];
+  riskCommand: string;
+  timeoutSeconds?: number;
+  purpose?: string;
+  env?: Record<string, string>;
+}
+
 export type RiskLevel =
   | "read_only"
   | "local_compute"
