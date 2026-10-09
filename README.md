@@ -80,7 +80,7 @@ Prefer typed tools over broad shell commands:
 - use bounded `workspace.read`, `workspace.list`, and `workspace.search` rather than large shell scans
 - use typed `git.*` tools for common repository inspection
 - use `repo.action.list` to discover fixed repository-declared actions; call `repo.action.read` for local reads or `repo.action.write` for local writes and verified credential-backed deployments
-- use `shell.run` for builds, tests, deploys, installs, and unsupported or ad-hoc operations
+- use `shell.run` for builds, tests, installs, and unsupported or ad-hoc operations; use `repo.action.write` for declared verified deployments
 - use `shell.run` with `async=true` for work that may exceed roughly 30 seconds, then poll `shell.status`
 - interactive ChatGPT turns use a 20-minute local-dev lease; after expiry, the next local-dev call returns `turn_paused` without changing or cancelling the workflow. See [`docs/chatgpt-interactive-turn-lease.md`](docs/chatgpt-interactive-turn-lease.md)
 - use `tool.schema` after server/tool changes when ChatGPT has stale action metadata
