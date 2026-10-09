@@ -1,14 +1,19 @@
-import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { readFile, realpath } from "node:fs/promises";
+import { promisify } from "node:util";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation";
 import type { AppContext } from "../server.js";
 import type { ProjectConfig, RiskLevel } from "../../types.js";
 import { classifyRisk, isCatastrophicCommand } from "../../shell/risk-classifier.js";
+import { resolveCredentialEnv } from "../../shell/credential-env.js";
 import { getActiveProject, jsonError, jsonResult, resolveProjectPath, sha256 } from "./dev/common.js";
 
 const MANIFEST_PATH = ".local-dev/actions.json";
 const ACTION_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const validatorProvider = new AjvJsonSchemaValidator();
+const execFileAsync = promisify(execFile);
+const FULL_GIT_HEAD = /^[0-9a-f]{40}$/i;
 
 type ActionMode = "read" | "write";
 type ActionArgToken = string | { param: string; encoding?: "scalar" | "json" };
@@ -21,6 +26,8 @@ type RepoAction = {
   input_schema?: Record<string, unknown>;
   timeout_seconds?: number;
   network?: boolean;
+  operation?: "deployment";
+  credential_scope?: "bitwarden";
 };
 
 type RepoActionManifest = {
@@ -102,6 +109,24 @@ function validateActionDefinition(id: string, rawAction: unknown) {
   }
   if (action.network !== undefined && typeof action.network !== "boolean") {
     return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} network must be boolean when present.`);
+  }
+  if (action.operation !== undefined && action.operation !== "deployment") {
+    return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} has an unsupported operation.`);
+  }
+  if (action.credential_scope !== undefined && action.credential_scope !== "bitwarden") {
+    return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} has an unsupported credential scope.`);
+  }
+  if (action.operation === "deployment") {
+    if (action.mode !== "write" || action.network !== true || action.credential_scope !== "bitwarden") {
+      return manifestError("ACTION_MANIFEST_INVALID", `Deployment action ${id} requires mode=write, network=true and credential_scope=bitwarden.`);
+    }
+    const argv = action.argv;
+    if (!Array.isArray(argv) || argv.filter((token) => typeof token !== "string").length !== 1 ||
+        !argv.some((token) => typeof token !== "string" && token?.param === "expected_head" && token.encoding === undefined)) {
+      return manifestError("ACTION_MANIFEST_INVALID", `Deployment action ${id} must bind only the expected_head parameter into its fixed argv.`);
+    }
+  } else if (action.credential_scope !== undefined) {
+    return manifestError("ACTION_MANIFEST_INVALID", `Credential scope is available only for deployment actions.`);
   }
   if (action.timeout_seconds !== undefined && (!Number.isInteger(action.timeout_seconds) || Number(action.timeout_seconds) < 1 || Number(action.timeout_seconds) > 240)) {
     return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} timeout_seconds must be an integer from 1 to 240.`);
@@ -196,6 +221,8 @@ function publicActions(loaded: LoadedManifest) {
       input_schema: action.input_schema ?? { type: "object", properties: {}, additionalProperties: false },
       timeout_seconds: action.timeout_seconds ?? null,
       network: action.network ?? false,
+      operation: action.operation ?? null,
+      credential_scope: action.credential_scope ?? null,
     }));
 }
 
@@ -249,6 +276,54 @@ function writeModeRiskAllowed(level: RiskLevel): boolean {
   return level === "read_only" || level === "local_compute" || level === "workspace_write";
 }
 
+async function checkDeploymentHead(project: ProjectConfig, expectedHead: unknown) {
+  if (typeof expectedHead !== "string" || !FULL_GIT_HEAD.test(expectedHead)) {
+    return jsonError("ACTION_EXPECTED_HEAD_REQUIRED", "Deployment requires an exact 40-character expected_head commit SHA.");
+  }
+  const git = async (...argv: string[]) => {
+    const { stdout } = await execFileAsync("git", argv, {
+      cwd: project.hostRoot,
+      timeout: 12000,
+      maxBuffer: 131072,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" },
+    });
+    return stdout.trim();
+  };
+  try {
+    const [top, cwd, head, branch, upstream, trackedStatus] = await Promise.all([
+      git("rev-parse", "--show-toplevel"),
+      realpath(project.hostRoot),
+      git("rev-parse", "HEAD"),
+      git("symbolic-ref", "--quiet", "--short", "HEAD"),
+      git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
+      git("status", "--porcelain", "--untracked-files=no"),
+    ]);
+    if (await realpath(top) !== cwd || !branch) {
+      return jsonError("ACTION_DEPLOY_WORKTREE_REQUIRED", "Deployment must run from a real checked-out Git worktree root.");
+    }
+    if (head.toLowerCase() !== expectedHead.toLowerCase()) {
+      return jsonError("ACTION_DEPLOY_HEAD_MISMATCH", "Deployment expected_head differs from worktree HEAD.", { expected_head: expectedHead, head });
+    }
+    if (trackedStatus) {
+      return jsonError("ACTION_DEPLOY_DIRTY", "Deployment requires a clean tracked worktree. Use a clean release worktree, not an unrelated dirty checkout.");
+    }
+    const slash = upstream.indexOf("/");
+    if (slash <= 0 || slash === upstream.length - 1) {
+      return jsonError("ACTION_DEPLOY_NO_UPSTREAM", "Deployment requires a configured remote upstream branch.");
+    }
+    const remote = upstream.slice(0, slash);
+    const remoteBranch = upstream.slice(slash + 1);
+    const remoteHeadLine = await git("ls-remote", "--exit-code", remote, `refs/heads/${remoteBranch}`);
+    const remoteHead = remoteHeadLine.split(/\s+/)[0];
+    if (remoteHead?.toLowerCase() !== head.toLowerCase()) {
+      return jsonError("ACTION_DEPLOY_NOT_PUSHED", "Deployment HEAD must equal the remote upstream HEAD before credentials are injected.", { head, remote_head: remoteHead });
+    }
+    return null;
+  } catch (error) {
+    return jsonError("ACTION_DEPLOY_GIT_PREFLIGHT_FAILED", error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function executeAction(
   ctx: AppContext,
   chatContextId: string,
@@ -272,8 +347,12 @@ async function executeAction(
   if (action.mode !== requestedMode) {
     return jsonError("ACTION_MODE_MISMATCH", `Action ${args.action} is declared as mode=${action.mode}, not mode=${requestedMode}.`);
   }
-  if (action.network) {
-    return jsonError("ACTION_EXTERNAL_UNSUPPORTED", "repo.action currently supports only local actions. Use the repository's existing external-operation contract for networked actions.");
+  const deployment = action.operation === "deployment";
+  if (action.network && !deployment) {
+    return jsonError("ACTION_EXTERNAL_UNSUPPORTED", "Networked repository actions require the explicit deployment operation contract.");
+  }
+  if (deployment && project.networkPolicy !== "allow") {
+    return jsonError("ACTION_DEPLOY_NETWORK_NOT_ALLOWED", "Deployment requires network_policy=allow for the selected project.");
   }
   if (requestedMode === "write" && project.writePolicy !== "allow") {
     return jsonError("ACTION_WRITE_NOT_ALLOWED", `Project write policy is ${project.writePolicy}; repo.action.write currently requires write_policy=allow.`);
@@ -306,12 +385,26 @@ async function executeAction(
       reasons: risk.reasons,
     });
   }
-  if (requestedMode === "write" && !writeModeRiskAllowed(risk.level)) {
+  if (deployment && risk.level === "destructive_or_process_control") {
+    return jsonError("ACTION_COMMAND_REJECTED", "Deployment action cannot use destructive or process-control commands.");
+  }
+  if (requestedMode === "write" && !deployment && !writeModeRiskAllowed(risk.level)) {
     return jsonError("ACTION_MODE_RISK_MISMATCH", "Repository write action resolved to a command classified as network/destructive.", {
       action: args.action,
       risk_level: risk.level,
       reasons: risk.reasons,
     });
+  }
+
+  let credentialEnv: Record<string, string> | undefined;
+  if (deployment) {
+    const invalidHead = await checkDeploymentHead(project, actionArgs.expected_head);
+    if (invalidHead) return invalidHead;
+    try {
+      credentialEnv = await resolveCredentialEnv("bitwarden");
+    } catch {
+      return jsonError("ACTION_DEPLOY_CREDENTIAL_UNAVAILABLE", "Bitwarden deployment credential is unavailable; no deployment command was started.");
+    }
   }
 
   const result = await ctx.shellRunner.runArgv(project, {
@@ -320,6 +413,7 @@ async function executeAction(
     riskCommand,
     timeoutSeconds: action.timeout_seconds,
     purpose: action.description ?? args.action,
+    ...(deployment ? { credentialScope: "bitwarden" as const, env: credentialEnv } : {}),
   }, chatContextId);
 
   await ctx.auditLogger.log({
@@ -330,7 +424,8 @@ async function executeAction(
     projectId: project.projectId,
     command: args.action,
     purpose: action.description,
-    riskLevel: result.riskLevel,
+    riskLevel: deployment ? "network_or_dependency" : result.riskLevel,
+    credentialScope: deployment ? "bitwarden" : undefined,
     enforcement: "audit_only",
     exitCode: result.exitCode,
     durationMs: result.durationMs,

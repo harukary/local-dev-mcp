@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,10 @@ import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
 import { handleRepoActionList, handleRepoActionRead, handleRepoActionWrite } from "../../src/mcp/tools/repo-action.js";
 import { ShellRunner } from "../../src/shell/runner.js";
+
+vi.mock("../../src/shell/credential-env.js", () => ({
+  resolveCredentialEnv: vi.fn(async () => ({ BWS_ACCESS_TOKEN: "test-only-token" })),
+}));
 
 let tmpRoot = "";
 
@@ -81,6 +86,41 @@ function writeManifest(actions: Record<string, unknown>) {
 
 function body(result: { content: Array<{ text?: string }> }) {
   return JSON.parse(result.content[0].text ?? "{}");
+}
+
+function git(...args: string[]) {
+  return execFileSync("git", args, { cwd: tmpRoot, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).trim();
+}
+
+function createPushedGitRepo(): string {
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "Repository Action Test");
+  git("config", "user.email", "repo-actions@example.invalid");
+  git("init", "--bare", "-q", "--initial-branch=main", join(tmpRoot, "remote.git"));
+  writeFileSync(join(tmpRoot, "tracked.txt"), "initial\n");
+  git("add", "tracked.txt");
+  git("commit", "-qm", "Initial test commit");
+  git("remote", "add", "origin", join(tmpRoot, "remote.git"));
+  git("push", "-u", "origin", "main");
+  return git("rev-parse", "HEAD");
+}
+
+function deploymentAction() {
+  return {
+    mode: "write",
+    operation: "deployment",
+    credential_scope: "bitwarden",
+    network: true,
+    executable: "pnpm",
+    argv: ["run", "deploy:pages", "--", "--preflight-only", "--expected-head", { param: "expected_head" }],
+    input_schema: {
+      type: "object",
+      properties: { expected_head: { type: "string", pattern: "^[0-9a-fA-F]{40}$" } },
+      required: ["expected_head"],
+      additionalProperties: false,
+    },
+    timeout_seconds: 180,
+  };
 }
 
 describe("repo.action", () => {
@@ -274,6 +314,67 @@ describe("repo.action", () => {
     const result = await handleRepoActionWrite(ctx, "chat-a", { action: "ledger.record" });
     expect(body(result).error.code).toBe("ACTION_WRITE_NOT_ALLOWED");
     expect(shellRunner.run).not.toHaveBeenCalled();
+    expect(shellRunner.runArgv).not.toHaveBeenCalled();
+  });
+
+  it("restricts the credentialed deployment contract to fixed argv and write/network policy", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-actions-"));
+    writeManifest({ "pages.preflight": { ...deploymentAction(), argv: ["run", "deploy:pages", { param: "command" }] } });
+    let setup = createContext(createProject(tmpRoot));
+    let result = await handleRepoActionList(setup.ctx, "chat-a");
+    expect(body(result).error.code).toBe("ACTION_MANIFEST_INVALID");
+
+    writeManifest({ "pages.preflight": deploymentAction() });
+    const restricted = { ...createProject(tmpRoot), networkPolicy: "deny" as const };
+    setup = createContext(restricted);
+    result = await handleRepoActionWrite(setup.ctx, "chat-a", { action: "pages.preflight", args: { expected_head: "a".repeat(40) } });
+    expect(body(result).error.code).toBe("ACTION_DEPLOY_NETWORK_NOT_ALLOWED");
+    expect(setup.shellRunner.runArgv).not.toHaveBeenCalled();
+  });
+
+  it("verifies a clean pushed commit before injecting credentials into a deployment action", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-actions-"));
+    const head = createPushedGitRepo();
+    writeManifest({ "pages.preflight": deploymentAction() });
+    const { ctx, shellRunner, auditLogger } = createContext(createProject(tmpRoot));
+
+    const mismatch = await handleRepoActionWrite(ctx, "chat-a", {
+      action: "pages.preflight", args: { expected_head: "f".repeat(40) },
+    });
+    expect(body(mismatch).error.code).toBe("ACTION_DEPLOY_HEAD_MISMATCH");
+    expect(shellRunner.runArgv).not.toHaveBeenCalled();
+
+    writeFileSync(join(tmpRoot, "tracked.txt"), "dirty\n");
+    const dirty = await handleRepoActionWrite(ctx, "chat-a", {
+      action: "pages.preflight", args: { expected_head: head },
+    });
+    expect(body(dirty).error.code).toBe("ACTION_DEPLOY_DIRTY");
+    git("restore", "tracked.txt");
+
+    const valid = await handleRepoActionWrite(ctx, "chat-a", {
+      action: "pages.preflight", args: { expected_head: head },
+    });
+    expect(valid.isError).not.toBe(true);
+    expect(shellRunner.runArgv).toHaveBeenCalledTimes(1);
+    const input = shellRunner.runArgv.mock.calls[0][1];
+    expect(input.args).toEqual(["run", "deploy:pages", "--", "--preflight-only", "--expected-head", head]);
+    expect(input.credentialScope).toBe("bitwarden");
+    expect(input.env).toEqual({ BWS_ACCESS_TOKEN: "test-only-token" });
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({ riskLevel: "network_or_dependency", credentialScope: "bitwarden" }));
+  });
+
+  it("rejects a deployment commit that has not been pushed to its upstream", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-actions-"));
+    createPushedGitRepo();
+    writeManifest({ "pages.preflight": deploymentAction() });
+    writeFileSync(join(tmpRoot, "tracked.txt"), "second\n");
+    git("add", "tracked.txt");
+    git("commit", "-qm", "Second unpushed commit");
+    const { ctx, shellRunner } = createContext(createProject(tmpRoot));
+    const blocked = await handleRepoActionWrite(ctx, "chat-a", {
+      action: "pages.preflight", args: { expected_head: git("rev-parse", "HEAD") },
+    });
+    expect(body(blocked).error.code).toBe("ACTION_DEPLOY_NOT_PUSHED");
     expect(shellRunner.runArgv).not.toHaveBeenCalled();
   });
 

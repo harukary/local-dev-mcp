@@ -54,6 +54,7 @@ export interface ShellArgvRunInput {
   riskCommand: string;
   timeoutSeconds?: number;
   purpose?: string;
+  credentialScope?: CredentialScope;
   env?: Record<string, string>;
 }
 

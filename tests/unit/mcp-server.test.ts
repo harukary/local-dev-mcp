@@ -210,7 +210,7 @@ describe("tool schema snapshot", () => {
     const repoActionList = snapshot.tools.find((tool) => tool.name === "repo.action.list");
     const repoActionRead = snapshot.tools.find((tool) => tool.name === "repo.action.read");
     const repoActionWrite = snapshot.tools.find((tool) => tool.name === "repo.action.write");
-    expect(snapshot.schema_version).toBe("2026-10-06.1");
+    expect(snapshot.schema_version).toBe("2026-10-09.1");
     expect(projectSelect?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
     expect(names).toContain("tool.schema");
     expect(names).toContain("git.commit");

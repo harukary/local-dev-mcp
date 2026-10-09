@@ -1,78 +1,58 @@
 # Repository actions
 
-`repo.action.*` is an opt-in typed execution surface for repository-owned local operations that would otherwise require `shell.run`.
+`repo.action.*` provides a closed-world interface for repository-owned commands. The repository declares executable and argument positions in `.local-dev/actions.json`; the model supplies only an action ID and schema-validated values, never arbitrary shell text. Commands use direct process execution (`shell=false`).
 
-The goal is not to hide command names. The goal is to expose a closed-world MCP contract for known operations while keeping `shell.run` available as the fallback for unknown or ad-hoc work.
+## Manifest and calls
 
-## Manifest
+The manifest has `version: 1` and an `actions` object. A typical local read/write action declares `mode`, `description`, `executable`, fixed `argv`, optional validated parameter references (`{ "param": "name" }`), `input_schema`, and `timeout_seconds`.
 
-A repository opts in by adding:
+- `repo.action.list(project_id=...)` returns the repository's action catalog, input schemas, network classification, and catalog hash without executing actions.
+- `repo.action.read(project_id=..., action=..., args=...)` runs local actions with `mode: "read"`.
+- `repo.action.write(project_id=..., action=..., args=...)` runs local write actions, or an explicitly declared verified deployment action. Project `write_policy` must be `allow`.
+- `working_dir` selects a real project-contained worktree. For Scheduled Tasks, include `project_id` and `working_dir` on each call instead of relying on `project.select`.
 
-```text
-.local-dev/actions.json
-```
+## Production deployment actions
 
-The current manifest version is `1`.
-
-Example:
+External network actions are rejected by default. Deployment is the only supported credential-backed exception. It must be declared as `mode: "write"`, `operation: "deployment"`, `network: true`, and `credential_scope: "bitwarden"`; the project also needs `network_policy=allow` and `write_policy=allow`. Example:
 
 ```json
 {
   "version": 1,
   "actions": {
-    "run.record": {
+    "pages.deploy": {
       "mode": "write",
-      "description": "Record a completed run in the local operational ledger.",
+      "operation": "deployment",
+      "network": true,
+      "credential_scope": "bitwarden",
+      "description": "Deploy the already-verified pushed commit.",
       "executable": "pnpm",
-      "argv": [
-        "world-model:tasks:record-run",
-        "--",
-        "--domain",
-        { "param": "domain" },
-        "--metrics-json",
-        { "param": "metrics", "encoding": "json" }
-      ],
+      "argv": ["run", "deploy:pages", "--", "--expected-head", { "param": "expected_head" }],
       "input_schema": {
         "type": "object",
-        "properties": {
-          "domain": { "type": "string" },
-          "metrics": { "type": "object" }
-        },
-        "required": ["domain", "metrics"],
+        "properties": { "expected_head": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" } },
+        "required": ["expected_head"],
         "additionalProperties": false
       },
-      "timeout_seconds": 60
+      "timeout_seconds": 240
     }
   }
 }
 ```
 
-`argv` accepts fixed string tokens and structured parameter references. local-dev-mcp executes the declared executable directly with an argv array (`shell=false`); parameter values are never interpolated into a shell command. Use `encoding: "json"` when an object or array must be passed as one JSON argument.
+The deployment executable is a repository-owned fixed command. The single permitted parameter reference in its argv is `expected_head`; the backend validates the exact 40-character commit SHA, a clean tracked Git worktree, checked-out branch, configured upstream, and live remote HEAD equality *before* reading Bitwarden credentials. This also works with clean project-contained Git worktrees and refuses dirty or behind/unpushed checkouts.
 
-## Tools
+The Bitwarden access token is resolved from the existing macOS Keychain configuration and injected only into the action subprocess. The repo-specific wrapper resolves the Cloudflare deployment credentials in-process; neither the token nor the account secret belongs in the action arguments or manifest.
 
-- `repo.action.list` reads the manifest and returns action IDs, mode, description, input schema, timeout, and catalog hash. It does not execute shell discovery.
-- `repo.action.read` executes only actions declared with `mode: "read"`.
-- `repo.action.write` executes only actions declared with `mode: "write"` and currently requires the project `write_policy` to be `allow`.
+Use distinct preflight and production action IDs when the repository offers a dry-run/preflight mode. A production action must be called only after validation, successful commit/push, and an independent production read-back plan. If the action or credential gate fails, report the blocker; do not fall back to a generic credential-bearing `shell.run` in unattended tasks.
 
-All three tools support explicit `project_id` / `working_dir` scope, so Scheduled Tasks can remain stateless.
+## Safety and scope
 
-## Initial safety boundary
+- Shell/eval executables, interpreter eval flags, generic dispatchers, `find -exec`, dynamic package-manager dispatch, catastrophic commands, and forbidden paths are rejected.
+- Normal repository actions remain local-only. `network: true` without `operation: "deployment"` is rejected.
+- The deployment operation is explicitly marked as an external write, never a read; other dynamic argv parameters are not allowed.
+- Credentials are redacted from subprocess output and are not supplied to read actions.
+- Removing `.local-dev/actions.json` disables the repository's declared actions. No per-project MCP tool or additional public ingress is required.
 
-The first version is intentionally narrow:
+## Git and publishing
 
-- arbitrary shell text is never an MCP input to `repo.action.read/write`
-- actions are repository-owned and identified by a stable action ID
-- structured inputs are validated against the action's `input_schema`
-- `network: true` actions are rejected; external or credential-backed operations continue to use their existing repository contract for now
-- repository actions execute through direct process spawning with `shell=false`; they do not pass through the shell-string execution path
-- shell/eval executables, interpreter eval flags, `find -exec`, generic dispatch executables such as `env`/`xargs`, and package-manager commands whose executable name comes from model input are rejected at manifest-load time
-- catastrophic, forbidden, or mode-inconsistent fixed command structures are rejected
-- `repo.action.write` requires `write_policy=allow`
-- `shell.run` remains available for unsupported operations
-
-The process/sandbox infrastructure is shared with `shell.run`, but the execution contract is different: the executable is repository-owned, argv positions are repository-owned, and model values occupy only schema-validated argv slots. This keeps the action surface closed-world instead of renaming arbitrary shell execution.
-
-## Rollback
-
-This feature is opt-in. Removing a repository's `.local-dev/actions.json` returns that repository to the previous behavior immediately. Reverting the local-dev-mcp implementation removes the `repo.action.*` tools without changing `shell.run` or other typed tools.
+Use typed `git.status`, `git.commit`, and `git.push` to finalize verified tracked changes. Git push and Cloudflare deployment are distinct. The deployment command requires `HEAD == upstream remote HEAD`, and successful CLI execution still requires application-specific live URL read-back before reporting production completion.

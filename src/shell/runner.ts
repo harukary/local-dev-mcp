@@ -61,7 +61,7 @@ export class ShellRunner {
     });
 
     const displayCommand = JSON.stringify([input.executable, ...input.args]);
-    return this.buildResult(project, sandbox.getCwd(), displayCommand, input.purpose, undefined, risk.level, execResult, input.env);
+    return this.buildResult(project, sandbox.getCwd(), displayCommand, input.purpose, input.credentialScope, risk.level, execResult, input.env);
   }
 
   private buildResult(
