@@ -21,12 +21,12 @@
     "launchd:activate": "bash scripts/install-launchd.sh --activate"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "agent-device": "0.21.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "agent-device": "0.21.22",
     "cors": "^2.8.6",
     "diff": "^9.0.0",
     "express": "^5.2.1",
-    "js-yaml": "^4.3.2",
+    "js-yaml": "^5.4.3",
     "playwright-core": "^1.63.0"
   },
   "devDependencies": {
