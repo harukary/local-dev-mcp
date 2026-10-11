@@ -10,6 +10,7 @@ import { applyWorkingDirectory } from "../../project/working-directory.js";
 import { handleImageRead } from "./image-read.js";
 import { observeAfterAction } from "../observation.js";
 import { structuredTextFallback } from "../output.js";
+import { validateToolInput } from "../input-validation.js";
 import { requestSignal } from "../request-context.js";
 import {
   AgentDeviceCommandError,
@@ -74,18 +75,27 @@ function jsonError(code: string, message: string, details?: unknown) {
   };
 }
 
+const MOBILE_MUTATION_ERRORS = new Set([
+  "MOBILE_TAP_FAILED", "MOBILE_TAP_ELEMENT_FAILED", "MOBILE_TYPE_FAILED",
+  "MOBILE_SWIPE_FAILED", "MOBILE_PRESS_FAILED", "MOBILE_LAUNCH_APP_FAILED",
+  "MOBILE_OPEN_URL_FAILED", "MOBILE_RESTART_APP_FAILED", "MOBILE_STOP_APP_FAILED",
+  "MOBILE_BATCH_STEP_FAILED",
+]);
+
 function mobileError(code: string, err: unknown, details?: unknown) {
   deviceCache = undefined;
-  if (err instanceof AgentDeviceCommandError) {
-    return jsonError(code, err.message, {
+  const failure = err instanceof AgentDeviceCommandError
+    ? jsonError(code, err.message, {
       ...((details && typeof details === "object") ? details : {}),
       backend: "agent-device",
       agent_code: err.code,
       hint: err.hint,
       agent_details: err.details,
-    });
-  }
-  return jsonError(code, err instanceof Error ? err.message : String(err), details);
+    })
+    : jsonError(code, err instanceof Error ? err.message : String(err), details);
+  if (!MOBILE_MUTATION_ERRORS.has(code)) return failure;
+  // A failed transport call does not prove whether the physical action occurred.
+  return { ...jsonResult({ ...(failure.structuredContent as object), action_applied: null, action_complete: false, verified: false, retry_action: false }), isError: true };
 }
 
 function activeProjectId(ctx: AppContext, chatContextId: string): string | undefined {
@@ -224,6 +234,24 @@ const mobileQueues = new Map<string, Promise<unknown>>();
 const mobileSnapshots = new Map<string, { id: string; chat: string; capturedAt: number }>();
 const MOBILE_READ_ACTIONS = new Set(["mobile.snapshot", "mobile.screenshot", "mobile.current_app", "mobile.logs", "mobile.wait"]);
 
+export function compactMobileNode(node: AgentDeviceNode): Record<string, unknown> {
+  const compact: Record<string, unknown> = {};
+  for (const key of ["ref", "type", "label", "identifier", "index", "parentIndex", "depth"] as const) {
+    if (node[key] !== undefined) compact[key] = node[key];
+  }
+  if (node.value !== undefined && node.value !== node.label && node.value !== node.identifier) compact.value = node.value;
+  if (node.enabled === false) compact.enabled = false;
+  if (node.hittable === false) compact.hittable = false;
+  if (node.visibleToUser === false) compact.visibleToUser = false;
+  if (node.selected === true) compact.selected = true;
+  if (node.checked === true) compact.checked = true;
+  const rect = node.rect;
+  if (rect && [rect.x, rect.y, rect.width, rect.height].every((value) => typeof value === "number" && Number.isFinite(value))) {
+    compact.rect = [rect.x, rect.y, rect.width, rect.height];
+  }
+  return compact;
+}
+
 async function resolveDevice(deviceIdOrName?: string): Promise<MobileDevice | null> {
   const cached = deviceCache && deviceCache.expires > Date.now() ? deviceCache.devices : undefined;
   const exactCached = deviceIdOrName ? cached?.find(device => device.id === deviceIdOrName) : undefined;
@@ -243,6 +271,13 @@ async function resolveDevice(deviceIdOrName?: string): Promise<MobileDevice | nu
   return candidates[0] ?? null;
 }
 
+function checkMobileElementRef(chat: string, deviceId: string, target: string, snapshotId?: string) {
+  if (!/^@?e\d+$/.test(target.trim())) return undefined;
+  const snapshot = mobileSnapshots.get(deviceId);
+  if (snapshot && snapshot.chat === chat && Date.now() - snapshot.capturedAt <= 60_000 && (snapshotId === undefined || snapshotId === snapshot.id)) return undefined;
+  return jsonError("STALE_SNAPSHOT", "Capture a new mobile.snapshot before using an element ref. Device actions and other chats invalidate prior refs.");
+}
+
 export async function runMobileToolOperation<T>(ctx: AppContext, chat: string, name: string, args: Record<string, unknown>, operation: () => Promise<T>): Promise<T | ReturnType<typeof jsonError>> {
   if (name === "mobile.status" || name === "mobile.list_devices") return await operation();
   const previousDevice = ctx.contextStore.get(chat)?.mobileDeviceId;
@@ -251,13 +286,12 @@ export async function runMobileToolOperation<T>(ctx: AppContext, chat: string, n
   const previous = mobileQueues.get(device.id) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(async () => {
     requestSignal()?.throwIfAborted();
-    const snapshot = mobileSnapshots.get(device.id);
-    if (name === "mobile.tap_element" && typeof args.target === "string" && /^@?e\d+$/.test(args.target.trim())) {
-      if (!snapshot || snapshot.chat !== chat || Date.now() - snapshot.capturedAt > 60_000 || (args.snapshot_id !== undefined && args.snapshot_id !== snapshot.id)) {
-        return jsonError("STALE_SNAPSHOT", "Capture a new mobile.snapshot before using an element ref. Device actions and other chats invalidate prior refs.");
-      }
+    if (name === "mobile.tap_element" && typeof args.target === "string") {
+      const stale = checkMobileElementRef(chat, device.id, args.target, typeof args.snapshot_id === "string" ? args.snapshot_id : undefined);
+      if (stale) return stale;
     }
-    if (!MOBILE_READ_ACTIONS.has(name) || name === "mobile.wait") mobileSnapshots.delete(device.id);
+    // Batch invalidates refs step-by-step; it must be able to use a fresh ref in its first step.
+    if (name !== "mobile.batch" && (!MOBILE_READ_ACTIONS.has(name) || name === "mobile.wait")) mobileSnapshots.delete(device.id);
     args.device = device.id;
     const context = ctx.contextStore.getOrCreate(chat);
     if (context.mobileDeviceId !== device.id) {
@@ -391,8 +425,8 @@ async function observeOrJson(ctx: AppContext, chatContextId: string, project: Pr
     const waited = waitFor ? await handleMobileWait(ctx, chatContextId, { device: device.id, target: waitFor.target, timeout_ms: waitFor.timeout_ms }) : undefined;
     if (waited && "isError" in waited && waited.isError) return waited;
     const wait = waited && "structuredContent" in waited ? waited.structuredContent : undefined;
-    const details = { ...payload, action_applied: true, ...(wait === undefined ? {} : { wait }) };
-    if (observe === "none" || (observe === undefined && waitFor)) return jsonResult({ ok: true, project_id: project.projectId, action, device, ...details });
+    const details = { ...payload, action_applied: true, action_complete: true, verified: !!waitFor, verification_deferred: !waitFor, ...(wait === undefined ? {} : { wait }) };
+    if (observe === undefined || observe === "none") return jsonResult({ ok: true, project_id: project.projectId, action, device, ...details });
     if (observe === "snapshot") {
       const snapshot = await handleMobileSnapshot(ctx, chatContextId, { device: device.id, limit: 100 });
       if ("isError" in snapshot && snapshot.isError) return snapshot;
@@ -401,6 +435,27 @@ async function observeOrJson(ctx: AppContext, chatContextId: string, project: Pr
     }
     return await screenshotPayload(ctx, chatContextId, project, device, action, details);
   });
+}
+
+const VISUAL_TARGET_ERRORS = new Set(["ELEMENT_NOT_FOUND", "TARGET_NOT_FOUND", "NO_MATCH", "AMBIGUOUS_TARGET", "NOT_HITTABLE", "ELEMENT_NOT_HITTABLE", "STALE_ELEMENT"]);
+
+async function mobileTargetError(ctx: AppContext, chat: string, project: ProjectConfig, device: MobileDevice, err: unknown, target: string) {
+  const failure = mobileError("MOBILE_TAP_ELEMENT_FAILED", err, { device, target });
+  const details = { ...(failure.structuredContent as object), action_applied: null, action_complete: false, verified: false, retry_action: false };
+  const recovery: Record<string, unknown> = { next_tool: "mobile.screenshot", replay_action: false, next_step: "Inspect the current page before deciding whether a new tap is needed." };
+  let images: ImageContent[] = [];
+  if (err instanceof AgentDeviceCommandError && VISUAL_TARGET_ERRORS.has(err.code ?? "")) {
+    // Only lookup/visibility failures get an extra capture. Never hide the original failure.
+    try {
+      const evidence = await screenshotPayload(ctx, chat, project, device, "mobile.error_observation");
+      images = extractImageContent(evidence);
+      if (images.length) {
+        recovery.next_tool = null;
+        recovery.screenshot = (evidence.structuredContent as { image_read?: unknown }).image_read;
+      }
+    } catch { /* The original UI error remains authoritative. */ }
+  }
+  return { ...jsonResult({ ...details, recovery }, images), isError: true };
 }
 
 export async function handleMobileBoot(ctx: AppContext, chatContextId: string, args: { device?: string } = {}) {
@@ -443,7 +498,7 @@ export async function handleMobileOpenUrl(ctx: AppContext, chatContextId: string
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url], { maxBuffer: 2 * 1024 * 1024 });
     }
-    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 800));
+    if (!args.wait_for && args.observe && args.observe !== "none") await new Promise((resolve) => setTimeout(resolve, 800));
     return await observeOrJson(ctx, chatContextId, project, device, "mobile.open_url", args.observe, { url }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_OPEN_URL_FAILED", err, { device, url });
@@ -464,7 +519,7 @@ export async function handleMobileTap(ctx: AppContext, chatContextId: string, ar
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "input", "tap", String(Math.round(args.x)), String(Math.round(args.y))], { maxBuffer: 2 * 1024 * 1024 });
     }
-    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 400));
+    if (!args.wait_for && args.observe && args.observe !== "none") await new Promise((resolve) => setTimeout(resolve, 400));
     return await observeOrJson(ctx, chatContextId, project, device, "mobile.tap", args.observe, { x: Math.round(args.x), y: Math.round(args.y) }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_TAP_FAILED", err, { device, x: args.x, y: args.y });
@@ -489,8 +544,8 @@ export async function handleMobileType(ctx: AppContext, chatContextId: string, a
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "input", "text", androidInputText(args.text)], { maxBuffer: 2 * 1024 * 1024 });
     }
-    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 400));
-    return await observeOrJson(ctx, chatContextId, project, device, "mobile.type", args.observe, { text: args.text }, args.wait_for);
+    if (!args.wait_for && args.observe && args.observe !== "none") await new Promise((resolve) => setTimeout(resolve, 400));
+    return await observeOrJson(ctx, chatContextId, project, device, "mobile.type", args.observe, { characters: [...args.text].length }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_TYPE_FAILED", err, { device });
   }
@@ -531,7 +586,7 @@ export async function handleMobileSnapshot(ctx: AppContext, chatContextId: strin
       matched_nodes: filtered.length,
       query: args.query ?? null,
       truncated: filtered.length > limit,
-      nodes: filtered.slice(0, limit),
+      nodes: filtered.slice(0, limit).map(compactMobileNode),
     });
   } catch (err) {
     return mobileError("MOBILE_SNAPSHOT_FAILED", err, { device });
@@ -553,10 +608,10 @@ export async function handleMobileTapElement(ctx: AppContext, chatContextId: str
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await agentAndroidTapTarget(device.id, adb, target);
     }
-    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 400));
+    if (!args.wait_for && args.observe && args.observe !== "none") await new Promise((resolve) => setTimeout(resolve, 400));
     return await observeOrJson(ctx, chatContextId, project, device, "mobile.tap_element", args.observe, { target }, args.wait_for);
   } catch (err) {
-    return mobileError("MOBILE_TAP_ELEMENT_FAILED", err, { device, target });
+    return await mobileTargetError(ctx, chatContextId, project, device, err, target);
   }
 }
 
@@ -575,7 +630,7 @@ export async function handleMobileLaunchApp(ctx: AppContext, chatContextId: stri
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "monkey", "-p", app, "-c", "android.intent.category.LAUNCHER", "1"], { maxBuffer: 2 * 1024 * 1024 });
     }
-    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 800));
+    if (!args.wait_for && args.observe && args.observe !== "none") await new Promise((resolve) => setTimeout(resolve, 800));
     return await observeOrJson(ctx, chatContextId, project, device, "mobile.launch_app", args.observe, { app }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_LAUNCH_APP_FAILED", err, { device, app });
@@ -598,7 +653,7 @@ export async function handleMobileSwipe(ctx: AppContext, chatContextId: string, 
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "input", "swipe", String(Math.round(args.x1!)), String(Math.round(args.y1!)), String(Math.round(args.x2!)), String(Math.round(args.y2!)), String(duration)], { maxBuffer: 2 * 1024 * 1024 });
     }
-    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 400));
+    if (!args.wait_for && args.observe && args.observe !== "none") await new Promise((resolve) => setTimeout(resolve, 400));
     return await observeOrJson(ctx, chatContextId, project, device, "mobile.swipe", args.observe, { x1: args.x1, y1: args.y1, x2: args.x2, y2: args.y2, duration_ms: duration }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_SWIPE_FAILED", err, { device });
@@ -620,7 +675,7 @@ export async function handleMobilePress(ctx: AppContext, chatContextId: string, 
       if (!adb) throw new Error("ADB is not available. Install Android platform-tools or set ANDROID_HOME/ANDROID_SDK_ROOT.");
       await execFileAsync(adb, ["-s", device.id, "shell", "input", "keyevent", keyCode], { maxBuffer: 2 * 1024 * 1024 });
     }
-    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 400));
+    if (!args.wait_for && args.observe && args.observe !== "none") await new Promise((resolve) => setTimeout(resolve, 400));
     return await observeOrJson(ctx, chatContextId, project, device, "mobile.press", args.observe, { key: args.key }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_PRESS_FAILED", err, { device, key: args.key });
@@ -751,7 +806,7 @@ export async function handleMobileRestartApp(ctx: AppContext, chatContextId: str
     } else {
       await execFileAsync("xcrun", ["simctl", "launch", device.id, app], { maxBuffer: 2 * 1024 * 1024 });
     }
-    if (!args.wait_for) await new Promise((resolve) => setTimeout(resolve, 800));
+    if (!args.wait_for && args.observe && args.observe !== "none") await new Promise((resolve) => setTimeout(resolve, 800));
     return await observeOrJson(ctx, chatContextId, project, device, "mobile.restart_app", args.observe, { app }, args.wait_for);
   } catch (err) {
     return mobileError("MOBILE_RESTART_APP_FAILED", err, { device, app });
@@ -778,4 +833,87 @@ export async function handleMobileWait(ctx: AppContext, chatContextId: string, a
   } catch (err) {
     return mobileError("MOBILE_WAIT_FAILED", err, { device, target, timeout_ms: timeoutMs });
   }
+}
+
+export type MobileBatchStep = {
+  op: "tap" | "tap_element" | "type" | "swipe" | "press" | "launch_app" | "open_url" | "wait";
+  args: Record<string, unknown>;
+};
+
+type MobileStepResult = {
+  structuredContent: unknown;
+  content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+  isError?: boolean;
+};
+
+function batchStepData(result: MobileStepResult): Record<string, unknown> {
+  const data = result.structuredContent;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return {};
+  const { project_id: _projectId, device: _device, action: _action, ...details } = data as Record<string, unknown>;
+  return details;
+}
+
+export async function handleMobileBatch(ctx: AppContext, chatContextId: string, args: { device?: string; steps?: MobileBatchStep[] } = {}) {
+  // Validate all steps, not just the first one, before touching the device.
+  const invalid = validateToolInput("mobile.batch", args);
+  if (invalid) return jsonError("INVALID_BATCH", invalid);
+  const steps = args.steps!;
+  if (steps.slice(0, -1).some(step => step.args.observe && step.args.observe !== "none")) {
+    return jsonError("INVALID_BATCH", "Only the final step may request a screenshot or snapshot. Stop and inspect before deciding later actions.");
+  }
+  const project = getProject(ctx, chatContextId);
+  if ("error" in project) return project.error;
+  const device = await resolveDevice(args.device);
+  if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device was found.", { device: args.device });
+
+  const results: Array<Record<string, unknown>> = [];
+  const startedAt = Date.now();
+  for (const [index, step] of steps.entries()) {
+    if (index > 0 && Date.now() - startedAt >= 90_000) {
+      return jsonResult({ ok: false, action: "mobile.batch", completed_steps: results.length, stopped_at: index, stop_reason: "time_budget", complete: false, results, replay_action: false });
+    }
+    let response: MobileStepResult;
+    const stepArgs = { ...step.args, device: device.id };
+    try {
+      requestSignal()?.throwIfAborted();
+      if (step.op === "tap_element") {
+        const stale = checkMobileElementRef(chatContextId, device.id, String(step.args.target), typeof step.args.snapshot_id === "string" ? step.args.snapshot_id : undefined);
+        if (stale) {
+          response = stale;
+        } else {
+          mobileSnapshots.delete(device.id);
+          response = await handleMobileTapElement(ctx, chatContextId, stepArgs);
+        }
+      } else {
+        // All operations below can change the displayed page or invalidate snapshot refs.
+        mobileSnapshots.delete(device.id);
+        switch (step.op) {
+          case "tap": response = await handleMobileTap(ctx, chatContextId, stepArgs); break;
+          case "type": response = await handleMobileType(ctx, chatContextId, stepArgs); break;
+          case "swipe": response = await handleMobileSwipe(ctx, chatContextId, stepArgs); break;
+          case "press": response = await handleMobilePress(ctx, chatContextId, stepArgs); break;
+          case "launch_app": response = await handleMobileLaunchApp(ctx, chatContextId, stepArgs); break;
+          case "open_url": response = await handleMobileOpenUrl(ctx, chatContextId, stepArgs); break;
+          case "wait": response = await handleMobileWait(ctx, chatContextId, stepArgs); break;
+        }
+      }
+    } catch (err) {
+      response = mobileError("MOBILE_BATCH_STEP_FAILED", err, { step_index: index, op: step.op });
+    }
+    const data = batchStepData(response);
+    if (step.op === "wait" && !response.isError) Object.assign(data, { verified: true, verification_scope: "ui_target_present" });
+    const images = response.content.filter((item) => item.type === "image" && item.data && item.mimeType);
+    if (response.isError) {
+      return {
+        ...jsonResult({ ok: false, action: "mobile.batch", complete: false, completed_steps: results.length, stopped_at: index, stop_reason: "step_failed", failed_step: { op: step.op, ...data }, results, replay_action: false }, images as Array<{ type: "image"; data: string; mimeType: string }>),
+        isError: true,
+      };
+    }
+    results.push({ op: step.op, ...data });
+    if (index === steps.length - 1) {
+      return jsonResult({ ok: true, action: "mobile.batch", complete: true, completed_steps: results.length, results }, images as Array<{ type: "image"; data: string; mimeType: string }>);
+    }
+  }
+  // The schema requires at least one step.
+  return jsonError("INVALID_BATCH", "Batch requires at least one step.");
 }

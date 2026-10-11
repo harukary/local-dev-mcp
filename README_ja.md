@@ -364,9 +364,9 @@ conversation単位の選択は`project.select`で保持します。global + proj
 
 ## 物理モバイル端末の自動操作
 
-mobile toolsは検出されたiOS/Android targetを操作できます。physical deviceの対応範囲はlocal toolchainとdevice stateに依存します。
+`mobile.*`は既存の`agent-device`を使ってiOS/Androidの端末を操作します。通常操作ではスクリーンショットを省略し、必要なときだけ`observe=snapshot/after`または`wait_for`を指定します。`mobile.snapshot`は参照ID・階層・座標を維持しながら重複フィールドを削減します。`mobile.batch`は最大20ステップを同一端末で順番に実行し、途中失敗時は完了済み操作を再実行せず停止します。
 
-macOSでは`pnpm doctor`がproject-local `agent-device`とphysical iOSのDeveloper Tools Security状態を確認します。
+macOSでは`pnpm doctor`がproject-local `agent-device`とphysical iOSのDeveloper Tools Security状態を確認します。操作契約やエラー復旧は[Mobile automation](docs/mobile-automation.md)を参照してください。
 
 ## Safety Notes
 

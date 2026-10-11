@@ -422,9 +422,9 @@ Per-conversation project selection is stored through `project.select`. Use `proj
 
 ## Physical Mobile Automation
 
-Mobile tools support discovered iOS and Android targets. Physical-device capabilities depend on the local platform toolchain and device state.
+The `mobile.*` tools operate discovered iOS and Android targets through the existing `agent-device` backend. Actions return compact status without a screenshot by default; request `observe=snapshot/after` or `wait_for` when UI evidence is needed. `mobile.snapshot` removes redundant node fields and preserves refs, identifiers, hierarchy and geometry. `mobile.batch` serializes up to 20 prevalidated steps on one device, stopping on errors without replaying completed actions.
 
-On macOS, `pnpm doctor` checks the project-local `agent-device` installation and reports the physical iOS Developer Tools Security state.
+On macOS, `pnpm doctor` checks the project-local `agent-device` installation and reports the physical iOS Developer Tools Security state. See [Mobile automation](docs/mobile-automation.md) for tool contracts, batch usage and recovery behavior.
 
 ## Safety Notes
 
