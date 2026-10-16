@@ -61,7 +61,7 @@ Core tool families include:
 - `repo.action.*` — repository-declared local read/write actions and verified deployment actions backed by `.local-dev/actions.json`; see [`docs/repo-actions.md`](docs/repo-actions.md)
 - `shell.*` — managed shell execution, approvals, background jobs, and cancellation
 - `browser.*` — Chrome DevTools Protocol browser automation
-- `mobile.*` — iOS/Android inspection and interaction
+- `mobile.*` — iOS/Android inspection and interaction (timed iOS swipes use agent-device `gesture pan`; Android swipes use ADB; see [`docs/mobile-automation.md`](docs/mobile-automation.md))
 - `todo.*` — shared Todo Service operations
 - `skills.*` — readable project/user/system Skills
 - `image.read` — inline image inspection without a custom viewer or public URL

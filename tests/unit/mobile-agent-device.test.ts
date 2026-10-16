@@ -9,6 +9,7 @@ import {
   agentAndroidWait,
   agentIosLaunchApp,
   agentIosSnapshot,
+  agentIosSwipe,
   agentIosTap,
   agentIosTapTarget,
   agentIosWait,
@@ -88,6 +89,18 @@ if (command === "session" && args[1] === "list") {
 } else if (command === "click" || command === "find" || command === "wait") {
   if (!hasRequestedSession) fail("SESSION_NOT_FOUND", "Run open first");
   else out({ message: command });
+} else if (command === "gesture") {
+  const end = args.indexOf("--session");
+  const values = args.slice(2, end);
+  if (args[1] !== "pan" || values.length !== 5 || values.some((value) => !Number.isInteger(Number(value)))) {
+    fail("INVALID_ARGS", "Expected gesture pan x y dx dy durationMs");
+  } else if (!hasRequestedSession) {
+    fail("SESSION_NOT_FOUND", "Run open first");
+  } else {
+    out({ message: "gesture pan" });
+  }
+} else if (command === "swipe") {
+  fail("INVALID_ARGS", "Legacy swipe with a positional duration is not supported");
 } else {
   out({});
 }
@@ -146,6 +159,25 @@ describe("mobile agent-device iOS session lifecycle", () => {
     const opens = afterRelaunch.filter((args) => args.includes("open"));
     expect(opens).toHaveLength(2);
     expect(opens.at(-1)).toContain("com.example.tomoca.next");
+  }, 15_000);
+
+  it("maps iOS swipes to timed agent-device pan gestures with exact rounded endpoints", async () => {
+    const { logPath } = installFakeAgentDevice();
+    await agentIosLaunchApp("SIM-SWIPE", "com.example.scroll-test");
+
+    await agentIosSwipe("SIM-SWIPE", 120, 450, 120, 150, 700);
+    await agentIosSwipe("SIM-SWIPE", 410, 211, 120, 211);
+    await agentIosSwipe("SIM-SWIPE", 100.6, 200.4, 200.4, 99.6, 250);
+
+    const gestures = calls(logPath)
+      .filter((args) => args.includes("gesture"))
+      .map((args) => args.slice(args.indexOf("gesture"), args.indexOf("--session")));
+    expect(gestures).toEqual([
+      ["gesture", "pan", "120", "450", "0", "-300", "700"],
+      ["gesture", "pan", "410", "211", "-290", "0", "500"],
+      ["gesture", "pan", "101", "200", "99", "-100", "250"],
+    ]);
+    expect(calls(logPath).some((args) => args.includes("swipe"))).toBe(false);
   }, 15_000);
 
   it("uses stateless Android snapshots and ADB taps without named agent-device sessions", async () => {

@@ -8,6 +8,8 @@ Use `mobile.list_devices` to choose an exact device ID. Read the current UI with
 
 Actions such as `mobile.tap`, `mobile.tap_element`, `mobile.type`, `mobile.swipe`, `mobile.launch_app`, and `mobile.press` return **compact status by default**, without a screenshot or fixed post-action delay. When the next decision depends on the updated page, request `observe: "snapshot"` for its accessibility tree or `observe: "after"` for an inline screenshot. Use `wait_for: { "target": "...", "timeout_ms": 10000 }` when the operation has a known UI postcondition.
 
+`mobile.swipe` keeps the same four absolute coordinates and optional `duration_ms` (500 ms by default) on both platforms. On iOS it converts the rounded endpoints to a relative `agent-device gesture pan x y dx dy durationMs` (supported by pinned agent-device 0.21.0); the older `agent-device swipe x1 y1 x2 y2 durationMs` CLI form is invalid. Android continues using ADB `input swipe x1 y1 x2 y2 durationMs`. The `swipe` step inside `mobile.batch` uses the same implementation.
+
 A successful action distinguishes execution from verification:
 
 - `action_applied: true`: the device backend reported successful execution.

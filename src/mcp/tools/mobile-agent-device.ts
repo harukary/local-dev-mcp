@@ -260,12 +260,18 @@ export async function agentIosSwipe(
   y2: number,
   durationMs = 500,
 ): Promise<void> {
+  // agent-device 0.21 accepts a duration only for "gesture pan", not "swipe".
+  // Round endpoints first so the relative movement matches the requested end point.
+  const startX = Math.round(x1);
+  const startY = Math.round(y1);
+  const deltaX = Math.round(x2) - startX;
+  const deltaY = Math.round(y2) - startY;
   await runBoundIos(udid, [
-    "swipe",
-    String(Math.round(x1)),
-    String(Math.round(y1)),
-    String(Math.round(x2)),
-    String(Math.round(y2)),
+    "gesture", "pan",
+    String(startX),
+    String(startY),
+    String(deltaX),
+    String(deltaY),
     String(Math.max(0, Math.round(durationMs))),
   ]);
 }
