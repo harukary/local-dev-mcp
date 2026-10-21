@@ -21,7 +21,7 @@
     "launchd:activate": "bash scripts/install-launchd.sh --activate"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "agent-device": "0.21.0",
     "cors": "^2.8.6",
     "diff": "^9.0.0",
