@@ -175,8 +175,9 @@ describe("typed development tools", () => {
     }));
     expect(ambiguous.applied).toBe(false);
     expect(ambiguous.conflicts[0]).toMatchObject({
-      reason: "old_text is ambiguous; set replace_all=true to replace all occurrences",
+      reason: "old_text is ambiguous; use a longer unique old_text (or replace_all only if every match should change)",
       occurrences: 2,
+      recovery: "use_unique_context",
     });
 
     const applied = payload(await handleWorkspacePatch(ctx, "chat-a", {
@@ -185,6 +186,53 @@ describe("typed development tools", () => {
     expect(applied.applied).toBe(true);
     expect(applied.files[0]).toMatchObject({ mode: "text_replace", occurrences_replaced: 2 });
     expect(readFileSync(join(tmpRoot, "file.txt"), "utf8")).toBe("omega\nbeta\nomega\n");
+  });
+
+  it("accepts the same source sha for multiple edits to one file", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-typed-"));
+    writeFileSync(join(tmpRoot, "file.txt"), "alpha\nbeta\n");
+    const ctx = createContext(createProject(tmpRoot));
+    const sha = payload(await handleWorkspaceRead(ctx, "chat-a", { path: "file.txt" })).sha256;
+
+    const result = await handleWorkspacePatch(ctx, "chat-a", {
+      patches: [
+        { path: "file.txt", expected_sha256: sha, old_text: "alpha", new_text: "first" },
+        { path: "file.txt", expected_sha256: sha, old_text: "beta", new_text: "second" },
+      ],
+    });
+    expect(payload(result).applied).toBe(true);
+    expect(readFileSync(join(tmpRoot, "file.txt"), "utf8")).toBe("first\nsecond\n");
+  });
+
+  it("returns a fresh hash and a re-read hint for stale text", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-typed-"));
+    writeFileSync(join(tmpRoot, "file.txt"), "current\n");
+    const ctx = createContext(createProject(tmpRoot));
+    const result = payload(await handleWorkspacePatch(ctx, "chat-a", {
+      patches: [{ path: "file.txt", old_text: "stale", new_text: "new" }],
+    }));
+    expect(result).toMatchObject({
+      applied: false, partial: false, changed_files: [],
+      conflicts: [{ reason: "old_text not found", path: "file.txt", recovery: "re_read_target" }],
+    });
+    expect(result.conflicts[0].actual_sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(readFileSync(join(tmpRoot, "file.txt"), "utf8")).toBe("current\n");
+  });
+
+  it("applies LF unified diffs to CRLF text but rejects changed context", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-typed-"));
+    writeFileSync(join(tmpRoot, "file.txt"), "alpha\r\nbeta\r\ngamma\r\n");
+    const ctx = createContext(createProject(tmpRoot));
+    const diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1,3 +1,3 @@\n alpha\n-beta\n+BETTER\n gamma\n";
+    const applied = payload(await handleWorkspacePatch(ctx, "chat-a", { patches: [{ unified_diff: diff }] }));
+    expect(applied.applied).toBe(true);
+    expect(readFileSync(join(tmpRoot, "file.txt"), "utf8")).toBe("alpha\r\nBETTER\r\ngamma\r\n");
+
+    writeFileSync(join(tmpRoot, "file.txt"), "changed\r\nbeta\r\ngamma\r\n");
+    const conflicted = payload(await handleWorkspacePatch(ctx, "chat-a", { patches: [{ unified_diff: diff }] }));
+    expect(conflicted.applied).toBe(false);
+    expect(conflicted.conflicts[0]).toMatchObject({ reason: "Patch context does not match.", recovery: "re_read_target" });
+    expect(readFileSync(join(tmpRoot, "file.txt"), "utf8")).toBe("changed\r\nbeta\r\ngamma\r\n");
   });
 
   it("checks unified diff patches in dry-run mode", async () => {

@@ -77,7 +77,7 @@ Prefer typed tools over broad shell commands:
 - start interactive project work with `project.select`; it returns the effective global and project/worktree agent instructions for that selection
 - `project.select` composes `$CODEX_HOME/AGENTS.md` first and the selected project/worktree `AGENTS.md` second, so project/worktree instructions take precedence on conflicts; the full instruction body is returned only in `structuredContent`, while the text fallback carries metadata without duplicating the instructions into the transcript; see [`docs/project-select-agent-instructions.md`](docs/project-select-agent-instructions.md)
 - use `project.inspect` rather than filesystem discovery for the active project
-- use bounded `workspace.read`, `workspace.list`, and `workspace.search` rather than large shell scans
+- use bounded `workspace.read`, `workspace.list`, and `workspace.search` rather than large shell scans; combine independent reads with `workspace.batch` and inspect partial failures in `tool.usage` (see [`docs/workspace-operations.md`](docs/workspace-operations.md))
 - use typed `git.*` tools for common repository inspection
 - use `repo.action.list` to discover fixed repository-declared actions; call `repo.action.read` for local reads or `repo.action.write` for local writes and verified credential-backed deployments
 - use `shell.run` for builds, tests, installs, and unsupported or ad-hoc operations; use `repo.action.write` for declared verified deployments

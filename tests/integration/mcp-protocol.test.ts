@@ -126,6 +126,26 @@ it("negotiates MCP, discovers tools, validates calls, and runs a bounded batch t
     const blob = "blob" in resource.contents[0] ? resource.contents[0].blob : "";
     expect(Buffer.from(blob, "base64").toString("utf8")).toBe("alpha\nbeta\n");
     expect(metrics.snapshot().totals.measurements?.calls).toBe(3);
+
+    const mixed = await client.callTool({ name: "workspace.batch", arguments: {
+      requests: [
+        { tool: "workspace.read", arguments: { path: "sample.txt" } },
+        { tool: "workspace.read", arguments: { path: "missing.txt" } },
+      ],
+    } });
+    expect(mixed.isError).toBeUndefined();
+    expect(mixed.structuredContent).toMatchObject({ results: [
+      { result: { path: "sample.txt" } },
+      { result: { error: { code: "READ_FAILED" } } },
+    ] });
+
+    const allFailed = await client.callTool({ name: "workspace.batch", arguments: {
+      requests: [{ tool: "workspace.read", arguments: { path: "missing.txt" } }],
+    } });
+    expect(allFailed.isError).toBeUndefined();
+    expect(metrics.snapshot().tools["workspace.batch"]).toMatchObject({
+      calls: 3, failures: 1, partial_failures: 1, batch_items_total: 5, batch_items_failed: 2,
+    });
   } finally { await client.close(); await server.close(); metrics.flush(); }
 });
 

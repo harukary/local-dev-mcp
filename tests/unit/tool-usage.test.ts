@@ -80,6 +80,26 @@ describe("ToolUsageMetrics", () => {
     expect(filteredFull.tools.map(tool => tool.name)).toEqual(expect.arrayContaining(["workspace.read", "workspace.search"]));
   });
 
+  it("tracks partial and all-item batch failures without inflating tool call totals", () => {
+    root = mkdtempSync(join(tmpdir(), "local-dev-mcp-usage-"));
+    const path = join(root, "metrics.json");
+    const metrics = new ToolUsageMetrics(path, { flush_every: 1 });
+    metrics.record({ tool: "workspace.batch", project_id: "alpha", duration_ms: 12, batch_items: { total: 3, failed: 1 } });
+    metrics.record({ tool: "workspace.batch", project_id: "alpha", duration_ms: 20, failed: true, error_code: "BATCH_ALL_ITEMS_FAILED", batch_items: { total: 2, failed: 2 } });
+
+    expect(metrics.snapshot().tools["workspace.batch"]).toMatchObject({
+      calls: 2, failures: 1, partial_failures: 1, batch_items_total: 5, batch_items_failed: 3,
+    });
+    expect(metrics.snapshot().totals.calls).toBe(2);
+    const recent = metrics.view({ project_id: "alpha", prefix: "workspace.batch", recent_days: 7 }) as {
+      totals: { calls: number; partial_failures: number; batch_items_total: number; batch_items_failed: number };
+      tools: Array<{ calls: number; partial_failures: number; batch_items_total: number; batch_items_failed: number }>;
+    };
+    expect(recent.totals).toMatchObject({ calls: 2, partial_failures: 1, batch_items_total: 5, batch_items_failed: 3 });
+    expect(recent.tools[0]).toMatchObject({ calls: 2, partial_failures: 1, batch_items_total: 5, batch_items_failed: 3 });
+    expect(new ToolUsageMetrics(path).snapshot().tools["workspace.batch"].batch_items_failed).toBe(3);
+  });
+
   it("loads and continues a previous aggregate", () => {
     root = mkdtempSync(join(tmpdir(), "local-dev-mcp-usage-"));
     const path = join(root, "tool-usage.json");

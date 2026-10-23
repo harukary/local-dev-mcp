@@ -8,6 +8,9 @@ export type ToolUsageCounter = {
   total_duration_ms: number;
   max_duration_ms: number;
   last_called_at: string;
+  partial_failures?: number;
+  batch_items_total?: number;
+  batch_items_failed?: number;
   measurements?: {
     started_at: string;
     calls: number;
@@ -36,6 +39,9 @@ type WindowCounter = {
   structured_response_bytes: number;
   text_response_bytes: number;
   error_codes: Record<string, number>;
+  partial_failures?: number;
+  batch_items_total?: number;
+  batch_items_failed?: number;
 };
 
 type DailyUsageBucket = {
@@ -78,7 +84,16 @@ function emptyWindowCounter(): WindowCounter {
   return { calls: 0, failures: 0, total_duration_ms: 0, response_bytes: 0, request_bytes: 0, structured_response_bytes: 0, text_response_bytes: 0, error_codes: {} };
 }
 
-function bumpWindowCounter(counter: WindowCounter, input: { duration: number; failed: boolean; response_bytes?: number; request_bytes?: number; structured_response_bytes?: number; text_response_bytes?: number; error_code?: string }): void {
+type BatchItems = { total: number; failed: number };
+
+function bumpBatchItems(counter: { partial_failures?: number; batch_items_total?: number; batch_items_failed?: number }, items?: BatchItems): void {
+  if (!items || items.total <= 0) return;
+  counter.batch_items_total = (counter.batch_items_total ?? 0) + items.total;
+  counter.batch_items_failed = (counter.batch_items_failed ?? 0) + items.failed;
+  if (items.failed > 0 && items.failed < items.total) counter.partial_failures = (counter.partial_failures ?? 0) + 1;
+}
+
+function bumpWindowCounter(counter: WindowCounter, input: { duration: number; failed: boolean; response_bytes?: number; request_bytes?: number; structured_response_bytes?: number; text_response_bytes?: number; error_code?: string; batch_items?: BatchItems }): void {
   counter.calls++;
   if (input.failed) counter.failures++;
   counter.total_duration_ms += input.duration;
@@ -87,6 +102,7 @@ function bumpWindowCounter(counter: WindowCounter, input: { duration: number; fa
   counter.structured_response_bytes += normalizeDuration(input.structured_response_bytes ?? 0);
   counter.text_response_bytes += normalizeDuration(input.text_response_bytes ?? 0);
   if (input.error_code) counter.error_codes[input.error_code] = (counter.error_codes[input.error_code] ?? 0) + 1;
+  bumpBatchItems(counter, input.batch_items);
 }
 
 function mergeWindowCounter(target: WindowCounter, source: WindowCounter): void {
@@ -98,6 +114,9 @@ function mergeWindowCounter(target: WindowCounter, source: WindowCounter): void 
   target.structured_response_bytes += source.structured_response_bytes;
   target.text_response_bytes += source.text_response_bytes;
   for (const [code, count] of Object.entries(source.error_codes)) target.error_codes[code] = (target.error_codes[code] ?? 0) + count;
+  target.partial_failures = (target.partial_failures ?? 0) + (source.partial_failures ?? 0);
+  target.batch_items_total = (target.batch_items_total ?? 0) + (source.batch_items_total ?? 0);
+  target.batch_items_failed = (target.batch_items_failed ?? 0) + (source.batch_items_failed ?? 0);
 }
 
 function windowToolSummary(name: string, counter: WindowCounter) {
@@ -113,6 +132,11 @@ function windowToolSummary(name: string, counter: WindowCounter) {
     structured_response_bytes: counter.structured_response_bytes,
     text_response_bytes: counter.text_response_bytes,
     error_codes: counter.error_codes,
+    ...(counter.batch_items_total ? {
+      partial_failures: counter.partial_failures ?? 0,
+      batch_items_total: counter.batch_items_total,
+      batch_items_failed: counter.batch_items_failed ?? 0,
+    } : {}),
   };
 }
 
@@ -133,14 +157,16 @@ export class ToolUsageMetrics {
     this.data = this.load();
   }
 
-  record(input: { tool: string; project_id?: string; duration_ms: number; failed?: boolean; response_bytes?: number; request_bytes?: number; structured_response_bytes?: number; text_response_bytes?: number; error_code?: string }): void {
+  record(input: { tool: string; project_id?: string; duration_ms: number; failed?: boolean; response_bytes?: number; request_bytes?: number; structured_response_bytes?: number; text_response_bytes?: number; error_code?: string; batch_items?: BatchItems }): void {
     const now = new Date().toISOString();
     const duration = normalizeDuration(input.duration_ms);
     const failed = input.failed === true;
     this.bump(this.data.totals, duration, failed, now);
+    bumpBatchItems(this.data.totals, input.batch_items);
 
     const tool = this.data.tools[input.tool] ?? emptyCounter(now);
     this.bump(tool, duration, failed, now);
+    bumpBatchItems(tool, input.batch_items);
     this.data.tools[input.tool] = tool;
     if (input.response_bytes !== undefined) {
       for (const counter of [this.data.totals, tool]) {
@@ -168,7 +194,7 @@ export class ToolUsageMetrics {
     const day = now.slice(0, 10);
     const daily = this.data.daily ??= {};
     const bucket = daily[day] ??= { totals: emptyWindowCounter(), tools: {}, projects: {} };
-    const windowInput = { duration, failed, response_bytes: input.response_bytes, request_bytes: input.request_bytes, structured_response_bytes: input.structured_response_bytes, text_response_bytes: input.text_response_bytes, error_code: input.error_code };
+    const windowInput = { duration, failed, response_bytes: input.response_bytes, request_bytes: input.request_bytes, structured_response_bytes: input.structured_response_bytes, text_response_bytes: input.text_response_bytes, error_code: input.error_code, batch_items: input.batch_items };
     bumpWindowCounter(bucket.totals, windowInput);
     const dailyTool = bucket.tools[input.tool] ??= emptyWindowCounter();
     bumpWindowCounter(dailyTool, windowInput);
@@ -262,6 +288,11 @@ export class ToolUsageMetrics {
         request_bytes: measured?.request_bytes ?? 0,
         structured_response_bytes: measured?.structured_response_bytes ?? 0,
         text_response_bytes: measured?.text_response_bytes ?? 0,
+        ...(counter.batch_items_total ? {
+          partial_failures: counter.partial_failures ?? 0,
+          batch_items_total: counter.batch_items_total,
+          batch_items_failed: counter.batch_items_failed ?? 0,
+        } : {}),
       };
     });
     return {

@@ -710,7 +710,11 @@ export function createMcpServer(ctx: AppContext): Server {
         try { payload = JSON.parse(result?.content?.find((item: { type: string }) => item.type === "text")?.text ?? "null"); } catch { /* Text-only tools need no JSON result. */ }
       }
       const failedJob = name === "shell.status" && ["failed", "timeout", "interrupted"].includes(payload?.status);
-      const failed = result?.isError === true || failedJob || (name === "shell.run" && payload?.exit_code !== undefined && payload.exit_code !== 0);
+      const batchItems = name === "workspace.batch" && Array.isArray(payload?.results)
+        ? { total: payload.results.length, failed: payload.results.filter((item: { result?: { error?: unknown } }) => item?.result?.error !== undefined).length }
+        : undefined;
+      const failedBatch = batchItems !== undefined && batchItems.total > 0 && batchItems.failed === batchItems.total;
+      const failed = result?.isError === true || failedJob || failedBatch || (name === "shell.run" && payload?.exit_code !== undefined && payload.exit_code !== 0);
       const textResponseBytes = Array.isArray(result?.content)
         ? result.content.reduce((sum: number, item: { type?: string; text?: string }) => sum + (item?.type === "text" && typeof item.text === "string" ? Buffer.byteLength(item.text) : 0), 0)
         : 0;
@@ -728,7 +732,8 @@ export function createMcpServer(ctx: AppContext): Server {
         request_bytes: requestBytes,
         structured_response_bytes: structuredResponseBytes,
         text_response_bytes: textResponseBytes,
-        error_code: failed ? payload?.error?.code ?? payload?.observation?.error?.code ?? (failedJob ? `JOB_${String(payload.status).toUpperCase()}` : name === "shell.run" ? "SHELL_EXIT_NONZERO" : "TOOL_FAILED") : undefined,
+        batch_items: batchItems,
+        error_code: failed ? payload?.error?.code ?? payload?.observation?.error?.code ?? (failedJob ? `JOB_${String(payload.status).toUpperCase()}` : failedBatch ? "BATCH_ALL_ITEMS_FAILED" : name === "shell.run" ? "SHELL_EXIT_NONZERO" : "TOOL_FAILED") : undefined,
       });
       return result;
     } catch (err) {

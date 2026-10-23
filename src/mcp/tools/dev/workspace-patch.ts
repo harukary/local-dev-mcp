@@ -84,15 +84,20 @@ export async function handleWorkspacePatch(ctx: AppContext, chatContextId: strin
             const file = await load(oldPath || newPath || undefined);
             if (!oldPath && file.after !== null) throw new PatchError("PATCH_CONFLICT", "New file already exists.", { path: file.path });
             if (oldPath && file.after === null) throw new PatchError("PATCH_CONFLICT", "Patch source does not exist.", { path: file.path });
-            const after = applyPatch(file.after ?? "", item, { fuzzFactor: 0, autoConvertLineEndings: false });
-            if (after === false) throw new PatchError("PATCH_CONFLICT", "Patch context does not match.", { path: file.path });
+            const before = file.after ?? "";
+            let after = applyPatch(before, item, { fuzzFactor: 0, autoConvertLineEndings: false });
+            // Line-ending differences are safe to reconcile; changed patch context is not.
+            if (after === false) after = applyPatch(before, item, { fuzzFactor: 0, autoConvertLineEndings: true });
+            if (after === false) throw new PatchError("PATCH_CONFLICT", "Patch context does not match.", { path: file.path, actual_sha256: sha256(before), recovery: "re_read_target" });
             file.after = newPath ? after : null;
             file.mode = "unified_diff";
           }
         } else {
           const file = await load(patch.path);
           const before = file.after ?? "";
-          if (patch.expected_sha256 && sha256(before) !== patch.expected_sha256) throw new PatchError("PATCH_CONFLICT", "expected_sha256 mismatch", { path: file.path, actual_sha256: sha256(before) });
+          // Each expected hash describes the source snapshot, not an intermediate edit in this call.
+          const sourceSha256 = sha256(file.before ?? "");
+          if (patch.expected_sha256 && sourceSha256 !== patch.expected_sha256) throw new PatchError("PATCH_CONFLICT", "expected_sha256 mismatch", { path: file.path, actual_sha256: sourceSha256, recovery: "re_read_target" });
           if (patch.replacement !== undefined) {
             if (typeof patch.replacement !== "string") throw new PatchError("INVALID_PATCH", "replacement must be a string.");
             file.after = patch.replacement;
@@ -101,8 +106,8 @@ export async function handleWorkspacePatch(ctx: AppContext, chatContextId: strin
             if (file.after === null) throw new PatchError("PATCH_CONFLICT", "file does not exist", { path: file.path });
             const pieces = before.split(patch.old_text);
             const occurrences = pieces.length - 1;
-            if (!occurrences) throw new PatchError("PATCH_CONFLICT", "old_text not found", { path: file.path });
-            if (occurrences > 1 && patch.replace_all !== true) throw new PatchError("PATCH_CONFLICT", "old_text is ambiguous; set replace_all=true to replace all occurrences", { path: file.path, occurrences });
+            if (!occurrences) throw new PatchError("PATCH_CONFLICT", "old_text not found", { path: file.path, actual_sha256: sha256(before), recovery: "re_read_target" });
+            if (occurrences > 1 && patch.replace_all !== true) throw new PatchError("PATCH_CONFLICT", "old_text is ambiguous; use a longer unique old_text (or replace_all only if every match should change)", { path: file.path, occurrences, actual_sha256: sha256(before), recovery: "use_unique_context" });
             file.after = patch.replace_all === true ? pieces.join(patch.new_text) : before.replace(patch.old_text, () => patch.new_text!);
             file.mode = "text_replace";
             file.occurrences_replaced = patch.replace_all === true ? occurrences : 1;
@@ -126,12 +131,12 @@ export async function handleWorkspacePatch(ctx: AppContext, chatContextId: strin
       }
       if (!dryRun) {
         // Validate the complete source snapshot before writing, then recheck each target.
-        for (const file of files) if (await readExisting(file.absolute) !== file.before) throw new PatchError("PATCH_CONFLICT", "File changed during preflight.", { path: file.path });
+        for (const file of files) if (await readExisting(file.absolute) !== file.before) throw new PatchError("PATCH_CONFLICT", "File changed during preflight.", { path: file.path, recovery: "re_read_target" });
         phase = "write";
         for (const file of files) {
           const resolved = resolveProjectPath(project, file.path);
           if (!resolved.ok) throw new PatchError(resolved.code, resolved.message);
-          if (await readExisting(file.absolute) !== file.before) throw new PatchError("PATCH_CONFLICT", "File changed before write.", { path: file.path });
+          if (await readExisting(file.absolute) !== file.before) throw new PatchError("PATCH_CONFLICT", "File changed before write.", { path: file.path, recovery: "re_read_target" });
           if (file.after === null) await unlink(file.absolute);
           else {
             await mkdir(dirname(file.absolute), { recursive: true });
@@ -139,7 +144,7 @@ export async function handleWorkspacePatch(ctx: AppContext, chatContextId: strin
             const mode = file.before === null ? 0o644 : (await stat(file.absolute)).mode & 0o777;
             try {
               await writeFile(temporary, file.after, { encoding: "utf8", flag: "wx", mode });
-              if (await readExisting(file.absolute) !== file.before) throw new PatchError("PATCH_CONFLICT", "File changed before replacement.", { path: file.path });
+              if (await readExisting(file.absolute) !== file.before) throw new PatchError("PATCH_CONFLICT", "File changed before replacement.", { path: file.path, recovery: "re_read_target" });
               if (file.before === null) await link(temporary, file.absolute);
               else await rename(temporary, file.absolute);
             } finally { await rm(temporary, { force: true }); }

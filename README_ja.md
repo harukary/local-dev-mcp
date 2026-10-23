@@ -75,7 +75,7 @@ MCP server側でもproject policyとshell risk policyを適用します。ChatGP
 broadなshell commandよりtyped toolを優先します。
 
 - active project確認はfilesystem探索ではなく`project.inspect`
-- 大規模なshell scanではなくboundedな`workspace.read` / `workspace.list` / `workspace.search`
+- 大規模なshell scanではなくboundedな`workspace.read` / `workspace.list` / `workspace.search`を使い、独立した複数読込は`workspace.batch`にまとめる（部分失敗の集計と`workspace.patch`の競合処理は[`docs/workspace-operations.md`](docs/workspace-operations.md)）
 - 一般的なGit確認はtyped `git.*`
 - 既知のlocal operationは`repo.action.list`でcatalogを確認し、`repo.action.read` / `repo.action.write`を使う
 - build/test/deploy/install/未対応またはad-hoc操作では`shell.run`
