@@ -15,6 +15,7 @@ import { ActiveTabStore } from "../../browser/active-tab-store.js";
 import { BrowserOperationCoordinator } from "../../browser/browser-operation-coordinator.js";
 import { CdpClient, withCdpClient, closeCdpClients } from "../../browser/cdp-client.js";
 import { withBrowserPage, clickElement, fillElement, locatorFor, closeBrowserConnections } from "../../browser/interaction.js";
+import { navigateWithHttpBasicAuth, validateHttpCredentials, type BrowserHttpCredentials } from "../../browser/http-basic-auth.js";
 import { observeAfterAction } from "../observation.js";
 import { structuredTextFallback, utf8Prefix } from "../output.js";
 import { operationSignal } from "../request-context.js";
@@ -1077,7 +1078,7 @@ export async function handleBrowserScreenshot(ctx: AppContext, chatContextId: st
 export async function handleBrowserOpen(
   ctx: AppContext,
   chatContextId: string,
-  args: { url?: string; session_id?: string; observe?: BrowserObserve; wait_ms?: number; wait_for?: BrowserWaitFor }
+  args: { url?: string; session_id?: string; observe?: BrowserObserve; wait_ms?: number; wait_for?: BrowserWaitFor; http_credentials?: BrowserHttpCredentials }
 ) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
@@ -1085,12 +1086,19 @@ export async function handleBrowserOpen(
   if (explicitError) return explicitError;
   const url = validateHttpUrl(args?.url ?? "");
   if (!url) return jsonError("INVALID_URL", "browser.open requires an http or https URL.");
-  const session = await ensureSession(ctx, chatContextId, url, args.session_id);
+  if (args.http_credentials) {
+    try { validateHttpCredentials(url, args.http_credentials); }
+    catch (error) { return jsonError("INVALID_HTTP_CREDENTIALS", error instanceof Error ? error.message : "Invalid HTTP Basic credentials."); }
+  }
+  const session = await ensureSession(ctx, chatContextId, args.http_credentials ? undefined : url, args.session_id);
   if ("error" in session) return session.error;
   try { await validateActiveTarget(session); } catch (error) { return tabError(error, "BROWSER_ACTIVE_TAB_FAILED", { port: session.port }); }
   try {
     const target = await validateActiveTarget(session);
-    await withBrowserPage(session.port, target.id, async page => { await page.goto(url, { waitUntil: "domcontentloaded" }); });
+    await withBrowserPage(session.port, target.id, async page => {
+      if (args.http_credentials) await navigateWithHttpBasicAuth(page, url, args.http_credentials);
+      else await page.goto(url, { waitUntil: "domcontentloaded" });
+    });
     session.url = url;
     session.updated_at = new Date().toISOString();
     await (await profileManager()).touch(session.session_id);

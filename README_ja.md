@@ -82,6 +82,10 @@ broadなshell commandよりtyped toolを優先します。
 - 約30秒を超えそうな処理は`shell.run(async=true)`で開始し、`shell.status`でpoll
 - server/tool変更後にChatGPT側schemaが古い場合は`tool.schema`とPlugin Refreshを使う
 
+## BrowserのHTTP Basic認証
+
+Basic認証を要求する既存サイトでは、`browser.open` にHTTPSの対象URLと `http_credentials: { username, password }` を渡します。ブラウザは**指定URLと同じオリジンのサーバー認証チャレンジだけ**に応答し、URLへの認証情報埋め込みやtool設定への永続保存、結果への値出力は行いません。通常の `browser.open` は変更ありません。平文HTTPを認めるのは開発用loopback URLだけです。Cloudflare Accessは別の認証境界なので、この指定だけでは通過できません。
+
 ## Requirements
 
 - Node.js 22以降

@@ -499,7 +499,7 @@ export function createMcpServer(ctx: AppContext): Server {
           return await handleBrowserScreenshot(ctx, chatContextId, args as { session_id?: string });
 
         case "browser.open":
-          return await handleBrowserOpen(ctx, chatContextId, args as { url?: string; session_id?: string; observe?: "none" | "after"; wait_ms?: number; wait_for?: { selector?: string; text?: string; url_contains?: string; title_contains?: string; timeout_ms?: number } });
+          return await handleBrowserOpen(ctx, chatContextId, args as { url?: string; session_id?: string; observe?: "none" | "after"; wait_ms?: number; http_credentials?: { username: string; password: string }; wait_for?: { selector?: string; text?: string; url_contains?: string; title_contains?: string; timeout_ms?: number } });
 
         case "mobile.status":
           return await handleMobileStatus(ctx, chatContextId);

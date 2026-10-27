@@ -85,6 +85,10 @@ Prefer typed tools over broad shell commands:
 - interactive ChatGPT turns use a 20-minute local-dev lease; after expiry, the next local-dev call returns `turn_paused` without changing or cancelling the workflow. See [`docs/chatgpt-interactive-turn-lease.md`](docs/chatgpt-interactive-turn-lease.md)
 - use `tool.schema` after server/tool changes when ChatGPT has stale action metadata
 
+## Browser HTTP Basic Authentication
+
+When an existing website uses an HTTP Basic challenge, pass `http_credentials: { username, password }` to `browser.open` along with its HTTPS URL. See [`docs/browser-http-basic-auth.md`](docs/browser-http-basic-auth.md) for the scoped challenge flow and verification. The browser responds only to server challenges from the **exact URL origin**. It never embeds the credentials in the URL, outputs them, or persists them as a tool setting. Ordinary `browser.open` calls need no credentials. Plain HTTP is supported only for loopback development servers. Do not use this for Cloudflare Access login, which remains a separate authentication boundary.
+
 ## Browser Profiles
 
 Browser state is isolated by the ChatGPT `openai/session` identity. The same chat
