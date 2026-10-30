@@ -28,6 +28,17 @@ We directly observed the following in the harukary Business workspace on 2026-09
 9. On 2026-10-02, after `project.select` changed to return composed global + project/worktree agent instructions, the runtime was activated with schema version `2026-10-02.3`, the existing workspace app action snapshot was refreshed in place, and the updated `project.select` description was read back from the workspace connector configuration.
 10. A Branch chat created after that refresh returned both instruction sources from `project.select` (`$CODEX_HOME/AGENTS.md` followed by the project `AGENTS.md`) and included the newly published global instructions, confirming that the branch had rebound to the refreshed action/runtime behavior.
 
+### 2026-10-30 layer-specific check
+
+This check was performed in an existing ChatGPT conversation **without** an authenticated Workspace admin action-snapshot read-back:
+
+- Repository: Mac and Mini both have `main` at `759c0a7`, clean and synchronized with `origin/main`.
+- Running MCP: both report `tool.schema` version `2026-10-28.1`, including the optional `browser.open.http_credentials` input, with HTTP `/healthz` and the Business Tunnel healthy.
+- Workspace Plugin action snapshot: **unverified**. The current ChatGPT Browser connector required an originating browser context, and a Mini-managed Chrome profile did not have an authenticated ChatGPT session. Neither an action Refresh nor app recreation was attempted. This layer cannot be inferred from the running MCP.
+- Conversation binding: the current conversation exposes 82 tool names for each server but an older `browser.open` description/schema without `http_credentials`. This does **not** establish whether the Workspace snapshot is old or only the conversation binding is old.
+
+When authenticated workspace app-management access is available, read the *existing* `local-dev` and `local-dev-mini` action snapshots. Refresh the affected existing app **only if its snapshot is stale**, read back the optional `http_credentials` field and description, then create a Branch/new chat and verify the model-facing tool definition. Do not use a Plugin package version bump or an unverified endpoint as a substitute.
+
 Concrete verification from the `sodateai` app:
 
 - before refresh: `report.search`, `report.get`, `report.create`, `report.delete`
