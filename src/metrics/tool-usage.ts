@@ -11,6 +11,7 @@ export type ToolUsageCounter = {
   partial_failures?: number;
   batch_items_total?: number;
   batch_items_failed?: number;
+  batch_item_error_codes?: Record<string, number>;
   measurements?: {
     started_at: string;
     calls: number;
@@ -42,6 +43,7 @@ type WindowCounter = {
   partial_failures?: number;
   batch_items_total?: number;
   batch_items_failed?: number;
+  batch_item_error_codes?: Record<string, number>;
 };
 
 type DailyUsageBucket = {
@@ -84,12 +86,16 @@ function emptyWindowCounter(): WindowCounter {
   return { calls: 0, failures: 0, total_duration_ms: 0, response_bytes: 0, request_bytes: 0, structured_response_bytes: 0, text_response_bytes: 0, error_codes: {} };
 }
 
-type BatchItems = { total: number; failed: number };
+type BatchItems = { total: number; failed: number; error_codes?: Record<string, number> };
 
-function bumpBatchItems(counter: { partial_failures?: number; batch_items_total?: number; batch_items_failed?: number }, items?: BatchItems): void {
+function bumpBatchItems(counter: { partial_failures?: number; batch_items_total?: number; batch_items_failed?: number; batch_item_error_codes?: Record<string, number> }, items?: BatchItems): void {
   if (!items || items.total <= 0) return;
   counter.batch_items_total = (counter.batch_items_total ?? 0) + items.total;
   counter.batch_items_failed = (counter.batch_items_failed ?? 0) + items.failed;
+  for (const [code, count] of Object.entries(items.error_codes ?? {})) {
+    const codes = counter.batch_item_error_codes ??= {};
+    codes[code] = (codes[code] ?? 0) + count;
+  }
   if (items.failed > 0 && items.failed < items.total) counter.partial_failures = (counter.partial_failures ?? 0) + 1;
 }
 
@@ -117,6 +123,10 @@ function mergeWindowCounter(target: WindowCounter, source: WindowCounter): void 
   target.partial_failures = (target.partial_failures ?? 0) + (source.partial_failures ?? 0);
   target.batch_items_total = (target.batch_items_total ?? 0) + (source.batch_items_total ?? 0);
   target.batch_items_failed = (target.batch_items_failed ?? 0) + (source.batch_items_failed ?? 0);
+  for (const [code, count] of Object.entries(source.batch_item_error_codes ?? {})) {
+    const codes = target.batch_item_error_codes ??= {};
+    codes[code] = (codes[code] ?? 0) + count;
+  }
 }
 
 function windowToolSummary(name: string, counter: WindowCounter) {
@@ -136,6 +146,7 @@ function windowToolSummary(name: string, counter: WindowCounter) {
       partial_failures: counter.partial_failures ?? 0,
       batch_items_total: counter.batch_items_total,
       batch_items_failed: counter.batch_items_failed ?? 0,
+      batch_item_error_codes: counter.batch_item_error_codes ?? {},
     } : {}),
   };
 }
@@ -292,6 +303,7 @@ export class ToolUsageMetrics {
           partial_failures: counter.partial_failures ?? 0,
           batch_items_total: counter.batch_items_total,
           batch_items_failed: counter.batch_items_failed ?? 0,
+          batch_item_error_codes: counter.batch_item_error_codes ?? {},
         } : {}),
       };
     });

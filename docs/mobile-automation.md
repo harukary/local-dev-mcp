@@ -19,6 +19,8 @@ A successful action distinguishes execution from verification:
 
 An action-level transport error may report `action_applied: null`: execution is uncertain. Never replay an uncertain tap, text entry, or submission without first observing the current device state. If an observation fails *after* an action, `action_applied: true` and `retry_action: false` preserve that distinction.
 
+If `mobile.launch_app` or a snapshot repeatedly fails with the same backend/device error, **do not immediately repeat the launch**. Use `mobile.status` and `mobile.list_devices` to verify the backend and device, check the current UI with `mobile.snapshot` or `mobile.screenshot` where possible, then address a missing device, unavailable simulator, or stale session before retrying once. Repeated failures are not evidence that the app was never launched. This is an operational recovery rule, not an automatic retry or extra mobile service.
+
 `mobile.snapshot` removes redundant values and common true flags. It keeps `ref`, `identifier`, `label`, type, hierarchy, and relevant state. Element rectangles are `[x,y,width,height]` in the backend's screen coordinates. Element refs expire after page mutations, cross-chat actions or 60 seconds; use fresh refs instead of replaying stale ones.
 
 ## Batching known steps

@@ -9,9 +9,10 @@
 - `batch_items_total`: Batch 内で処理した項目の総数
 - `batch_items_failed`: 内部結果に `error` があった項目数。出力予算超過 (`BATCH_OUTPUT_LIMIT`) も含む
 - `partial_failures`: 成功項目と失敗項目が混在した Batch 呼び出し回数
+- `batch_item_error_codes`: 内部エラーコードごとの件数。パス・本文・リクエスト引数は記録せず、異常なコード値は `UNKNOWN_BATCH_ITEM_ERROR` にまとめる
 - `failures`: 外側の失敗呼び出し数。Batch の全項目が失敗した場合は `BATCH_ALL_ITEMS_FAILED` として計測するが、既存の `workspace.batch` の結果形式は変えない
 
-上記の内部項目統計は導入後の呼び出しから記録し、過去の集計値は補完しない。プロジェクト別・直近期間の比較には `tool.usage({ project_id: "...", prefix: "workspace.batch", recent_days: 7 })` を使用する。
+内部項目の件数とエラーコードの内訳は、それぞれ導入後の呼び出しから記録し、過去の集計値は補完しない。プロジェクト別・直近期間の比較には `tool.usage({ project_id: "...", prefix: "workspace.batch", recent_days: 7 })` を使用する。
 
 ## Patch の競合防止と再実行
 

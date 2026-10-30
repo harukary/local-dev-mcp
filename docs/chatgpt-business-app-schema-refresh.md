@@ -1,19 +1,19 @@
 # ChatGPT Business Workspace App / MCP schema refresh behavior
 
-Last verified: 2026-10-02
+Official documentation verified: 2026-10-30. Workspace snapshot workflow last directly verified: 2026-10-02.
 
 This note records how we currently update the **workspace-published `local-dev` / MCP app in the harukary Business workspace** when the MCP tool surface changes.
 
-The important caveat is that current OpenAI Help Center text and the behavior observed in this workspace do not fully agree. Treat the workflow below as a **workspace-specific operational rule**, not as a general guarantee for every ChatGPT Business workspace.
+The current OpenAI Help Center and the previously observed workspace refresh flow agree that **Business admins can refresh the tools of an existing published custom MCP connection without recreating the app**. The UI location and per-workspace permissions can still differ. Treat the local verification history below as workspace-specific evidence rather than proof that a particular snapshot is current now.
 
-## Official documentation vs observed behavior
+## Current official documentation and observed behavior
 
-OpenAI's current Help Center says that, for Business, a published custom MCP app cannot generally be updated in place and that changing tools or metadata requires recreating and republishing the app.
+OpenAI's Help Center, checked on 2026-10-30, documents in-place refresh for Business and Enterprise/Edu admins with a valid connection and permission to manage the app. Published connections use a frozen tool/input snapshot; later server changes are **not** applied automatically. An updated optional input may remain backward-compatible, but the new field is not considered published until the action snapshot has been refreshed and read back.
 
-Official reference:
+Official references:
 
-- https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt
-- https://help.openai.com/ja-jp/articles/12584461-chatgpt-%E3%81%AE%E9%96%8B%E7%99%BA%E8%80%85%E3%83%A2%E3%83%BC%E3%83%89%E3%81%A8-mcp-%E3%82%A2%E3%83%97%E3%83%AA%E3%83%99%E3%83%BC%E3%82%BF%E7%89%88
+- https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt
+- https://help.openai.com/en/articles/11509118-admin-controls-security-and-compliance-for-plugins-and-apps
 
 We directly observed the following in the harukary Business workspace on 2026-09-20 and re-verified the mechanism on 2026-09-25:
 
@@ -71,7 +71,7 @@ Recreate and republish the app only when one of these is true:
 - the authentication model or app identity must change,
 - after checking the current ChatGPT app-management client, no usable action-refresh flow remains,
 - refresh fails or the read-back still shows the old snapshot,
-- OpenAI changes the product behavior and in-place refresh is no longer accepted for this workspace.
+- a current, verified product limitation prevents an in-place update for this workspace.
 
 If recreation is required, preserve the existing app until the replacement has been verified. Avoid deleting the working app first.
 

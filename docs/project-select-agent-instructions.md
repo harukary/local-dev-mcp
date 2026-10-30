@@ -93,6 +93,8 @@ This instruction resolution belongs to interactive project selection. Interactiv
 
 Scheduled Tasks are intentionally stateless because the observed Scheduled Task request shape does not provide a stable chat/session identity. Do not call `project.select` expecting persistence from a Scheduled Task. Pass `project_id` and optional `working_dir` on each project-scoped call instead.
 
+Interactive chats should call `project.select` only when the project or working directory changes. A duplicate selection is safe and avoids redundant persistence/audit writes, but still re-reads and returns the composed `AGENTS.md` content; repeated calls therefore incur unnecessary response bytes. Do not add a second selection just to confirm a successful first selection. If a specific read needs to run against a known project without changing chat context, use that tool's explicit `project_id` instead.
+
 See [`chatgpt-scheduled-task-mcp-metadata.md`](./chatgpt-scheduled-task-mcp-metadata.md) for the Scheduled Task context rules.
 
 ## ChatGPT refresh behavior

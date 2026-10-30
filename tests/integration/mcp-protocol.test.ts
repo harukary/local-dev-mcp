@@ -145,6 +145,7 @@ it("negotiates MCP, discovers tools, validates calls, and runs a bounded batch t
     expect(allFailed.isError).toBeUndefined();
     expect(metrics.snapshot().tools["workspace.batch"]).toMatchObject({
       calls: 3, failures: 1, partial_failures: 1, batch_items_total: 5, batch_items_failed: 2,
+      batch_item_error_codes: { READ_FAILED: 2 },
     });
   } finally { await client.close(); await server.close(); metrics.flush(); }
 });

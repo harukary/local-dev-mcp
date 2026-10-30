@@ -711,7 +711,18 @@ export function createMcpServer(ctx: AppContext): Server {
       }
       const failedJob = name === "shell.status" && ["failed", "timeout", "interrupted"].includes(payload?.status);
       const batchItems = name === "workspace.batch" && Array.isArray(payload?.results)
-        ? { total: payload.results.length, failed: payload.results.filter((item: { result?: { error?: unknown } }) => item?.result?.error !== undefined).length }
+        ? (() => {
+            const errorCodes: Record<string, number> = {};
+            let failed = 0;
+            for (const item of payload.results as Array<{ result?: { error?: { code?: unknown } } }>) {
+              if (item?.result?.error === undefined) continue;
+              failed++;
+              const rawCode = item.result.error?.code;
+              const code = typeof rawCode === "string" && /^[A-Z0-9_]{1,64}$/.test(rawCode) ? rawCode : "UNKNOWN_BATCH_ITEM_ERROR";
+              errorCodes[code] = (errorCodes[code] ?? 0) + 1;
+            }
+            return { total: payload.results.length, failed, error_codes: errorCodes };
+          })()
         : undefined;
       const failedBatch = batchItems !== undefined && batchItems.total > 0 && batchItems.failed === batchItems.total;
       const failed = result?.isError === true || failedJob || failedBatch || (name === "shell.run" && payload?.exit_code !== undefined && payload.exit_code !== 0);
