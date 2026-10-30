@@ -321,6 +321,12 @@ When `LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE=1` is set during install, `io.
 
 On a host that uses only the Business Tunnel, set `LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_ENABLE=0` during activation. The Personal Tunnel is enabled by default.
 
+```bash
+LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_ENABLE=0 LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE=1 pnpm launchd:activate
+```
+
+Before stopping any services, the activation worker checks that all requested jobs have plists and are not disabled in launchd. A policy mismatch fails explicitly while leaving the running services up. If a Tunnel later fails to unload or bootstrap, the worker still attempts the other selected Tunnels and exits nonzero with the failed labels. See [activation recovery](docs/launchd-activation-recovery.md).
+
 The server and Tunnel clients are separate processes, so Tunnel reconnects do not restart the MCP server.
 
 ## Add The Plugin In ChatGPT Developer Mode

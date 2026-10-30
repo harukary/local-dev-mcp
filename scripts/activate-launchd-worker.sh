@@ -59,6 +59,22 @@ sleep 1
 # soon as launchd has loaded the job so no stale handoff file remains.
 rm -f "$ACTIVATION_PLIST"
 
+# Reject incompatible launchd policy before taking any working service down.
+if ! disabled_jobs="$(launchctl print-disabled "$DOMAIN" 2>&1)"; then
+  echo "Cannot inspect disabled launchd jobs; existing services were left running." >&2
+  exit 1
+fi
+for label in "$SERVER_LABEL" "${TUNNEL_LABELS[@]}"; do
+  if [[ "$disabled_jobs" == *"\"$label\" => disabled"* ]]; then
+    echo "Requested job $label is disabled in launchd; existing services were left running. Exclude this Tunnel from activation or explicitly enable the job first." >&2
+    exit 1
+  fi
+  if [ ! -f "$LAUNCH_AGENTS_DIR/$label.plist" ]; then
+    echo "Missing LaunchAgent for $label; existing services were left running." >&2
+    exit 1
+  fi
+done
+
 for label in "$SERVER_LABEL" "$LEGACY_TUNNEL_LABEL" "$LEGACY_PERSONAL_MINI_TUNNEL_LABEL" "$PERSONAL_TUNNEL_LABEL" "${TUNNEL_LABELS[@]}"; do
   launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
 done
@@ -79,9 +95,15 @@ if [ "$healthy" -ne 1 ]; then
   exit 1
 fi
 
+failed_tunnels=()
+activated_tunnels=()
 for label in "${TUNNEL_LABELS[@]}"; do
-  wait_for_unload "$label"
-  bootstrap_with_retry "$label" "$LAUNCH_AGENTS_DIR/$label.plist"
+  if wait_for_unload "$label" && bootstrap_with_retry "$label" "$LAUNCH_AGENTS_DIR/$label.plist"; then
+    activated_tunnels+=("$label")
+  else
+    failed_tunnels+=("$label")
+    echo "Failed to activate $label; continuing with the remaining Tunnels." >&2
+  fi
 done
 
 rm -f "$LAUNCH_AGENTS_DIR/$LEGACY_TUNNEL_LABEL.plist" "$LAUNCH_AGENTS_DIR/$LEGACY_PERSONAL_MINI_TUNNEL_LABEL.plist"
@@ -94,4 +116,8 @@ done
 if [ "$personal_enabled" -eq 0 ]; then
   rm -f "$LAUNCH_AGENTS_DIR/$PERSONAL_TUNNEL_LABEL.plist"
 fi
-echo "Activated $SERVER_LABEL and ${TUNNEL_LABELS[*]}"
+echo "Activated $SERVER_LABEL and ${activated_tunnels[*]}"
+if [ "${#failed_tunnels[@]}" -gt 0 ]; then
+  echo "Activation incomplete. Failed Tunnels: ${failed_tunnels[*]}" >&2
+  exit 1
+fi

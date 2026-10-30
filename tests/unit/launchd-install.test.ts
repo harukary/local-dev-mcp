@@ -191,6 +191,60 @@ describe("launchd installer", () => {
     expect(() => readFileSync(activationPlist)).toThrow();
   });
 
+  it.each(["test.server", "test.personal"])("leaves running services untouched when %s is disabled", (disabledLabel) => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-disabled-"));
+    tempDirs.push(tempDir);
+    const fakeBin = path.join(tempDir, "bin");
+    mkdirSync(fakeBin);
+    for (const label of ["test.server", "test.personal", "test.business"]) {
+      writeFileSync(path.join(tempDir, `${label}.plist`), "placeholder");
+    }
+    const log = path.join(tempDir, "calls.log");
+    for (const [name, body] of [
+      ["launchctl", `#!/bin/bash\nprintf '%s\\n' "$*" >> '${log}'\nif [ "$1" = print-disabled ]; then\n  echo '\"${disabledLabel}\" => disabled'\nfi\n`],
+      ["sleep", "#!/bin/bash\nexit 0\n"],
+    ]) {
+      writeFileSync(path.join(fakeBin, name), body);
+      chmodSync(path.join(fakeBin, name), 0o755);
+    }
+    const result = spawnSync("/bin/bash", [
+      path.resolve("scripts/activate-launchd-worker.sh"), "gui/501", tempDir,
+      path.join(tempDir, "activation.plist"), "test.server", "13461",
+      "test.legacy", "test.legacy-mini", "test.personal", "test.personal", "test.business",
+    ], { env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` }, encoding: "utf8" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`Requested job ${disabledLabel} is disabled`);
+    expect(readFileSync(log, "utf8").trim()).toBe("print-disabled gui/501");
+  });
+
+  it("still activates Business and reports failure when Personal cannot bootstrap", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-partial-activation-"));
+    tempDirs.push(tempDir);
+    const fakeBin = path.join(tempDir, "bin");
+    mkdirSync(fakeBin);
+    for (const label of ["test.server", "test.personal", "test.business"]) {
+      writeFileSync(path.join(tempDir, `${label}.plist`), "placeholder");
+    }
+    const log = path.join(tempDir, "calls.log");
+    for (const [name, body] of [
+      ["launchctl", `#!/bin/bash\nprintf '%s\\n' "$*" >> '${log}'\nif [ "$1" = print ]; then exit 1; fi\nif [ "$1" = bootstrap ] && [[ "$3" == *test.personal.plist ]]; then exit 5; fi\nexit 0\n`],
+      ["sleep", "#!/bin/bash\nexit 0\n"],
+      ["curl", "#!/bin/bash\nexit 0\n"],
+    ]) {
+      writeFileSync(path.join(fakeBin, name), body);
+      chmodSync(path.join(fakeBin, name), 0o755);
+    }
+    const result = spawnSync("/bin/bash", [
+      path.resolve("scripts/activate-launchd-worker.sh"), "gui/501", tempDir,
+      path.join(tempDir, "activation.plist"), "test.server", "13461",
+      "test.legacy", "test.legacy-mini", "test.personal", "test.personal", "test.business",
+    ], { env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` }, encoding: "utf8" });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Activated test.server and test.business");
+    expect(result.stderr).toContain("Activation incomplete. Failed Tunnels: test.personal");
+    expect(readFileSync(log, "utf8")).toContain(`bootstrap gui/501 ${path.join(tempDir, "test.business.plist")}`);
+  }, 20_000);
+
   it("generates an optional Business Secure MCP Tunnel LaunchAgent", () => {
     const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-launchd-business-"));
     tempDirs.push(tempDir);
