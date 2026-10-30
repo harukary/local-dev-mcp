@@ -79,6 +79,9 @@ export function browserOperationLockPorts(identity: string): number[] {
 
 async function tryAcquirePort(port: number, identity: string): Promise<Server | undefined> {
   const lock = createServer((socket) => {
+    // A disconnected probe must not become an unhandled socket error and
+    // terminate the MCP process. The listening server still owns the lock.
+    socket.on("error", () => socket.destroy());
     socket.setTimeout(500, () => socket.destroy());
     socket.once("data", () => socket.end(`${LOCK_PROTOCOL}${identity}\n`));
   });

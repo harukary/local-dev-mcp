@@ -95,6 +95,10 @@ Browser state is isolated by the ChatGPT `openai/session` identity. The same cha
 keeps one profile across project changes; different chats never share a running
 profile. Browser tools fail explicitly when a chat session identity is unavailable.
 
+Browser operations on the same profile are serialized with a loopback TCP lock.
+A disconnected lock probe closes only that connection; it does not release the
+profile lock or terminate the MCP server. See [browser runtime operations](docs/browser-runtime.md).
+
 The first browser use in a chat copies the current immutable golden generation.
 On `browser.stop`, the server saves the tab URLs, their order, and the active tab,
 then allowlisted live probes verify the signed-in account before Chrome exits. The

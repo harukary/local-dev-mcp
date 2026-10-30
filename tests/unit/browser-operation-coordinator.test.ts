@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { createServer } from "node:net";
+import { createConnection, createServer } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { BrowserOperationCoordinator, browserOperationLockPorts } from "../../src/browser/browser-operation-coordinator.js";
 
@@ -13,6 +13,52 @@ afterEach(async () => {
 });
 
 describe("BrowserOperationCoordinator", () => {
+  it("keeps the profile locked when a probe resets its TCP connection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "browser-operations-reset-"));
+    roots.push(root);
+    const first = new BrowserOperationCoordinator(root);
+    const second = new BrowserOperationCoordinator(root);
+    const identity = createHash("sha256").update(`${root}\0profile`).digest("hex");
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const held = first.run("profile", async () => {
+      await new Promise<void>((resolve) => { release = resolve; entered(); });
+    });
+    await ready;
+    let queued: Promise<void> | undefined;
+    try {
+      let lockPort: number | undefined;
+      for (const port of browserOperationLockPorts(identity)) {
+        const response = await new Promise<string>((resolve) => {
+          const socket = createConnection({ host: "127.0.0.1", port });
+          let data = "";
+          socket.setTimeout(500, () => socket.destroy());
+          socket.on("error", () => socket.destroy());
+          socket.on("data", (chunk) => { data += chunk; });
+          socket.once("connect", () => socket.write("LOCAL_DEV_MCP_BROWSER_LOCK_V1 ?\n"));
+          socket.once("close", () => resolve(data));
+        });
+        if (response === `LOCAL_DEV_MCP_BROWSER_LOCK_V1 ${identity}\n`) { lockPort = port; break; }
+      }
+      expect(lockPort).toBeDefined();
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection({ host: "127.0.0.1", port: lockPort! });
+        socket.once("error", reject);
+        socket.once("connect", () => socket.resetAndDestroy());
+        socket.once("close", () => resolve());
+      });
+      let secondEntered = false;
+      queued = second.run("profile", async () => { secondEntered = true; });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(secondEntered).toBe(false);
+    } finally {
+      release();
+      await Promise.all([held, queued]);
+    }
+    await expect(first.run("profile", async () => "usable")).resolves.toBe("usable");
+  });
+
   it("serializes the same profile across coordinator instances", async () => {
     const root = await mkdtemp(join(tmpdir(), "browser-operations-"));
     roots.push(root);
