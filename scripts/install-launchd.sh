@@ -7,8 +7,10 @@ LABEL_PREFIX="${LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX:-io.local-dev-mcp}"
 SERVER_LABEL="$LABEL_PREFIX.server"
 PERSONAL_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel-personal"
 BUSINESS_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel-business"
+CLOUDFLARE_TUNNEL_LABEL="$LABEL_PREFIX.cloudflare-tunnel"
 BUSINESS_TUNNEL_ENABLE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_BUSINESS_ENABLE:-0}"
 PERSONAL_TUNNEL_ENABLE="${LOCAL_DEV_MCP_OPENAI_TUNNEL_PERSONAL_ENABLE:-1}"
+CLOUDFLARE_TUNNEL_ENABLE="${LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ENABLE:-0}"
 LEGACY_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel"
 LEGACY_PERSONAL_MINI_TUNNEL_LABEL="$LABEL_PREFIX.openai-tunnel-personal-mini"
 ACTIVATION_LABEL="$LABEL_PREFIX.activate"
@@ -20,8 +22,9 @@ usage() {
 usage: install-launchd.sh [--install-only|--activate]
 
 Installs separate LaunchAgents for the local-dev-mcp HTTP server and the
-OpenAI Secure MCP Tunnel client. Credential values remain in private state
-files read by wrapper scripts and are never embedded in plist files.
+OpenAI Secure MCP Tunnel client. An opt-in Cloudflare Tunnel agent is available.
+Credential values remain in private files read by wrapper scripts and are
+never embedded in plist files.
 USAGE
 }
 
@@ -145,6 +148,14 @@ fi
 if [ -n "$SKILL_ORIGINS_FILE" ]; then
   SERVER_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_SKILL_ORIGINS_FILE" "$SKILL_ORIGINS_FILE")"
 fi
+if [ -n "${LOCAL_DEV_MCP_CLOUDFLARE_TEAM_DOMAIN:-}" ] || [ -n "${LOCAL_DEV_MCP_CLOUDFLARE_AUDIENCE:-}" ]; then
+  if [ -z "${LOCAL_DEV_MCP_CLOUDFLARE_TEAM_DOMAIN:-}" ] || [ -z "${LOCAL_DEV_MCP_CLOUDFLARE_AUDIENCE:-}" ]; then
+    echo "Cloudflare Access requires both team domain and application audience." >&2
+    exit 1
+  fi
+  SERVER_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_CLOUDFLARE_TEAM_DOMAIN" "$LOCAL_DEV_MCP_CLOUDFLARE_TEAM_DOMAIN")"
+  SERVER_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_CLOUDFLARE_AUDIENCE" "$LOCAL_DEV_MCP_CLOUDFLARE_AUDIENCE")"
+fi
 write_agent "$SERVER_LABEL" "$SERVER_LABEL_XML" "server.sh" "mcp-server.log" "$SERVER_EXTRA_ENV"
 
 if is_enabled "$PERSONAL_TUNNEL_ENABLE"; then
@@ -171,6 +182,13 @@ if is_enabled "$BUSINESS_TUNNEL_ENABLE"; then
   BUSINESS_TUNNEL_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_OPENAI_TUNNEL_HEALTH_ADDR" "$BUSINESS_TUNNEL_HEALTH_ADDR")"
   write_agent "$BUSINESS_TUNNEL_LABEL" "$BUSINESS_TUNNEL_LABEL_XML" "tunnel.sh" "openai-tunnel-business.log" "$BUSINESS_TUNNEL_EXTRA_ENV"
   TUNNEL_LABELS+=("$BUSINESS_TUNNEL_LABEL")
+fi
+
+if is_enabled "$CLOUDFLARE_TUNNEL_ENABLE"; then
+  CLOUDFLARE_TOKEN_FILE="${LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_TOKEN_FILE:-$HOME/.cloudflared/local-dev-mcp-claude.token}"
+  CLOUDFLARE_EXTRA_ENV="$(env_entry "LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_TOKEN_FILE" "$CLOUDFLARE_TOKEN_FILE")"
+  write_agent "$CLOUDFLARE_TUNNEL_LABEL" "$(xml_escape "$CLOUDFLARE_TUNNEL_LABEL")" "cloudflare-tunnel.sh" "cloudflare-tunnel.log" "$CLOUDFLARE_EXTRA_ENV"
+  TUNNEL_LABELS+=("$CLOUDFLARE_TUNNEL_LABEL")
 fi
 
 if [ "$MODE" != "activate" ]; then

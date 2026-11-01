@@ -10,8 +10,8 @@
 
 ## ChatGPT transport
 
-- ChatGPTとの正規接続経路はOpenAI Secure MCP Tunnelのみとする。public MCP ingressや別Tunnel方式の互換コードを追加しない。
-- HTTP MCPはloopback bind + `X-Local-Dev-MCP-Tunnel-Token`を必須の安全境界とする。`openai/subject` allowlistは必要な利用者だけが有効化する追加の防御層で、未設定時はTunnel tokenのみで動作する。allowlist有効時はfail-closedに制限し、ChatGPT Scheduled Taskで`openai/subject`が欠落する実測経路だけ観測済みのexact metadata fingerprintに限定した互換例外を許可する。stdio transportはlocal MCP client向けに独立して維持する。
+- ChatGPTとの正規接続経路はOpenAI Secure MCP Tunnelのみとする。Claude向けは専用のCloudflare Access認証済みTunnelを任意の別経路として扱い、ChatGPT接続の置換や無認証のpublic MCP公開には使用しない。
+- HTTP MCPはloopback bindとtransport認証を必須の安全境界とする。ChatGPTでは`X-Local-Dev-MCP-Tunnel-Token`が必須であり、任意で設定された`openai/subject` allowlistも守る。Claude向け経路が有効な場合はCloudflare Access JWTの署名・発行元・audienceを検証する。allowlist有効時はfail-closedに制限し、ChatGPT Scheduled Taskで`openai/subject`が欠落する実測経路だけ観測済みのexact metadata fingerprintに限定した互換例外を許可する。stdio transportはlocal MCP client向けに独立して維持する。
 - tool schemaやTunnel起動方式を変更した場合はunit testだけで完了扱いにせず、ChatGPT WebまたはAndroidで実tool callを確認する。
 - Business Workspaceの公開済みMCP Appでtool surfaceを変更した場合は、repo-local `chatgpt-mcp-update` Skillの手順に従い、runtime反映 → 既存Appのactionsをin-place Refresh → snapshot read-back → Branch/new chatでmodel-facing schemaを再bindする。tool変更だけを理由にAppを作り直さず、Plugin packageのVersion bumpをactions Refreshの代替にしない。Workspace固有の実測根拠は `docs/chatgpt-business-app-schema-refresh.md` を参照する。
 - ChatGPT Webで実tool callを促す検証では、通常は自然文で対象app名やtool目的を指定する。`@...` mentionを必須手順として扱わず、mention UI自体を検証する場合だけ使う。

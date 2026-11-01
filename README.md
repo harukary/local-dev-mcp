@@ -43,7 +43,7 @@ Important runtime rules:
 - denied-path checks apply to file reads, writes, artifact transfer, and project-scoped operations.
 - raw artifact bytes and temporary file download URLs are not written to normal audit logs.
 
-The stdio transport remains available for local MCP clients. The Secure Tunnel token is required only for the HTTP transport.
+The stdio transport remains available for local MCP clients. HTTP requires the OpenAI Secure Tunnel token by default; an explicitly configured Cloudflare Access JWT verification path can additionally authenticate remote MCP clients such as Claude without weakening ChatGPT authorization. See [Claude through Cloudflare Access](docs/claude-cloudflare-access.md).
 
 ## ChatGPT Approvals
 

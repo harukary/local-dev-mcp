@@ -51,6 +51,7 @@ import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, ha
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete } from "./tools/todo.js";
 import { handleRepoActionList, handleRepoActionRead, handleRepoActionWrite } from "./tools/repo-action.js";
 import { hashOpenAiSubject, OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiSubjectAuthConfig, resolveOpenAiSubjectPolicy, resolveOpenAiTunnelAuthConfig, verifyOpenAiSubject, verifyOpenAiTunnelToken, type OpenAiSubjectPolicy, type OpenAiTunnelAuthConfig } from "./auth.js";
+import { createCloudflareAccessVerifier, resolveCloudflareAccessConfig } from "./cloudflare-access.js";
 import { resolveWorkingDirectory } from "../project/working-directory.js";
 import { attachTurnRequestMeta, buildTurnPausedResponse, InteractiveTurnLeaseManager, resolveTurnLeaseKey } from "./turn-lease.js";
 
@@ -942,21 +943,37 @@ function requireLoopbackHost(
   });
 }
 
-function buildHttpAuthMiddleware(authConfig: OpenAiTunnelAuthConfig): express.RequestHandler {
+function buildHttpAuthMiddleware(
+  authConfig: OpenAiTunnelAuthConfig,
+  verifyCloudflareAccessJwt?: (jwt: string) => Promise<void>
+): express.RequestHandler {
   return (req, res, next) => {
-    const headerValue = req.headers[OPENAI_TUNNEL_HEADER_NAME];
-    if (verifyOpenAiTunnelToken(headerValue, authConfig.token)) {
+    if (verifyOpenAiTunnelToken(req.headers[OPENAI_TUNNEL_HEADER_NAME], authConfig.token)) {
       next();
       return;
     }
 
-    debugMcpLog(`[HTTP] invalid_openai_tunnel_token path=${sanitizeRequestUrlForLog(req.url)}`);
-    res.setHeader("Cache-Control", "no-store");
-    res.status(401).json({
-      error: "invalid_tunnel_token",
-      message: "A valid OpenAI Secure MCP Tunnel token is required.",
-    });
+    const assertion = req.headers["cf-access-jwt-assertion"];
+    if (verifyCloudflareAccessJwt && typeof assertion === "string") {
+      void verifyCloudflareAccessJwt(assertion).then(() => {
+        res.locals.cloudflareAccessAuthorized = true;
+        next();
+      }).catch(() => {
+        rejectHttpAuth(req, res);
+      });
+      return;
+    }
+    rejectHttpAuth(req, res);
   };
+}
+
+function rejectHttpAuth(req: express.Request, res: express.Response): void {
+  debugMcpLog(`[HTTP] invalid_openai_tunnel_token path=${sanitizeRequestUrlForLog(req.url)}`);
+  res.setHeader("Cache-Control", "no-store");
+  res.status(401).json({
+    error: "invalid_tunnel_token",
+    message: "A valid OpenAI Secure MCP Tunnel token is required.",
+  });
 }
 
 function isInitializeRequest(body: unknown): boolean {
@@ -976,7 +993,11 @@ export async function startHttpServer(configPath: string, port: number): Promise
   const httpAuthConfig = resolveOpenAiTunnelAuthConfig();
   const subjectPolicy = resolveOpenAiSubjectPolicy();
   const subjectAuthConfig = subjectPolicy === "enforce" ? resolveOpenAiSubjectAuthConfig() : undefined;
-  const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig);
+  const cloudflareAccessConfig = resolveCloudflareAccessConfig();
+  const verifyCloudflareAccessJwt = cloudflareAccessConfig
+    ? createCloudflareAccessVerifier(cloudflareAccessConfig)
+    : undefined;
+  const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig, verifyCloudflareAccessJwt);
   const ctx = await createAppContext(configPath, subjectAuthConfig?.subject, subjectPolicy);
   const browserLifecycle = await createBrowserLifecycleService();
   const app = express();
@@ -1015,7 +1036,10 @@ export async function startHttpServer(configPath: string, port: number): Promise
   }
 
   app.post("/mcp", requireHttpAuth, express.raw({ type: "*/*", limit: MCP_HTTP_MAX_REQUEST_BYTES }), parseAndLimitMcpRequest, (req, res) => {
-    handleMcpRequest(req, res, ctx).catch((err) => {
+    const requestContext = res.locals.cloudflareAccessAuthorized
+      ? { ...ctx, allowedOpenAiSubject: undefined, openAiSubjectPolicy: undefined }
+      : ctx;
+    handleMcpRequest(req, res, requestContext).catch((err) => {
       console.error("MCP POST handler error:", err);
       if (!res.headersSent) {
         res.status(500).json({ error: "internal_error", message: String(err) });
@@ -1049,6 +1073,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
 
 
   console.error(`[OpenAI Tunnel] Local MCP authentication enabled via ${OPENAI_TUNNEL_HEADER_NAME}.`);
+  if (cloudflareAccessConfig) console.error("[Cloudflare Access] JWT authentication enabled for Claude MCP clients.");
   if (subjectPolicy === "enforce") {
     console.error("[OpenAI Tunnel] ChatGPT subject allowlist enabled for HTTP MCP tool and resource access.");
   } else {

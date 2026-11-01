@@ -43,7 +43,7 @@ runtime の重要ルール:
 - denied-path check を file read/write、artifact transfer、project-scoped operation に適用する
 - artifact本体や一時 file download URL を通常のaudit logへ保存しない
 
-stdio transport はローカルMCP client向けに残します。Secure Tunnel tokenが必要なのはHTTP transportだけです。
+stdio transport はローカルMCP client向けに残します。HTTP transportは既定でOpenAI Secure Tunnel tokenを要求します。Claudeなどの外部MCP client向けには、Cloudflare Accessが発行する署名付きJWTを検証する追加認証を明示的に有効化できます。ChatGPTの既存経路とユーザー制限は変わりません。設定方法は[ClaudeとCloudflare Accessの接続](docs/claude-cloudflare-access.md)を参照してください。
 
 ## ChatGPT の承認
 

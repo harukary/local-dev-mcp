@@ -85,6 +85,63 @@ describe("launchd installer", () => {
     expect(server).toContain("<string>.codex-skill-origins.json</string>");
   });
 
+  it("forwards opt-in Cloudflare Access identifiers only to the server agent", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-launchd-cloudflare-"));
+    tempDirs.push(tempDir);
+    const baseEnv = {
+      ...process.env,
+      HOME: tempDir,
+      LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: tempDir,
+      LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: "test.local-dev-mcp",
+      LOCAL_DEV_MCP_CLOUDFLARE_TEAM_DOMAIN: "example.cloudflareaccess.com",
+      LOCAL_DEV_MCP_CLOUDFLARE_AUDIENCE: "a".repeat(64),
+    };
+    const command = [path.resolve("scripts/install-launchd.sh"), "--install-only"];
+    const missingAudience = spawnSync("/bin/bash", command, {
+      cwd: path.resolve("."),
+      env: { ...baseEnv, LOCAL_DEV_MCP_CLOUDFLARE_AUDIENCE: "" },
+      encoding: "utf8",
+    });
+    expect(missingAudience.status).toBe(1);
+    expect(missingAudience.stderr).toContain("requires both");
+
+    const result = spawnSync("/bin/bash", command, {
+      cwd: path.resolve("."),
+      env: baseEnv,
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    const server = readFileSync(path.join(tempDir, "test.local-dev-mcp.server.plist"), "utf8");
+    const tunnel = readFileSync(path.join(tempDir, "test.local-dev-mcp.openai-tunnel-personal.plist"), "utf8");
+    expect(server).toContain("<key>LOCAL_DEV_MCP_CLOUDFLARE_TEAM_DOMAIN</key>");
+    expect(server).toContain("<string>example.cloudflareaccess.com</string>");
+    expect(server).toContain("<key>LOCAL_DEV_MCP_CLOUDFLARE_AUDIENCE</key>");
+    expect(server).toContain("<string>" + "a".repeat(64) + "</string>");
+    expect(tunnel).not.toContain("LOCAL_DEV_MCP_CLOUDFLARE");
+  });
+
+  it("adds an optional Cloudflare Tunnel LaunchAgent with token-file only", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-launchd-cloudflare-tunnel-"));
+    tempDirs.push(tempDir);
+    const result = spawnSync("/bin/bash", [path.resolve("scripts/install-launchd.sh"), "--install-only"], {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: tempDir,
+        LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: "test.local-dev-mcp",
+        LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ENABLE: "1",
+      },
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    const tunnel = readFileSync(path.join(tempDir, "test.local-dev-mcp.cloudflare-tunnel.plist"), "utf8");
+    expect(tunnel).toContain("scripts/cloudflare-tunnel.sh");
+    expect(tunnel).toContain("<key>LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_TOKEN_FILE</key>");
+    expect(tunnel).toContain(`<string>${tempDir}/.cloudflared/local-dev-mcp-claude.token</string>`);
+    expect(tunnel).not.toContain("eyJ");
+  });
+
   it("hands activation to an independent launchd worker", () => {
     const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-launchd-activate-"));
     tempDirs.push(tempDir);
