@@ -1,62 +1,156 @@
-# Claude Work Contexts
+## MCP client architecture
 
-## Runtime architecture
+The server exposes a single set of development operations through authenticated client-specific MCP interfaces. ChatGPT and Claude share project validation, tool execution, auditing, and persistent work state. Only client-facing tool contracts and the final presentation of tool results may differ.
 
-The MCP server runs one set of tool implementations behind two authenticated client profiles. The ChatGPT interface is unchanged. Cloudflare Access users receive a Claude-specific tool interface that requires an explicit, model-managed work context handle.
+The intended behavior is to deliver **all information required to do the work, without repeatedly sending unnecessary serialization or metadata to the model**. Optimize for correctness and usable source evidence, not just minimum byte count.
 
-| Client | Authentication | Tool input schema | Context identity |
+### Delivery boundary
+
+Authenticated ChatGPT tool definitions, context resolution, and result representations remain unchanged. Claude's authenticated tool definitions and explicit work contexts are already implemented. The Claude-specific result presentation specified below is the **target design and is not yet deployed**. This document states the complete intended contract so the target can be implemented without inferring requirements from previous documents.
+
+## Client identification and state
+
+| Client | Authentication | Tool input contract | Work context |
 | --- | --- | --- | --- |
-| ChatGPT | Existing OpenAI Secure MCP Tunnel | Existing tool surface, unchanged | Existing `openai/session` and Scheduled Task behavior |
-| Claude | Cloudflare Access JWT with verified `sub` | Tool surface with `context_id` | Server-issued opaque work context |
-| Local stdio | Local process boundary | Existing tool surface | Existing local behavior |
+| ChatGPT | OpenAI Secure MCP Tunnel token | Existing tool descriptors, unchanged | Existing OpenAI chat session or explicit Scheduled Task scope |
+| Claude | Verified Cloudflare Access JWT with user `sub` | Dedicated descriptors with explicit `context_id` | Server-issued opaque work context |
+| Local stdio | Local process | Existing descriptors, unchanged | Existing local context behavior |
 
-The server uses a single Express HTTP endpoint and stateless MCP transport. Authentication determines the client profile before `tools/list` and `tools/call`; neither `user-agent` nor MCP metadata can select it. The same dispatcher and underlying tool implementations serve both clients.
+Client identity is derived from verified transport authentication, never from `user-agent`, `x-anthropic-client`, unverified `_meta`, or tool arguments. The same authenticated profile selects the tool list, input validator, context resolver, dispatcher policy, and result adapter.
 
-## Claude context lifecycle
+For Claude, `project.select({project_id, working_dir?})` creates a new random `context_id` and persists the chosen project, optional worktree directory, and verified owner's hash. Any subsequent browser state is owned by that context. Subsequent project-scoped operations require the handle. `project.select({context_id, project_id, working_dir?})` changes the selected project inside that context. Missing, unknown, or unauthorized handles fail without falling back to a shared default context.
 
-1. In a new Claude conversation, call `project.select({ "project_id": "target-project" })`. Optionally include a project-relative `working_dir`. The server returns `context_id` alongside the selected project, directory and existing agent instructions.
-2. Keep the returned `context_id` in the conversation and pass it on every project-scoped operation, including `workspace.*`, `git.*`, `repo.action.*`, `browser.*`, `mobile.*`, `shell.*`, and `project.current`.
-3. To select another project or working directory in the **same** work context, call `project.select({ "context_id": "ctx_...", "project_id": "new-project" })`. To create another isolated work context, omit the handle.
-4. To deliberately resume an older work context, call `project.select` with its existing handle and the desired project. Different Claude conversations do **not** receive unique IDs automatically.
-5. If a handle is lost, create a new work context with `project.select`. The server does not guess which old context to restore.
+The public handle is returned to Claude on selection but never echoed by unrelated tool results or written to logs. The storage key is a hash-derived internal context ID. The browser and asynchronous shell-job ownership checks continue to use this verified internal identity. ChatGPT session behavior is unchanged.
 
-The handle is random and opaque; only its SHA-256-derived internal key and the verified user's subject hash are persisted in the existing `ChatContextStore`. The raw handle is returned to the model but never written to server logs, audit logs or persisted browser manifests.
+A Claude conversation can intentionally reuse a handle from another conversation belonging to the same authenticated user. No verified Claude conversation ID reaches the server, so a handle establishes a **work context**, not a guarantee of one context per Claude chat.
 
-All project-dependent tool calls require the handle. `project.list`, `project.reload`, `skills.read`, global diagnostics and global read-only Todo queries remain context-free after transport authentication. A Claude `project.list` call never reports a shared current project. The `workspace.batch` outer call receives the handle, which supplies the project and directory to all nested read/list/search operations.
+## Request and result pipeline
 
-An unknown handle or another user's handle returns `CONTEXT_NOT_FOUND`; missing context returns `CONTEXT_ID_REQUIRED`. Conflicting explicit project or directory scope returns `CONTEXT_PROJECT_CONFLICT`. No such error falls back to the old shared `default` context.
+    Authenticated MCP request
+      -> client-specific tool input schema / validation
+      -> resolve authorized project and work context
+      -> shared tool implementation
+      -> canonical result (structured data, native media, error state)
+      -> derive error / partial-success telemetry from canonical result
+      -> authenticated client response adapter
+          ChatGPT: return the original result unchanged
+          Claude:  format selected text-oriented results
+                   preserve structured and media results when needed
+      -> apply the existing final-response size limit
+      -> record transmitted size and return
 
-## Tool schemas and output compatibility
+The response adapter **only changes presentation**. It cannot resolve paths, change permissions, perform new filesystem access, reinterpret an error as success, or alter persistent state.
 
-`buildToolDefinitions()` with no arguments publishes the original ChatGPT tool definitions. The Claude profile projects an authenticated subset of the same definitions, adding `context_id` to `project.select` as an optional argument and to stateful tool calls as a required argument. Validation caches are keyed by client profile **and** tool name.
+Do not build a second tool implementation, a separate MCP server, a custom JavaScript execution service for Claude, or a general-purpose "summarize all tool results" LLM. ChatGPT's Code Mode is a client-side execution capability; reproducing it inside the MCP server would add execution and security responsibilities unrelated to this requirement.
 
-The dispatcher repeats the profile checks independently of `tools/list`: callers cannot invoke hidden tools by sending a direct `tools/call`.
+## Result contracts
 
-`project.select` includes `context_id` in both MCP `structuredContent` and text `content`. All other results keep the existing underlying MCP content representation. Claude's `tool.schema` introspects Claude's own tool surface; ChatGPT sees the same tool schema and output contracts as before.
+MCP `content` is the normal model-facing channel for text, images, and other supported media; `structuredContent` is optional structured data. For backward compatibility, MCP recommends serializing `structuredContent` into text too, but this is not a requirement for tools returning **only ordinary text**. A tool declaring `outputSchema` must not return structured data that violate that schema.
 
-ChatGPT's `image.read` intentionally has **no** declared `outputSchema` to preserve inline MCP image blocks. That compatibility behavior remains unchanged. Claude can try the same inline `image.read` path with an explicit context; live Claude image rendering remains a client-dependent verification item.
+The adapter uses an explicit allowlist of text-oriented tools. Never infer a result's format from a random field name, response length, or a generic "JSON looks unnecessary" heuristic.
 
-`artifact.receive` needs ChatGPT `openai/fileParams`, and `artifact.link` needs model-facing MCP resource-link support. Both are hidden and blocked on Claude. The Claude MCP Resources API is disabled because the existing `resources/read` path cannot authenticate a model-managed work context; use scoped `workspace.*` or direct `artifact.read` instead. ChatGPT's resource and file transfer contract is unchanged.
+| Tool / result family | Claude result | Required preservation |
+| --- | --- | --- |
+| `workspace.read` | One plain `TextContent` block, no `structuredContent` | Exact returned text, original line numbers, continuation cursor |
+| `workspace.search` | Plain text matches grouped by relative path | Each matched line, before/after context, truncation and `next_offset` |
+| `workspace.list` | Plain text path and entry type list | Relative paths, directory/file distinction, truncation |
+| `workspace.batch`, default compact mode | One text block with indexed child results | Child tool identity, result order, individual errors, continuation |
+| `workspace.batch`, `detail=full` | Existing complete structured representation | Existing diagnostic escape hatch for fields not in compact text |
+| `skills.read` | Full skill/reference text with source path | Entire content within the existing size limit, explicit `FILE_TOO_LARGE` error otherwise, and source provenance |
+| `project.select` | Plain text containing selected project, `working_dir`, `context_id`, and complete agent instructions | Handle can be copied into later calls; no placeholder hiding AGENTS content |
+| `git.diff` / `git.show` with text payloads | Exact diff or shown content with a short source header | Diff markers, file paths, hunks, truncation; no summary-only rewrite |
+| Other Git, repo-action, shell, job, mobile, browser, Todo, and global management results | Existing structured result initially | Operation IDs, timestamps, statuses, execution and authorization details |
+| Inline `ImageContent` and other non-text media | Existing MCP media blocks unchanged | Native content blocks, byte budgets, client compatibility |
+| Any failure result | Existing error structure initially | `isError`, stable error code, actionable message; no concealed partial failure |
 
-## Authentication and isolation
+The first implementation should focus on `workspace.read`, `workspace.search`, `workspace.list`, default `workspace.batch`, `skills.read`, and `project.select`. Include Git diff/show text formatting only after confirming their real return shapes. Keep all other operations unchanged until their actual output and consumer needs justify a formatter.
 
-Cloudflare Access JWT verification checks RS256 signature, issuer, audience, expiry and nonempty user `sub`. The verified subject is hashed to bind each Claude context to its user. The raw JWT, raw handle and subject are never included in audit records. Invalid or absent credentials are rejected at the HTTP boundary.
+An unfamiliar successful result shape must fall back to the existing full result, **not** silently omit fields.
 
-Every Claude tool call resolves its handle to an internal `claude-context:<hash>` key before side effects. The existing browser profile manager accepts that internal key, retains separate browser snapshots and rejects access to another profile. Background shell jobs started through Claude record the owning internal context, and `shell.status` and `shell.cancel` reject jobs from other contexts. Shell approvals are already keyed by that context.
+### File reading
 
-Individual Git worktrees, local files and attached devices remain physically shared across contexts. A context ID isolates *selection and ownership*, not the underlying filesystem or mobile device. Existing project policies, browser-operation locks and build serialization continue to apply.
+For a complete read, return a compact header and the original line text:
 
-A model can deliberately or accidentally reuse a valid handle in another Claude conversation belonging to the same verified user. The server cannot detect the originating Claude conversation because Claude.ai sends no verified chat identifier. Therefore this is **work-context isolation**, not a cryptographic guarantee of one handle per Claude chat.
+    README.md (lines 1–43 / 43)
+     1 | # 100年日記 / 100-Year Diary
+     2 |
+     3 | ローカル保存・Zipエクスポート・PDF保存...
 
-## Local implementation and verification
+Do not include `project_id`, `absolute_path`, `size_bytes`, `returned_bytes`, `sha256`, null continuation fields, or duplicate JSON by default. The selected context and the request already determine the project and path.
 
-- `src/mcp/cloudflare-access.ts`: validates JWT subject.
-- `src/mcp/claude-context.ts`: creates and resolves handles and coordinates project selection.
-- `src/project/context-store.ts`: existing persistent project and working-directory state, with Claude owner hash.
-- `src/mcp/tool-definitions.ts`: client-specific tool views with a shared base definition.
-- `src/mcp/input-validation.ts`: profile-specific validation without changing ChatGPT's contract.
-- `src/mcp/server.ts`: authenticated client selection, context validation and shared dispatch.
-- `src/browser/profile-manager.ts`: independent browser profile ownership.
-- `src/shell/job-manager.ts`: explicit ownership of Claude asynchronous shell jobs.
+When the response is incomplete, include the **exact** existing continuation data rather than an estimated next line:
 
-Local tests cover the exact original ChatGPT tool-descriptor fingerprint, Claude tool discovery, project selection/resume, two concurrent work contexts, nested batch execution, missing and unauthorized handles, another user's handle, browser ownership, and shell-job ownership. Real-client checks are required for Claude's model reliably carrying the handle, optional image delivery and ChatGPT connector bindings after deployment.
+    README.md (lines 1–16 / 43; truncated)
+    ...
+    next: start_line=16 start_column=207
+
+A continuation at a UTF-16 column offset may resume in the same line. It must not be rounded to the following line. Preserve each returned `lines[].text` value exactly; do not trim indentation, wrap long lines, or summarize content to reduce tokens. Maintain the file reader's existing newline handling, bounded-read behavior, and output budget.
+
+A tool user that genuinely needs all of the original metadata can use `workspace.batch({detail:"full",requests:[...]})`; do not introduce a separate "format" argument on every workspace tool merely for this case.
+
+### Search, listing, and batches
+
+Search output is organized by file, with real line numbers and snippets. The original number of matches, pagination offset, and truncation status stay observable. If context lines were requested, include them with the correct line references; do not silently drop before/after lines.
+
+    3 matches under src/
+    src/mcp/server.ts
+      721 | result = jsonError(...)
+      725 | result = jsonError(...)
+    next_offset=3 (truncated)
+
+Listing output should distinguish directories from files, for example `src/mcp/ [directory]` and `src/mcp/server.ts [file]`. Preserve deterministic path ordering. File size is not emitted by default when the task is just navigation.
+
+For a batch, mark each child by its original index and tool name, and apply the corresponding formatter to each successful child. Display child errors independently, not as a generic "batch failed" message. Do not change nested request validation, project context inheritance, the shared byte budget, or response-order semantics.
+
+### Project selection and model-visible instructions
+
+The first Claude `project.select` returns the actual `context_id`, project, working directory, and all bounded agent instructions **in a single model-visible text response**. This corrects the current Claude risk that AGENTS content exists only in `structuredContent`, while the text fallback says it is available elsewhere.
+
+    Selected: hundred-year-diary
+    Working directory: .
+    Context ID: ctx_...
+
+    Agent instructions:
+    [actual global and project AGENTS content]
+
+The Claude target is a text-only result: do not serialize a second large copy of AGENTS inside `structuredContent`. Require a real-client check that Claude retains the ID and full instructions before deploying this change. Keep ChatGPT's existing agent-instruction behavior byte-for-byte unchanged, because its Code Mode can selectively extract `structuredContent`.
+
+Model-visible instructions are legitimate task context, not disposable serialization overhead. Do not suppress or truncate them further merely to improve a byte-count metric. Existing content limits and truncation indicators still apply.
+
+### Errors, output schemas, and image handling
+
+Always format errors after the dispatcher has validated the requested handle, project, permissions, and tool input. An error must remain an error even when its text is short. `CONTEXT_ID_REQUIRED`, `CONTEXT_NOT_FOUND`, permission failures, partial batch failures, process exit statuses, and timeouts retain their actionable meaning.
+
+Text-only Claude results should not declare a structured `outputSchema`. Any tool that already has an `outputSchema` must retain a compatible `structuredContent` contract; leave it unchanged unless the schema and behavior are redesigned together.
+
+Keep all image/audio/resource content blocks unchanged. ChatGPT's image tools deliberately avoid an `outputSchema` in certain cases to preserve inline image blocks. No generic adapter may reinterpret base64 image data as text or silently discard non-text blocks.
+
+Claude currently does not expose `artifact.receive`, `artifact.link`, or the existing unscoped MCP Resources flow. This security boundary is independent of response formatting and remains in place.
+
+## Ownership and implementation
+
+- Add a small deterministic `src/mcp/response-adapter.ts` responsible only for client-specific result projection. It receives the authenticated profile, tool name, validated request metadata needed for headings, and the canonical tool result.
+- Keep file reading, search, listing, batch, Git, and skill handlers in their current locations and return their current canonical structured results. Do not copy business logic into the adapter.
+- In `src/mcp/server.ts`, derive semantic success/failure and partial batch metrics from the canonical result **before** projection; apply the existing final output limit to the **projected** result so unnecessary original JSON does not cause a spurious size failure.
+- Record transmitted bytes from the projected result and preserve the existing error-code accounting. If profile-level size statistics are needed for evaluation, aggregate counts and sizes only, not raw file content.
+- Keep ChatGPT tool definitions, `outputSchema`, result representation, image handling, stateless Scheduled Task behavior, and session resolution unchanged.
+- Keep current Claude `context_id` input schemas, verification, ownership checks, and browser/job isolation unchanged. Output presentation must never be a second authorization path.
+- Use plain text and line-preserving deterministic formatters. No additional AI calls, dependencies, database, server process, or tool category is required.
+
+## Verification contract
+
+A design is not deployed until it meets all of these conditions:
+
+1. **ChatGPT parity:** original tool definitions and representative `structuredContent`, `content`, image, and resource-link results remain identical; session and Scheduled Task tests still pass.
+2. **Claude text delivery:** `workspace.read` returns exactly one useful text block with no duplicate `structuredContent`; line number, multiline Unicode, empty lines, long-line column continuation, and source evidence remain correct.
+3. **Claude structured escape hatch:** `workspace.batch detail=full` retains the complete data when a caller needs metadata such as `sha256`.
+4. **Search/list/batch correctness:** filenames with spaces/Unicode, matched context lines, pagination, truncation, empty results, deterministic ordering, and mixed successful/failed child results are faithfully represented.
+5. **Project selection:** a real Claude.ai chat receives the handle and **actual** agent instructions; its next two project-scoped calls reuse the handle; another chat creates a separate handle. Server context ownership remains enforced.
+6. **Errors/media:** invalid context, invalid tool arguments, missing file, output limits, and binary media remain visible and correctly typed; Claude image rendering is checked independently.
+7. **Size and outcome:** measure MCP wire bytes and model-visible text bytes for the actual `hundred-year-diary/README.md` example and representative short/large inputs. Assess whether Claude can use the information correctly. Do not claim a token reduction solely from a smaller wire payload, because Claude.ai's internal ingestion and token accounting are not observable from server logs.
+
+## Design boundaries
+
+This change is a **presentation optimization**, not a different local-dev-mcp state architecture. The model's ability to continue work, read files faithfully, navigate by path/line, recover from errors, and operate the same tools is more important than maximizing byte reduction.
+
+Do not implement a Claude-side Code Mode clone or a broad "text versus JSON" user setting. If other tool families later demonstrate similar waste, extend the explicit formatter table based on real output shapes and client verification rather than adding a generic transformation that may discard meaningful state.
