@@ -24,6 +24,11 @@ function fixture() {
   const secondary = join(root, "secondary");
   mkdirSync(secondary);
   writeFileSync(join(root, "sample.txt"), "primary project\n");
+  writeFileSync(join(root, "AGENTS.md"), "Primary project instructions: do not skip source evidence.\n");
+  writeFileSync(join(root, "日本 語.md"), "before\nneedle in 日本語\nafter\nneedle again\n");
+  writeFileSync(join(root, "long.txt"), "😀".repeat(25) + "\n");
+  mkdirSync(join(root, ".agents", "skills", "fixture"), { recursive: true });
+  writeFileSync(join(root, ".agents", "skills", "fixture", "SKILL.md"), "---\nname: fixture\ndescription: test skill\n---\n\n# Complete fixture instructions\n");
   writeFileSync(join(secondary, "sample.txt"), "secondary project\n");
   const project = (id: string, path: string): ProjectConfig => ({
     projectId: id, displayName: id, hostRoot: path, sandboxRoot: path,
@@ -65,8 +70,12 @@ async function connect(
 }
 
 const getPayload = (r: { structuredContent?: unknown }) => r.structuredContent as Record<string, any>;
+const getText = (r: { content: Array<{ type: string; text?: string }> }) =>
+  r.content.find((c) => c.type === "text")?.text ?? "";
 const getTextPayload = (r: { content: Array<{ type: string; text?: string }> }) =>
-  JSON.parse(r.content.find((c) => c.type === "text")?.text ?? "{}") as Record<string, any>;
+  JSON.parse(getText(r)) as Record<string, any>;
+const getContextId = (r: { content: Array<{ type: string; text?: string }> }) =>
+  getText(r).match(/(?:^|\n)Context ID: (ctx_[A-Za-z0-9_-]{43})(?:\n|$)/)?.[1];
 
 describe("Claude explicit work contexts through real MCP dispatcher", () => {
   it("creates isolated projects, maintains cwd, supports explicit resume, and rejects default fallbacks", async () => {
@@ -83,12 +92,14 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
 
     const first = await client.callTool({ name: "project.select", arguments: { project_id: "primary" } });
     expect(first.isError).toBeUndefined();
-    const a = getPayload(first).context_id as string;
+    const a = getContextId(first)!;
     expect(a).toMatch(/^ctx_[a-zA-Z0-9_-]{43}$/);
-    expect(getTextPayload(first).context_id).toBe(a);
+    expect(first.structuredContent).toBeUndefined();
+    expect(getText(first)).toContain("Primary project instructions: do not skip source evidence.");
+    expect(getText(first)).not.toContain("[available in structuredContent]");
 
     const second = await client.callTool({ name: "project.select", arguments: { project_id: "secondary" } });
-    const b = getPayload(second).context_id as string;
+    const b = getContextId(second)!;
     expect(b).not.toBe(a);
 
     const jobStarted = await client.callTool({
@@ -109,8 +120,9 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
 
     const firstRead = await client.callTool({ name: "workspace.read", arguments: { context_id: a, path: "sample.txt" } });
     const secondRead = await client.callTool({ name: "workspace.read", arguments: { context_id: b, path: "sample.txt" } });
-    expect(JSON.stringify(getPayload(firstRead))).toContain("primary project");
-    expect(JSON.stringify(getPayload(secondRead))).toContain("secondary project");
+    expect(firstRead.structuredContent).toBeUndefined();
+    expect(getText(firstRead)).toContain("1 | primary project");
+    expect(getText(secondRead)).toContain("1 | secondary project");
 
     const batch = await client.callTool({
       name: "workspace.batch", arguments: {
@@ -118,7 +130,15 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
         requests: [{ tool: "workspace.read", arguments: { path: "sample.txt" } }],
       },
     });
-    expect(getPayload(batch).results[0].result.lines[0].text).toContain("secondary project");
+    expect(batch.structuredContent).toBeUndefined();
+    expect(getText(batch)).toContain("#0 workspace.read");
+    expect(getText(batch)).toContain("1 | secondary project");
+    const fullBatch = await client.callTool({ name: "workspace.batch", arguments: {
+      context_id: b, detail: "full",
+      requests: [{ tool: "workspace.read", arguments: { path: "sample.txt" } }],
+    } });
+    expect(getPayload(fullBatch).results[0].result.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(getPayload(fullBatch).results[0].result.absolute_path).toContain("sample.txt");
     const nestedScope = await client.callTool({
       name: "workspace.batch", arguments: {
         context_id: b,
@@ -135,10 +155,10 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
     expect(getPayload(badScope).error.code).toBe("CONTEXT_PROJECT_CONFLICT");
 
     const resumed = await client.callTool({ name: "project.select", arguments: { context_id: a, project_id: "secondary" } });
-    expect(getPayload(resumed).context_id).toBe(a);
-    expect(getPayload(resumed).changed).toBe(true);
+    expect(getContextId(resumed)).toBe(a);
+    expect(getText(resumed)).toContain("Changed: true");
     const after = await client.callTool({ name: "workspace.read", arguments: { context_id: a, path: "sample.txt" } });
-    expect(JSON.stringify(getPayload(after))).toContain("secondary project");
+    expect(getText(after)).toContain("secondary project");
     const wrongHandle = await client.callTool({ name: "project.select", arguments: { context_id: "ctx_invalid", project_id: "primary" } });
     expect(getPayload(wrongHandle).error.code).toBe("CONTEXT_NOT_FOUND");
 
@@ -155,11 +175,73 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
     expect(JSON.stringify(f.audit.mock.calls)).not.toContain(b);
   });
 
+  it("returns real Unicode file/search/list/batch/skill results as complete model-readable text", async () => {
+    const f = fixture();
+    const client = await connect(f, "claude", "reader");
+    const context_id = getContextId(await client.callTool({
+      name: "project.select", arguments: { project_id: "primary" },
+    }))!;
+    const search = await client.callTool({
+      name: "workspace.search", arguments: { context_id, query: "needle",
+        path: "日本 語.md", context_lines: 1, max_results: 1 },
+    });
+    expect(search.structuredContent).toBeUndefined();
+    expect(getText(search)).toContain("日本 語.md");
+    expect(getText(search)).toContain("1 | before");
+    expect(getText(search)).toContain("2 | needle in 日本語");
+    expect(getText(search)).toContain("3 | after");
+    expect(getText(search)).toContain("next_offset=1");
+
+    const listing = await client.callTool({
+      name: "workspace.list", arguments: { context_id, path: ".", depth: 1, max_entries: 100 },
+    });
+    expect(listing.structuredContent).toBeUndefined();
+    expect(getText(listing)).toContain("日本 語.md [file]");
+
+    const read = await client.callTool({
+      name: "workspace.read", arguments: { context_id, path: "long.txt", max_bytes: 8 },
+    });
+    expect(read.structuredContent).toBeUndefined();
+    expect(getText(read)).toContain("1 | 😀😀");
+    expect(getText(read)).toContain("next: start_line=1 start_column=4");
+
+    const batch = await client.callTool({
+      name: "workspace.batch", arguments: {
+        context_id, requests: [
+          { tool: "workspace.read", arguments: { path: "sample.txt" } },
+          { tool: "workspace.search", arguments: { query: "missing-needle" } },
+          { tool: "workspace.read", arguments: { path: "does-not-exist.txt" } },
+        ],
+      },
+    });
+    expect(batch.structuredContent).toBeUndefined();
+    const output = getText(batch);
+    expect(output).toContain("#0 workspace.read");
+    expect(output).toContain("#1 workspace.search");
+    expect(output).toContain("0 matches");
+    expect(output).toContain("#2 workspace.read");
+    expect(output).toContain("READ_FAILED");
+
+    const skill = await client.callTool({
+      name: "skills.read", arguments: {
+        path: join(f.root, ".agents", "skills", "fixture", "SKILL.md"),
+      },
+    });
+    expect(skill.structuredContent).toBeUndefined();
+    expect(getText(skill)).toContain("Source: ");
+    expect(getText(skill)).toContain("# Complete fixture instructions");
+
+    const missing = await client.callTool({
+      name: "workspace.read", arguments: { context_id, path: "does-not-exist.txt" },
+    });
+    expect(getPayload(missing).error.code).toBe("READ_FAILED");
+  });
+
   it("prevents a different verified Cloudflare user from using a valid context handle", async () => {
     const f = fixture();
     const owner = await connect(f, "claude", "owner");
     const other = await connect(f, "claude", "other");
-    const context = getPayload(await owner.callTool({ name: "project.select", arguments: { project_id: "primary" } })).context_id;
+    const context = getContextId(await owner.callTool({ name: "project.select", arguments: { project_id: "primary" } }))!;
     const bad = await other.callTool({ name: "workspace.read", arguments: { context_id: context, path: "sample.txt" } });
     expect(getPayload(bad).error.code).toBe("CONTEXT_NOT_FOUND");
     const retry = await other.callTool({ name: "project.select", arguments: { context_id: context, project_id: "primary" } });
@@ -179,5 +261,6 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
       _meta: { "openai/session": "expected" },
     });
     expect(JSON.stringify(getPayload(result))).toContain("primary project");
+    expect(result.content[0].text).toContain('"absolute_path"');
   });
 });

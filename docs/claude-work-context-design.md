@@ -6,7 +6,7 @@ The intended behavior is to deliver **all information required to do the work, w
 
 ### Delivery boundary
 
-Authenticated ChatGPT tool definitions, context resolution, and result representations remain unchanged. Claude's authenticated tool definitions and explicit work contexts are already implemented. The Claude-specific result presentation specified below is the **target design and is not yet deployed**. This document states the complete intended contract so the target can be implemented without inferring requirements from previous documents.
+Authenticated ChatGPT tool definitions, context resolution, and result representations remain unchanged. Claude uses explicit work-context handles and a deterministic, client-specific response adapter for selected text-oriented tools. The shared tool implementations still produce canonical structured results, and only the authenticated Claude response is projected to text.
 
 ## Client identification and state
 
@@ -58,12 +58,12 @@ The adapter uses an explicit allowlist of text-oriented tools. Never infer a res
 | `workspace.batch`, `detail=full` | Existing complete structured representation | Existing diagnostic escape hatch for fields not in compact text |
 | `skills.read` | Full skill/reference text with source path | Entire content within the existing size limit, explicit `FILE_TOO_LARGE` error otherwise, and source provenance |
 | `project.select` | Plain text containing selected project, `working_dir`, `context_id`, and complete agent instructions | Handle can be copied into later calls; no placeholder hiding AGENTS content |
-| `git.diff` / `git.show` with text payloads | Exact diff or shown content with a short source header | Diff markers, file paths, hunks, truncation; no summary-only rewrite |
+| `git.diff` / `git.show` | Existing structured result | Exact diff, file paths, hunks, and truncation; formatting is deferred until the result shapes and client handling justify it |
 | Other Git, repo-action, shell, job, mobile, browser, Todo, and global management results | Existing structured result initially | Operation IDs, timestamps, statuses, execution and authorization details |
 | Inline `ImageContent` and other non-text media | Existing MCP media blocks unchanged | Native content blocks, byte budgets, client compatibility |
 | Any failure result | Existing error structure initially | `isError`, stable error code, actionable message; no concealed partial failure |
 
-The first implementation should focus on `workspace.read`, `workspace.search`, `workspace.list`, default `workspace.batch`, `skills.read`, and `project.select`. Include Git diff/show text formatting only after confirming their real return shapes. Keep all other operations unchanged until their actual output and consumer needs justify a formatter.
+The response adapter formats `workspace.read`, `workspace.search`, `workspace.list`, default `workspace.batch`, `skills.read`, and `project.select`. Git diff/show and all other operations retain their existing results until their actual output and consumer needs justify a formatter.
 
 An unfamiliar successful result shape must fall back to the existing full result, **not** silently omit fields.
 
@@ -86,7 +86,7 @@ When the response is incomplete, include the **exact** existing continuation dat
 
 A continuation at a UTF-16 column offset may resume in the same line. It must not be rounded to the following line. Preserve each returned `lines[].text` value exactly; do not trim indentation, wrap long lines, or summarize content to reduce tokens. Maintain the file reader's existing newline handling, bounded-read behavior, and output budget.
 
-A tool user that genuinely needs all of the original metadata can use `workspace.batch({detail:"full",requests:[...]})`; do not introduce a separate "format" argument on every workspace tool merely for this case.
+A tool user that genuinely needs all of the original metadata can use `workspace.batch({context_id,detail:"full",requests:[...]})`; do not introduce a separate "format" argument on every workspace tool merely for this case.
 
 ### Search, listing, and batches
 
@@ -113,7 +113,7 @@ The first Claude `project.select` returns the actual `context_id`, project, work
     Agent instructions:
     [actual global and project AGENTS content]
 
-The Claude target is a text-only result: do not serialize a second large copy of AGENTS inside `structuredContent`. Require a real-client check that Claude retains the ID and full instructions before deploying this change. Keep ChatGPT's existing agent-instruction behavior byte-for-byte unchanged, because its Code Mode can selectively extract `structuredContent`.
+Claude receives one text-only result without a second copy of AGENTS in `structuredContent`. Verify with a real Claude.ai chat that the model retains the ID and complete instructions. ChatGPT's existing agent-instruction behavior remains unchanged because its Code Mode can selectively extract `structuredContent`.
 
 Model-visible instructions are legitimate task context, not disposable serialization overhead. Do not suppress or truncate them further merely to improve a byte-count metric. Existing content limits and truncation indicators still apply.
 
@@ -139,7 +139,7 @@ Claude currently does not expose `artifact.receive`, `artifact.link`, or the exi
 
 ## Verification contract
 
-A design is not deployed until it meets all of these conditions:
+Validate these conditions against both the implementation and the running MCP clients. Automated MCP tests cover the structural behavior; Claude.ai's actual model ingestion is a separate live acceptance check:
 
 1. **ChatGPT parity:** original tool definitions and representative `structuredContent`, `content`, image, and resource-link results remain identical; session and Scheduled Task tests still pass.
 2. **Claude text delivery:** `workspace.read` returns exactly one useful text block with no duplicate `structuredContent`; line number, multiline Unicode, empty lines, long-line column continuation, and source evidence remain correct.

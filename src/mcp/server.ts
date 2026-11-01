@@ -44,6 +44,7 @@ import { runMobileToolOperation } from "./tools/mobile.js";
 import { validateToolInput } from "./input-validation.js";
 import { withRequestSignal } from "./request-context.js";
 import { structuredTextFallback } from "./output.js";
+import { adaptMcpToolResult } from "./response-adapter.js";
 import { jsonError } from "./tools/dev/common.js";
 import { handleBrowserInteract } from "./tools/browser.js";
 import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleGitDiff, handleGitCommit, handleGitPush } from "./tools/dev/git.js";
@@ -747,7 +748,34 @@ export function createMcpServer(ctx: AppContext): Server {
       } else {
         result = await executeTool();
       }
-      const limitedResponse = limitMcpToolResponse(result);
+      // Derive status and per-item errors from the canonical result before Claude
+      // presentation removes the JSON representation.
+      let canonicalPayload = result?.structuredContent;
+      if (!canonicalPayload) {
+        try { canonicalPayload = JSON.parse(result?.content?.find((item: { type: string }) => item.type === "text")?.text ?? "null"); } catch { /* Text-only tools need no JSON result. */ }
+      }
+      const failedJob = name === "shell.status" && ["failed", "timeout", "interrupted"].includes(canonicalPayload?.status);
+      const batchItems = name === "workspace.batch" && Array.isArray(canonicalPayload?.results)
+        ? (() => {
+            const errorCodes: Record<string, number> = {};
+            let failed = 0;
+            for (const item of canonicalPayload.results as Array<{ result?: { error?: { code?: unknown } } }>) {
+              if (item?.result?.error === undefined) continue;
+              failed++;
+              const rawCode = item.result.error?.code;
+              const code = typeof rawCode === "string" && /^[A-Z0-9_]{1,64}$/.test(rawCode) ? rawCode : "UNKNOWN_BATCH_ITEM_ERROR";
+              errorCodes[code] = (errorCodes[code] ?? 0) + 1;
+            }
+            return { total: canonicalPayload.results.length, failed, error_codes: errorCodes };
+          })()
+        : undefined;
+      const failedBatch = batchItems !== undefined && batchItems.total > 0 && batchItems.failed === batchItems.total;
+      const canonicalFailed = result?.isError === true || failedJob || failedBatch ||
+        (name === "shell.run" && canonicalPayload?.exit_code !== undefined && canonicalPayload.exit_code !== 0);
+
+      const presented = adaptMcpToolResult(clientProfile, name, args, result);
+      const limitedResponse = limitMcpToolResponse(presented);
+      result = limitedResponse.result;
       if (limitedResponse.limited) {
         await ctx.auditLogger.log({
           timestamp: new Date().toISOString(),
@@ -756,29 +784,9 @@ export function createMcpServer(ctx: AppContext): Server {
           event: "tool_response_too_large",
           error: `response_bytes=${limitedResponse.attemptedResponseBytes} max_bytes=${MCP_TOOL_RESPONSE_MAX_BYTES}`,
         });
-        result = limitedResponse.result;
       }
-      let payload = result?.structuredContent;
-      if (!payload) {
-        try { payload = JSON.parse(result?.content?.find((item: { type: string }) => item.type === "text")?.text ?? "null"); } catch { /* Text-only tools need no JSON result. */ }
-      }
-      const failedJob = name === "shell.status" && ["failed", "timeout", "interrupted"].includes(payload?.status);
-      const batchItems = name === "workspace.batch" && Array.isArray(payload?.results)
-        ? (() => {
-            const errorCodes: Record<string, number> = {};
-            let failed = 0;
-            for (const item of payload.results as Array<{ result?: { error?: { code?: unknown } } }>) {
-              if (item?.result?.error === undefined) continue;
-              failed++;
-              const rawCode = item.result.error?.code;
-              const code = typeof rawCode === "string" && /^[A-Z0-9_]{1,64}$/.test(rawCode) ? rawCode : "UNKNOWN_BATCH_ITEM_ERROR";
-              errorCodes[code] = (errorCodes[code] ?? 0) + 1;
-            }
-            return { total: payload.results.length, failed, error_codes: errorCodes };
-          })()
-        : undefined;
-      const failedBatch = batchItems !== undefined && batchItems.total > 0 && batchItems.failed === batchItems.total;
-      const failed = result?.isError === true || failedJob || failedBatch || (name === "shell.run" && payload?.exit_code !== undefined && payload.exit_code !== 0);
+      const payload = limitedResponse.limited ? result?.structuredContent : canonicalPayload;
+      const failed = canonicalFailed || result?.isError === true;
       const textResponseBytes = Array.isArray(result?.content)
         ? result.content.reduce((sum: number, item: { type?: string; text?: string }) => sum + (item?.type === "text" && typeof item.text === "string" ? Buffer.byteLength(item.text) : 0), 0)
         : 0;

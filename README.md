@@ -75,7 +75,7 @@ Core tool families include:
 Prefer typed tools over broad shell commands:
 
 - in ChatGPT interactive work, call `project.select` only when changing the selected project/worktree; a repeated selection re-sends agent instructions. ChatGPT Scheduled Tasks must supply `project_id` (and optional `working_dir`) on each project-scoped call
-- in Claude, a first `project.select` generates a `context_id`; reuse it on each project-scoped call to keep the selected project, working directory and browser profile isolated. See [Claude work contexts](docs/claude-work-context-design.md)
+- in Claude, a first `project.select` generates a `context_id`; reuse it on each project-scoped call to keep the selected project, working directory and browser profile isolated. Claude receives compact text from file-reading, search, listing, Skill reading and project-selection tools, while ChatGPT retains its structured results. See [Claude work contexts](docs/claude-work-context-design.md)
 - `project.select` composes `$CODEX_HOME/AGENTS.md` first and the selected project/worktree `AGENTS.md` second, so project/worktree instructions take precedence on conflicts; the full instruction body is returned only in `structuredContent`, while the text fallback carries metadata without duplicating the instructions into the transcript; see [`docs/project-select-agent-instructions.md`](docs/project-select-agent-instructions.md)
 - use `project.inspect` rather than filesystem discovery for the active project
 - use bounded `workspace.read`, `workspace.list`, and `workspace.search` rather than large shell scans; combine independent reads with `workspace.batch` and inspect partial failures in `tool.usage` (see [`docs/workspace-operations.md`](docs/workspace-operations.md))
