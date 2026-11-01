@@ -87,6 +87,10 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
     expect(tools.find((t) => t.name === "workspace.read")?.inputSchema.required).toContain("context_id");
     expect(tools.some((t) => t.name === "artifact.link")).toBe(false);
     expect(tools.some((t) => t.name === "artifact.receive")).toBe(false);
+    expect(tools.some((t) => t.name === "project.open")).toBe(false);
+    const hiddenProjectOpen = await client.callTool({ name: "project.open", arguments: { project_id: "primary" } });
+    expect(hiddenProjectOpen.isError).toBe(true);
+    expect(getPayload(hiddenProjectOpen)).toMatchObject({ error: { code: "TOOL_UNAVAILABLE" } });
     const initial = await client.callTool({ name: "project.list", arguments: {} });
     expect(getPayload(initial).projects.every((p: { current: boolean }) => !p.current)).toBe(true);
 

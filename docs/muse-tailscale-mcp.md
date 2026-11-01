@@ -1,67 +1,46 @@
-# MuseからTailscale経由でlocal-dev MCPに接続する
+# MuseからTailscale経由でlocal-dev MCPを使う
 
-## 構成
+## 接続構成
 
-Meta MuseのSecure VMから、Macで稼働する既存のlocal-dev MCPを利用する。Tailscaleは**MuseからMacへのプライベートTCP経路**として使い、ChatGPTのOpenAI Secure MCP TunnelとClaudeのCloudflare Accessを変更しない。
+Muse Secure VMはMac上の既存local-dev MCPにTailscale経由で接続する。サーバーはローカルの`127.0.0.1:3456`だけで待ち受け、MacのTailscale Serveがtailnet内でHTTPSの10000番ポートを提供する。Funnelは使用しない。
 
 ```text
 Muse Secure VM
-  integrations/muse/client.py  (one-shot MCP JSON-RPC client)
-  HTTPS_PROXY host :3130       (Muse's Tailscale TCP proxy)
-       |
-Tailscale tailnet (Grants/ACLs)
-       |
-Mac Tailscale Serve :10000 (tailnet-only HTTPS)
-       |
-127.0.0.1:3456/mcp  (existing local-dev MCP)
-       |
-Muse Bearer authentication -> Muse tool profile
-       |
-shared project registry / workspace / git / shell / browser / mobile
+  Python MCP client (integrations/muse/client.py)
+  HTTPS CONNECT via Muse Tailscale TCP proxy :3130
+    |
+Tailscale tailnet (Grants / ACLs)
+    |
+Mac Tailscale Serve :10000 (private HTTPS)
+    |
+127.0.0.1:3456/mcp
+    |
+Muse Bearer auth -> Muse-only MCP tool profile
+    |
+registered projects / browser / mobile / shell / git / files
 ```
 
-MCPサーバー自体は従来どおり`127.0.0.1`にのみbindする。Muse用URLは`https://<MacのMagicDNS FQDN>:10000/mcp`。Tailscale Funnelは使わない。
+ChatGPTは従来のOpenAI Secure MCP Tunnel、ClaudeはCloudflare Access JWTを継続する。Museは独立したBearer tokenと独立したツール公開範囲を持つ。
 
-## Macへの設定
+## Mac側の設定
 
-1. Macの`tailscale status`でTailscaleの参加状態とMagicDNS FQDNを確認する。既存Serveは`tailscale serve status --json`で確認し、使用中の443/8443や他サービスを変更しない。
-2. Muse専用に32バイト以上のランダムなtokenを作り、非公開のmode 0600ファイルに保存する。例えば`umask 077; openssl rand -hex 32 > ~/.local-dev-mcp/muse-token`。**tokenの値をチャット・ログ・リポジトリ・LaunchAgentへ書かない。**
-3. `LOCAL_DEV_MCP_MUSE_HOST`には正確な`<MacのMagicDNS FQDN>:10000`、`LOCAL_DEV_MCP_MUSE_TOKEN_FILE`にはtokenファイルの絶対パスを指定する。片方だけの設定、弱いtoken、権限の緩いファイルは起動時に拒否する。
-4. 既存のOpenAI Personal/Business Tunnel、Cloudflare Access/Tunnelの有効設定を保持したまま、`scripts/install-launchd.sh --activate`でServer LaunchAgentへ設定を反映する。Muse用envは非秘密のHostとtokenファイルパスだけをplistへ格納する。
-5. `/Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg --https=10000 http://127.0.0.1:3456`で専用Serveを追加する。設定後、`tailscale serve status --json`で既存ルートと10000の両方を検証する。Serveは再起動後も継続する。
+1. Tailscaleの`status --json`でMacのMagicDNS FQDN、`serve status --json`で既存443/8443番と10000番を確認する。
+2. 専用tokenは`~/.local-dev-mcp/muse-token`のような公開しないファイルで管理する。初回作成時は`umask 077; openssl rand -hex 32 > ~/.local-dev-mcp/muse-token`。ファイル権限は0600にする。tokenの値はリポジトリ、chat、ログ、plistへ書き込まない。
+3. Server LaunchAgentへ`LOCAL_DEV_MCP_MUSE_HOST=<MacのMagicDNS FQDN>:10000`と`LOCAL_DEV_MCP_MUSE_TOKEN_FILE=<tokenの絶対パス>`を設定する。既存Tunnel用の環境変数を保持して`pnpm launchd:activate`を使い、手動で個別Agentを再起動しない。
+4. Macの`/Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg --https=10000 http://127.0.0.1:3456`で専用Serveを構成する。既存Serveのルートは削除・変更しない。
+5. 必要に応じTailscale Grants/ACLsでMuseノードからMacのTCP 10000を許可する。既存の広い許可がある場合、追加のGrantsだけでは制限されない。Funnelを有効化しない。
 
-Muse用Hostは厳密なDNS FQDNとポートに一致する場合だけ受け付ける。そのHostに来たリクエストは`/mcp`だけ許可し、`Authorization: Bearer <token>`が必須。Muse Host上ではChatGPT Tunnel tokenやCloudflare Access JWTを使用できない。localhost Host上の従来の認証フローは変更しない。
+Muse用Hostは完全一致で`/mcp`だけを許可し、Bearer tokenが必須。Muse HostにOpenAI Tunnel tokenやCloudflare Access JWTを混在させない。tokenファイルが欠落・不正・権限過大の場合は起動時に拒否する。
 
-### Tailnetのアクセス権
+## Muse Secure VM側
 
-TailscaleのGrants/ACLsでMuseノードからMacのTCP 10000だけを許可する。既存のGrantsやACLsは許可の和集合となるため、許可を追加するだけでは以前の広い許可を削れない。現在の全ポリシーを確認してから必要な範囲だけ編集する。Museノードは外向き通信だけを行い、最初の接続先への許可をMuseが要求することがある。
+`integrations/muse/client.py`はPython標準ライブラリだけを使用する、1回のコマンドにつき1回のMCP初期化・ツール呼び出しを行うクライアント。Museのカスタム連携や再利用可能な手順から起動する。リポジトリ内のコードをMuse VMへ配置する必要がある。
 
-Grantsの例（既存のポリシーへ併合し、アドレスは実値へ置換）：
+- `LOCAL_DEV_MCP_URL=https://<MacのMagicDNS FQDN>:10000/mcp` を設定する。
+- Muse実行環境の`HTTPS_PROXY`をそのまま使う。クライアントは認証情報付きプロキシホストを維持してポートを3130に変更する。動的認証情報を長期保存しない。
+- `LOCAL_DEV_MCP_MUSE_TOKEN`には安全な認証情報管理機構からtokenを実行時に渡す。通常のチャット、Skill本文、Git、平文workspaceファイルへ保存しない。Muse環境で安全な注入方式が使えない場合は接続を強行しない。
 
-```json
-{
-  "grants": [
-    {
-      "src": ["<Muse node's Tailscale IP>"],
-      "dst": ["<Mac's Tailscale IP>"],
-      "ip": ["tcp:10000"]
-    }
-  ]
-}
-```
-
-## Muse VM側の接続
-
-`integrations/muse/client.py`はPython標準ライブラリのみを使用したMCP Streamable HTTPの最小クライアント。VMへ`client.py`を配置し、Museのカスタム連携から呼び出す。Muse Codeの`mcp_servers`設定とは別物であり、個人向けMuse Secure VMの実行環境を対象としている。
-
-必要な非秘密環境変数：
-
-- `LOCAL_DEV_MCP_URL=https://<MacのMagicDNS FQDN>:10000/mcp`
-- `HTTPS_PROXY`はMuse実行環境の値をそのまま使う。クライアントはホストと都度更新される資格情報を保持し、ポートだけ3130へ変更する。
-
-必要な秘密環境変数：
-
-- `LOCAL_DEV_MCP_MUSE_TOKEN`: Museの認証済みカスタム連携から実行時に注入する。通常のチャット入力やリポジトリへ値を置かない。Museの`hatch-authd`は認証情報を分離して管理するが、任意のカスタムCLIへのsecret環境変数注入が利用可能かはMuse環境で確認する。利用できない場合、平文のworkspaceファイルへの保存や公開トンネルへの切替はしない。
+コマンド例：
 
 ```sh
 python3 client.py projects
@@ -69,30 +48,43 @@ python3 client.py tools --filter workspace.
 python3 client.py schema workspace.read
 python3 client.py call project.open '{"project_id":"local-dev-mcp"}'
 python3 client.py call workspace.read '{"project_id":"local-dev-mcp","path":"README.md"}'
+python3 client.py call workspace.batch '{"project_id":"local-dev-mcp","requests":[{"tool":"workspace.read","arguments":{"path":"README.md"}},{"tool":"workspace.list","arguments":{"path":"docs","max_entries":10}}]}'
 ```
 
-通信はHTTP CONNECTプロキシを明示指定する。外部インターネットへ自動フォールバックしない。送信元Muse VMで初回アクセス承認が発生した場合、重複リクエストしない。MCPの`initialize`と`tools/list/call`を呼び、JSON/SSEを読んでテキストを出力する。メディアをこのCLIから直接表示できるとはみなさない。
+`workspace.batch`の子要素は`tool`と`arguments`の組で指定する。子操作は同じproject/worktreeスコープで実行される。
 
-## MuseのMCPツール契約
+## Museのツール契約
 
-Museは他クライアントと同じツール実装を使うが、認証済みの`ClientToolProfile=muse`を通じて専用スキーマを受け取る。
+- `project.list`で登録済みprojectを確認し、`project.open({project_id,working_dir?})`で共通・project固有のAGENTS.mdを読み取る。状態を永続的に選択する`context_id`は使わない。
+- `workspace.*`、`git.*`、`repo.action.*`、`shell.run/status/cancel`、`browser.*`、`mobile.*`などのproject操作は、毎回`project_id`を指定する。worktreeでは`working_dir`も同じ値に揃える。
+- Browser profileと非同期Shell jobの所有権は、認証主体・project・working_dirから作る非公開の`muse-work:`内部識別子で分離する。Browser profileは同じ作業スコープの連続操作で再利用できるが、同一projectの複数の並行ブラウザ作業は避ける。
+- `project.select/current/reload`、`shell.approve/reject/pending`、`artifact.link/receive`はMuseに公開せず、ツール名を直接指定しても`TOOL_UNAVAILABLE`で拒否する。MCP resources/list/readもMuseでは無効。
+- 認証済みMuseの操作も、登録project制限、denied paths、Shellのリスク分類、既存の書き込みポリシーを引き続き受ける。
+- 成功した`workspace.read/search/list/batch`、`skills.read`、`project.open`などの結果は重複JSONを除いたテキスト中心。行番号、継続情報、エラーを保持する。
 
-- `project.list`は登録済みプロジェクト一覧を返す。
-- `project.open({project_id,working_dir?})`は共通・projectローカルのAGENTS.mdを読み、選択状態を保存しない。
-- `workspace.*`、`git.*`、`repo.action.*`、`browser.*`、`mobile.*`、`shell.run/status/cancel`など、プロジェクトを操作するツールは`project_id`が必須。`working_dir`は省略時にproject rootで、worktreeでは各呼び出しで同じ値を渡す。
-- 会話別の`context_id`を作成・保持せず、共有の選択中プロジェクトも持たない。Muse用の内部所有者は認証主体とproject/working_dirから導出する。この単位でBrowser stateや非同期Shellジョブの所有権を分離する。
-- `project.select/current/reload`、`shell.approve/reject/pending`、ChatGPT専用`artifact.receive/link`はMuseへ公開しない。MCP resources/readも無効。
-- `workspace.read/search/list/batch`、`skills.read`、`project.open`の成功結果は、行番号・継続カーソル・instructionsを維持しつつ不要な重複JSONを除いたテキストへ整形する。エラー・メディア・未知の結果形状は勝手に省略しない。
-- 同一projectのBrowser等、状態を共有する操作を複数タスクから並行させない。重いビルドは既存Pueue手順に従う。
+## 画像・artifactの取得
 
-## 動作検証
+MCPサーバーは`image.read`で`ImageContent`、`artifact.read`でBase64の埋め込みresourceを返す。MuseクライアントはMCPの返却内容を自動で画面に表示できないため、`--output`でMuse VM上の新しいファイルへ保存する。
 
-- Mac上で`curl --resolve`等によりHostを指定してローカルHTTPへアクセスし、不正Hostの403、Muse Host上での不正Bearerの401、正しいBearerでのMCP `initialize`/ツール呼び出しを確認する。secretの値はコマンド表示・ログへ出さない。
-- Tailscale Serveで10000のtailnet-only公開と既存443/8443の維持を確認し、Muse VMのポート3130プロキシ経由でHTTPS POSTを試す。pingの成功・失敗はTCP到達性の判定に使わない。
-- `project.open`、`workspace.read`、`git.inspect`、短い書き込み、非同期Shellの起動/状態取得/停止を確認する。別project/worktreeのジョブ参照は拒否される。
-- ChatGPTから実ツール呼び出し、Claudeから実ツール呼び出しを行い、旧ツール契約と認証を維持していることを確認する。
+```sh
+python3 client.py call image.read '{"project_id":"local-dev-mcp","path":"docs/local-dev-mcp-system-overview-ja.png","mode":"preview"}' --output /path/to/new-preview.png
+python3 client.py call artifact.read '{"project_id":"local-dev-mcp","path":"README.md"}' --output /path/to/new-readme.md
+```
 
-Muse側の秘密値注入方式または初回のアクセス承認が使えない場合は、Macサーバーの接続準備が完了していても**Muse実接続は未検証**と扱う。
+`--output`は保存先が新規ファイルの場合だけ動作する。既存ファイルやsymlinkは上書きせず、mode 0600で保存する。最大6 MiB、Base64検証あり。バイナリ本体を標準出力に混ぜない。画像を視覚的に確認するには、保存したファイルをMuseの利用可能な画像表示機能で開く必要がある。保存だけでMuseのモデルが画像を視認できたとはみなさない。
+
+`artifact.link`は非公開なので`artifact.read`を使う。`mode=metadata`の`image.read`は画像本体を返さないため、`--output`を使うとエラーになる。MCPリソースリンクのみのレスポンスは保存対象外。
+
+## 確認項目
+
+- Bearerなし・不正tokenは401、Muse Host以外は403。正しいMuse認証ではHTTPSの`initialize`と`tools/list`ができる。
+- `project.open`、`workspace.read`、`git.inspect`が利用でき、`project_id`なしのproject操作が拒否される。
+- Museで非公開のツールは直接MCP`tools/call`を送っても`TOOL_UNAVAILABLE`になり、状態を変更しない。
+- `browser.status`は`BROWSER_CHAT_ID_UNAVAILABLE`にならず、別project/worktreeのブラウザ所有権は混ざらない。
+- 画像・artifactを`--output`で保存でき、既存ファイルを保護する。
+- ChatGPT・Claudeの既存スキーマ、認証、ブラウザ状態への互換性を維持する。
+
+コードの自動テストは`pnpm test`、`pnpm typecheck`、`python3 -m unittest discover -s integrations/muse -p 'test_*.py'`で実行できる。
 
 ## 参考
 
@@ -100,4 +92,3 @@ Muse側の秘密値注入方式または初回のアクセス承認が使えな�
 - [Tailscale: Muse integration](https://tailscale.com/blog/meta-muse-ai-agent-tailscale)
 - [Tailscale: Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)
 - [Tailscale: access control](https://tailscale.com/docs/features/access-control)
-- [Muse Tailscale proxy notes (third-party mirror)](https://github.com/win4r/MuseAI-Skills/blob/main/home/hatch/docs/devices/tailscale.md)

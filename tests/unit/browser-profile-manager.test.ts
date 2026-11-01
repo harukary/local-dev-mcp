@@ -9,6 +9,7 @@ import {
   type AuthClaimInput,
 } from "../../src/browser/profile-manager.js";
 import { copyChromeProfileSnapshot } from "../../src/browser/snapshot-copier.js";
+import { museWorkContextId } from "../../src/mcp/auth-muse.js";
 
 const roots: string[] = [];
 
@@ -134,6 +135,35 @@ describe("BrowserProfileManager", () => {
     await expect(manager.ensureChatProfile("default")).rejects.toMatchObject({
       code: "BROWSER_CHAT_ID_UNAVAILABLE",
     });
+  });
+
+  it("isolates authenticated Muse work contexts by owner, project and working directory", async () => {
+    const home = await tempRoot("browser-muse-home-");
+    const seed = await tempRoot("browser-muse-seed-");
+    await seedChromeProfile(seed);
+    const manager = new BrowserProfileManager({ home });
+    await manager.initialize(seed, { seedState: "quiescent" });
+    const owner = "a".repeat(64);
+    const alpha = museWorkContextId(owner, "alpha");
+    const beta = museWorkContextId(owner, "beta");
+    const worktree = museWorkContextId(owner, "alpha", "worktrees/feature");
+    const first = await manager.ensureChatProfile(alpha);
+    const second = await manager.ensureChatProfile(beta);
+    const third = await manager.ensureChatProfile(worktree);
+    expect(new Set([first.profileKey, second.profileKey, third.profileKey]).size).toBe(3);
+    expect(first.profileKey).toBe(browserProfileKey(alpha));
+    await expect(manager.getOwnedProfile(beta, first.profileKey))
+      .rejects.toMatchObject({ code: "BROWSER_PROFILE_NOT_OWNED" });
+    await expect(manager.getOwnedProfile(worktree, first.profileKey))
+      .rejects.toMatchObject({ code: "BROWSER_PROFILE_NOT_OWNED" });
+    for (const invalid of [
+      "muse-bootstrap:unbound", "muse-work:", "muse-work:" + "a".repeat(63),
+      "muse-work:" + "g".repeat(64), "muse-work:" + "A".repeat(64),
+      "unknown:" + "a".repeat(64),
+    ]) {
+      await expect(manager.ensureChatProfile(invalid))
+        .rejects.toMatchObject({ code: "BROWSER_CHAT_ID_UNAVAILABLE" });
+    }
   });
 
   it("does not create profile storage for an optional read", async () => {

@@ -705,7 +705,9 @@ export function createMcpServer(ctx: AppContext): Server {
           };
         }
       };
-      const toolEnabled = isClaude ? isClaudeToolEnabled(name) : isMuse ? isMuseToolEnabled(name) : name !== "project.open";
+      const toolEnabled = isClaude ? name !== "project.open" && isClaudeToolEnabled(name)
+        : isMuse ? isMuseToolEnabled(name)
+        : name !== "project.open";
       const missingContext = isClaude && isClaudeContextRequired(name) && args.context_id === undefined;
       const unresolvedContext = isClaude && isClaudeContextRequired(name) && !resolvedClaudeContext;
       const invalid = toolEnabled ? validateToolInput(name, args, clientProfile) : undefined;
@@ -737,7 +739,7 @@ export function createMcpServer(ctx: AppContext): Server {
           : await invokeTool();
 
       let result: any;
-      if (isClaude && !toolEnabled) {
+      if (!toolEnabled) {
         result = jsonError("TOOL_UNAVAILABLE", "This tool is unavailable for the authenticated client.");
       } else if (missingContext) {
         result = jsonError("CONTEXT_ID_REQUIRED", "Pass context_id from project.select for this Claude work context.");

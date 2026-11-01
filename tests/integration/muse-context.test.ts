@@ -51,6 +51,23 @@ it("isolates Muse project calls without chat IDs or persisted selection", async 
     expect(tools.find(t => t.name === "browser.open")?.inputSchema.required).toContain("project_id");
     expect(tools.find(t => t.name === "shell.status")?.inputSchema.required).toContain("project_id");
 
+    // Discoverability is not an authorization boundary: calls to hidden tools must also fail.
+    for (const [name, args] of [
+      ["project.select", { project_id: "beta" }],
+      ["project.current", {}],
+      ["project.reload", {}],
+      ["artifact.link", { project_id: "alpha", path: "sample.txt" }],
+      ["artifact.receive", { project_id: "alpha" }],
+      ["shell.approve", { approval_request_id: "untrusted" }],
+      ["shell.reject", { approval_request_id: "untrusted" }],
+      ["shell.pending", {}],
+    ] as const) {
+      const rejected = await client.callTool({ name, arguments: args });
+      expect(rejected.isError, name).toBe(true);
+      expect(rejected.structuredContent, name).toMatchObject({ error: { code: "TOOL_UNAVAILABLE" } });
+    }
+    expect(contextStore.getAll().size).toBe(0);
+
     const opened = await client.callTool({ name: "project.open", arguments: { project_id: "alpha" } });
     expect(opened.isError).toBeUndefined();
     expect(opened.structuredContent).toBeUndefined();

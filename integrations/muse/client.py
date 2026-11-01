@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Minimal stateless MCP client for Meta Muse's Tailscale HTTP CONNECT proxy."""
 import argparse
+import base64
+import binascii
 import json
 import os
 import sys
@@ -9,6 +11,7 @@ import urllib.parse
 import urllib.request
 
 MAX_RESPONSE_BYTES = 9 * 1024 * 1024
+MAX_MEDIA_BYTES = 6 * 1024 * 1024
 PROTOCOL_VERSION = "2025-06-18"
 
 
@@ -78,6 +81,67 @@ class Client:
         })
 
 
+def extract_media(result):
+    """Return one MCP image or embedded-resource block, never a resource link."""
+    media = [item for item in result.get("content", []) if item.get("type") != "text"]
+    if not media:
+        return None
+    if len(media) != 1:
+        raise ValueError("Expected exactly one inline MCP image or embedded resource")
+    block = media[0]
+    if block["type"] == "image":
+        raw = block.get("data")
+        mime = block.get("mimeType")
+    elif block["type"] == "resource":
+        resource = block.get("resource")
+        if not isinstance(resource, dict):
+            raise ValueError("Invalid MCP embedded resource")
+        raw = resource.get("blob")
+        mime = resource.get("mimeType")
+    else:
+        raise ValueError("Unsupported MCP media type: " + str(block["type"]))
+    if not isinstance(raw, str) or not isinstance(mime, str) or not mime:
+        raise ValueError("Invalid inline media payload")
+    if len(raw) > (MAX_MEDIA_BYTES + 2) * 4 // 3 + 4:
+        raise ValueError("MCP media exceeds the supported file size")
+    try:
+        data = base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError("Invalid base64 in MCP media payload") from error
+    if len(data) > MAX_MEDIA_BYTES:
+        raise ValueError("MCP media exceeds the supported file size")
+    return data, mime
+
+
+def render_result(result, output=None):
+    if not isinstance(result, dict):
+        raise ValueError("Invalid MCP tool result")
+    if result.get("isError"):
+        raise RuntimeError("Tool failed: " + "\n".join(
+            item.get("text", "") for item in result.get("content", []) if item.get("type") == "text"
+        ))
+    media = extract_media(result)
+    if media and output is None:
+        raise ValueError("The tool returned inline image/file data. Run again with --output PATH to save it securely.")
+    if output is not None and media is None:
+        raise ValueError("--output was specified, but the tool did not return inline image/file data")
+    if media:
+        data, mime = media
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(output, flags, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as target:
+                target.write(data)
+        except BaseException:
+            os.unlink(output)
+            raise
+    for item in result.get("content", []):
+        if item.get("type") == "text":
+            print(item.get("text", ""))
+    if media:
+        print("Saved inline MCP media: " + output + " (" + mime + ", " + str(len(data)) + " bytes)")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Call local-dev MCP from Meta Muse over Tailscale")
     sub = parser.add_subparsers(dest="action", required=True)
@@ -89,6 +153,7 @@ def main():
     call = sub.add_parser("call", help="Call a tool with JSON object arguments")
     call.add_argument("name")
     call.add_argument("arguments", help="JSON object string")
+    call.add_argument("--output", help="Save one inline image or embedded resource to a NEW file (mode 0600)")
     args = parser.parse_args()
 
     client = Client()
@@ -111,13 +176,7 @@ def main():
         if not isinstance(params, dict):
             raise ValueError("Tool arguments must be a JSON object")
         result = client.post("tools/call", {"name": args.name, "arguments": params})
-    if result.get("isError"):
-        raise RuntimeError("Tool failed: " + "\n".join(i.get("text", "") for i in result.get("content", []) if i.get("type") == "text"))
-    for item in result.get("content", []):
-        if item.get("type") == "text":
-            print(item.get("text", ""))
-        else:
-            print("[Non-text MCP content: " + str(item.get("type", "unknown")) + "]", file=sys.stderr)
+    render_result(result, getattr(args, "output", None))
 
 
 if __name__ == "__main__":

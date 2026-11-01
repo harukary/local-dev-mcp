@@ -590,7 +590,8 @@ export class BrowserProfileManager {
 
   private requireSessionContext(chatContextId: string): void {
     if (!((chatContextId.startsWith("chatgpt-session:") && chatContextId.length > "chatgpt-session:".length)
-      || /^claude-context:[0-9a-f]{64}$/.test(chatContextId))) {
+      || /^claude-context:[0-9a-f]{64}$/.test(chatContextId)
+      || /^muse-work:[0-9a-f]{64}$/.test(chatContextId))) {
       throw new BrowserProfileError("BROWSER_CHAT_ID_UNAVAILABLE", "Browser profiles require a verified chat or work context identity.");
     }
   }

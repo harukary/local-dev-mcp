@@ -97,6 +97,10 @@ it("negotiates MCP, discovers tools, validates calls, and runs a bounded batch t
     const tools = (await client.listTools()).tools;
     expect(tools.some(tool => tool.name === "workspace.batch")).toBe(true);
     expect(tools.some(tool => tool.name === "artifact.link")).toBe(true);
+    expect(tools.some(tool => tool.name === "project.open")).toBe(false);
+    const hidden = await client.callTool({ name: "project.open", arguments: { project_id: "fixture" } });
+    expect(hidden.isError).toBe(true);
+    expect(hidden.structuredContent).toMatchObject({ error: { code: "TOOL_UNAVAILABLE" } });
     const invalid = await client.callTool({ name: "workspace.read", arguments: { path: 17 } });
     expect(invalid.isError).toBe(true);
     const result = await client.callTool({ name: "workspace.batch", arguments: { requests: [{ tool: "workspace.read", arguments: { path: "sample.txt", max_bytes: 5 } }, { tool: "workspace.list", arguments: {} }] } });
@@ -125,7 +129,7 @@ it("negotiates MCP, discovers tools, validates calls, and runs a bounded batch t
     });
     const blob = "blob" in resource.contents[0] ? resource.contents[0].blob : "";
     expect(Buffer.from(blob, "base64").toString("utf8")).toBe("alpha\nbeta\n");
-    expect(metrics.snapshot().totals.measurements?.calls).toBe(3);
+    expect(metrics.snapshot().totals.measurements?.calls).toBe(4);
 
     const mixed = await client.callTool({ name: "workspace.batch", arguments: {
       requests: [
