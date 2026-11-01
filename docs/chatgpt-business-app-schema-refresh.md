@@ -1,131 +1,50 @@
-# ChatGPT Business Workspace App / MCP schema refresh behavior
+# ChatGPT Business Workspace MCP action refresh
 
-Official documentation verified: 2026-10-30. Workspace snapshot workflow last directly verified: 2026-10-02.
+This procedure applies to the existing, workspace-published `local-dev` and `local-dev-mini` Apps. The UI and end-to-end behavior below were directly checked on 2026-11-01. Current UI paths are operational observations, not a stable API contract.
 
-This note records how we currently update the **workspace-published `local-dev` / MCP app in the harukary Business workspace** when the MCP tool surface changes.
-
-The current OpenAI Help Center and the previously observed workspace refresh flow agree that **Business admins can refresh the tools of an existing published custom MCP connection without recreating the app**. The UI location and per-workspace permissions can still differ. Treat the local verification history below as workspace-specific evidence rather than proof that a particular snapshot is current now.
-
-## Current official documentation and observed behavior
-
-OpenAI's Help Center, checked on 2026-10-30, documents in-place refresh for Business and Enterprise/Edu admins with a valid connection and permission to manage the app. Published connections use a frozen tool/input snapshot; later server changes are **not** applied automatically. An updated optional input may remain backward-compatible, but the new field is not considered published until the action snapshot has been refreshed and read back.
-
-Official references:
-
-- https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt
-- https://help.openai.com/en/articles/11509118-admin-controls-security-and-compliance-for-plugins-and-apps
-
-We directly observed the following in the harukary Business workspace on 2026-09-20 and re-verified the mechanism on 2026-09-25:
-
-1. A published workspace app still had an existing connector link and action snapshot.
-2. ChatGPT's own Admin Apps client exposed and successfully executed its action refresh flow for that existing app.
-3. The action snapshot changed from the old tool set to the new MCP tool set without recreating the app.
-4. A Branch chat created after the refresh loaded the refreshed tool schema.
-5. On 2026-09-25, the newer `Admin -> Plugins` UI no longer exposed an obvious Refresh control for `local-dev`, while the current ChatGPT frontend still contained the existing-app action refresh flow.
-6. Executing that current refresh flow updated the existing `local-dev` action snapshot in place from the old `artifact.read` 8 MiB description to the new 6 MiB description.
-7. A Branch chat created after that refresh exposed the 6 MiB tool schema and runtime schema version `2026-09-25.1`.
-8. Uploading the same Plugin package as version `1.0.1` did **not** refresh the MCP action snapshot: the package version changed while the old 8 MiB action description remained until actions were refreshed separately.
-9. On 2026-10-02, after `project.select` changed to return composed global + project/worktree agent instructions, the runtime was activated with schema version `2026-10-02.3`, the existing workspace app action snapshot was refreshed in place, and the updated `project.select` description was read back from the workspace connector configuration.
-10. A Branch chat created after that refresh returned both instruction sources from `project.select` (`$CODEX_HOME/AGENTS.md` followed by the project `AGENTS.md`) and included the newly published global instructions, confirming that the branch had rebound to the refreshed action/runtime behavior.
-
-### 2026-10-30 layer-specific check
-
-This check was performed in an existing ChatGPT conversation **without** an authenticated Workspace admin action-snapshot read-back:
-
-- Repository: Mac and Mini both have `main` at `759c0a7`, clean and synchronized with `origin/main`.
-- Running MCP: both report `tool.schema` version `2026-10-28.1`, including the optional `browser.open.http_credentials` input, with HTTP `/healthz` and the Business Tunnel healthy.
-- Workspace Plugin action snapshot: **unverified**. The current ChatGPT Browser connector required an originating browser context, and a Mini-managed Chrome profile did not have an authenticated ChatGPT session. Neither an action Refresh nor app recreation was attempted. This layer cannot be inferred from the running MCP.
-- Conversation binding: the current conversation exposes 82 tool names for each server but an older `browser.open` description/schema without `http_credentials`. This does **not** establish whether the Workspace snapshot is old or only the conversation binding is old.
-
-When authenticated workspace app-management access is available, read the *existing* `local-dev` and `local-dev-mini` action snapshots. Refresh the affected existing app **only if its snapshot is stale**, read back the optional `http_credentials` field and description, then create a Branch/new chat and verify the model-facing tool definition. Do not use a Plugin package version bump or an unverified endpoint as a substitute.
-
-Concrete verification from the `sodateai` app:
-
-- before refresh: `report.search`, `report.get`, `report.create`, `report.delete`
-- after refresh: `page.search`, `page.get`, `page.create`, `page.update`, `page.revisions`, `page.restore`, `page.delete`
-- a Branch chat then exposed `page.*` and no longer exposed `report.*`
-
-Therefore, **do not recreate the workspace app by default just because tool names, descriptions, annotations, or input schemas changed**.
-
-## Preferred workflow for this workspace
-
-For an externally visible MCP tool-surface change:
-
-1. Implement and test the MCP change.
-2. Increment the tool/schema version when the public contract changed.
-3. Restart or reload the MCP runtime so the running server actually serves the new schema.
-4. Verify the runtime directly, for example with `tool.schema`, `tools/list`, or another harmless schema probe.
-5. Confirm the Business Secure MCP Tunnel is healthy.
-6. In ChatGPT Workspace settings, locate the **existing** app.
-7. Refresh that app's actions in place. Prefer a visible Refresh control when present. If the newer Plugin UI hides it, inspect the current ChatGPT app-management client flow rather than substituting a package-version upload or recreating the app.
-8. Read back the app's action list and verify the expected tools/inputs/descriptions are present and the removed or old values are gone.
-9. Create a **Branch chat** or a completely new chat so the conversation gets a fresh model-facing tool binding.
-10. Verify the exact tool names/input fields visible in that branch before destructive work. For `project.select`, also perform a harmless call and confirm its returned `agent_instructions.sources` and effective instruction content when agent-instruction behavior changed.
-
-The expected state flow is:
+## Four independently cached layers
 
 ```text
 repository source
-    -> running MCP runtime
-        -> workspace app action snapshot
-            -> conversation / branch tool binding
+  -> running MCP runtime
+    -> Business Workspace App action snapshot
+      -> conversation / Branch tool binding
 ```
 
-Each layer can be stale independently.
+Each layer can be stale even when the previous layer is current. A Git Push, runtime restart, successful Tunnel connection, or Plugin package update does **not** refresh the published action snapshot. Refreshing actions does **not** hot-swap tool definitions in an existing conversation.
 
-## When recreation is appropriate
+Published custom MCP Apps in this Business workspace support refreshing the existing connection's tools in place. Do not recreate the App or create a duplicate user-scoped connection merely because a tool description or input schema changed.
 
-Recreate and republish the app only when one of these is true:
+## Refresh procedure
 
-- the existing app or connector link no longer exists,
-- the Tunnel association itself must change and cannot be edited safely,
-- the authentication model or app identity must change,
-- after checking the current ChatGPT app-management client, no usable action-refresh flow remains,
-- refresh fails or the read-back still shows the old snapshot,
-- a current, verified product limitation prevents an in-place update for this workspace.
+1. Inspect the repository HEAD, dirty files and upstream before changing code. Preserve unrelated worktrees and uncommitted changes.
+2. Build and deploy the runtime through the normal LaunchAgent path. Confirm the MCP `/healthz`, Business Secure MCP Tunnel, and the exact changed input/description with `tool.schema`.
+3. In an authenticated ChatGPT Web session, open **Settings → Plugins → Installed → the existing App → Manage**. The current App settings page has a **Refresh tools** button under **Manage app**.
+4. Refresh tools on the **existing** App. Check that the operation succeeded. A successful request alone is insufficient to establish that the expected schema was published.
+5. Read the App's **current connector action definitions** back through the authenticated ChatGPT app-management client. Check the affected tool name, input property, description, and tool count against the running MCP. The settings screen need not display the full action list. Discover the read-back mechanism from the current client; do not encode internal endpoint names, connector link identifiers, or authentication details into permanent instructions.
+6. Create a **Branch or completely new chat** after the action refresh. Test the newly bound tool through a harmless real call that uses the changed input property. Reading the runtime's `tool.schema` alone is **not** verification of the model-facing binding.
+7. Preserve existing Workspace settings such as enabled tools and approval policy. Do not use a Plugin package upload or version change as a substitute for action Refresh.
 
-If recreation is required, preserve the existing app until the replacement has been verified. Avoid deleting the working app first.
+If the Refresh button is absent, check the existing App's action definitions and the current app-management client before concluding that Refresh is unavailable. A route or layout change is not proof that the capability has been removed.
 
-## Branch and chat cache behavior
+## Verified action and binding state
 
-Refreshing the workspace app does not imply that an already-running conversation will hot-swap its model-facing tool definitions.
+On 2026-11-01, both runtime servers already exposed `browser.open.http_credentials` in their input schema, but the conversation that initiated the investigation still exposed the previous `browser.open` binding.
 
-Observed behavior:
+- `local-dev`: The existing App's **Refresh tools** operation succeeded. Its connector actions were read back as 82 tools, including the updated `browser.open` description and `http_credentials` input.
+- `local-dev-mini`: Before Refresh, its 82 published connector actions used the old `browser.open` description and had no `http_credentials`. After Refresh, read-back showed 82 actions with the updated description and input.
+- A completely new ChatGPT Web chat then invoked **both** `browser.open` tools with `http_credentials` containing only dummy test strings and `url=https://example.com/`. Both tool calls returned `ok: true` and `action_applied: true`. This validates new-conversation argument binding, **not** successful HTTP Basic authentication against a protected site.
+- The original conversation remains a separate cached binding and should not be assumed to have changed.
 
-- the app action snapshot can be new while the current conversation still sees the old tools,
-- creating a Branch chat after refresh can rebind the app schema,
-- a completely new chat is the clean fallback.
+The `/link` metadata for an App may list enabled action names without containing full tool parameter schemas. Its lack of a parameter string alone is **not** evidence that the connector's current action definitions are stale.
 
-So the acceptance check is not only “the app page shows the new actions”. The final check is that the **new branch/chat actually exposes the expected tools**.
+## Diagnosing a mismatch
 
-## Troubleshooting matrix
+| Source/runtime | Workspace actions | New conversation | Interpretation |
+| --- | --- | --- | --- |
+| Stale runtime | Any | Any | Deploy or restart the MCP runtime first |
+| Current | Stale | Stale | Refresh the existing App's tools and read back its action definitions |
+| Current | Current | Stale | Use a fresh Branch/new chat and verify its binding |
+| Current | Current | Current | The change is reflected end-to-end |
 
-| Runtime schema | Workspace app actions | New Branch chat | Likely cause | Action |
-| --- | --- | --- | --- | --- |
-| old | old | old | Runtime still serves old code | Restart/reload MCP |
-| new | old | old | Workspace app snapshot is stale | Refresh actions in place |
-| new | new | old | Conversation binding is stale | Branch again or start a new chat |
-| new | new | new | Fully updated | Continue |
-| new | no usable refresh flow after current-client check | old | Product/workspace no longer permits in-place update | Recreate and republish per current OpenAI guidance |
-
-## Automation notes
-
-When automating with `local-dev` browser/computer tools:
-
-- prefer the existing app's normal Workspace settings UI when it exposes Refresh,
-- if the current Plugin UI hides Refresh, rediscover the action-refresh path from the current ChatGPT app-management client instead of hard-coding an old endpoint or link ID,
-- use the existing app's action-refresh path rather than creating a duplicate USER/Workspace app pair,
-- do not treat `Upload new version` as an action refresh; package version and MCP action snapshot are separate layers,
-- never log or expose Tunnel tokens, session cookies, or connector credentials,
-- always read back the refreshed action list,
-- always verify again from a fresh Branch/new chat.
-
-Do not depend on undocumented internal endpoint names as a durable contract. The observed in-place refresh is the operational behavior that matters; UI/client internals may change.
-
-## Relationship to USER-scoped Developer Mode Plugins
-
-This file is specifically about the workspace-published Business app path observed above.
-
-For USER-scoped Developer Mode Plugin behavior, see:
-
-- [chatgpt-user-plugin-schema-refresh.md](./chatgpt-user-plugin-schema-refresh.md)
+Keep Tunnel tokens, session cookies, connector credentials, HTTP Basic passwords, and raw browser authentication state out of tool results, logs, and documentation. Do not manually recreate or delete a working App without a demonstrated need and a verified replacement.
