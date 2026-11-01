@@ -65,7 +65,11 @@ describe("Cloudflare Access JWT verification", () => {
       .sign(pair.privateKey);
 
     const valid = await sign(ISSUER, AUDIENCE, "15m");
-    await expect(verify(valid)).resolves.toBeUndefined();
+    await expect(verify(valid)).resolves.toEqual({ subject: "owner" });
+    const withoutSubject = await new SignJWT({})
+      .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+      .setIssuer(ISSUER).setAudience(AUDIENCE).setIssuedAt().setExpirationTime("15m").sign(pair.privateKey);
+    await expect(verify(withoutSubject)).rejects.toThrow("subject");
     await expect(verify(await sign(ISSUER, "other-app", "15m"))).rejects.toThrow();
     await expect(verify(await sign("https://other.cloudflareaccess.com", AUDIENCE, "15m"))).rejects.toThrow();
     await expect(verify(await sign(ISSUER, AUDIENCE, "-15m"))).rejects.toThrow();

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMcpRequestTooLargeError,
@@ -14,7 +15,8 @@ import {
   sanitizeRequestUrlForLog,
   sendStatelessMcpMethodNotAllowed,
 } from "../../src/mcp/server.js";
-import { buildToolSchemaSnapshot } from "../../src/mcp/tool-definitions.js";
+import { buildToolDefinitions, buildToolSchemaSnapshot, isClaudeContextRequired } from "../../src/mcp/tool-definitions.js";
+import { validateToolInput } from "../../src/mcp/input-validation.js";
 import { hashOpenAiSubject } from "../../src/mcp/auth.js";
 
 describe("resolveChatContextId", () => {
@@ -189,6 +191,36 @@ describe("Secure Tunnel HTTP host boundary", () => {
     expect(isAllowedHttpHost("127.0.0.1:3456")).toBe(true);
     expect(isAllowedHttpHost("example.com")).toBe(false);
     expect(isAllowedHttpHost(undefined)).toBe(false);
+  });
+});
+
+describe("client-isolated tool schemas", () => {
+  it("preserves the exact pre-change ChatGPT descriptors, including output schemas", () => {
+    const sha256 = createHash("sha256").update(JSON.stringify(buildToolDefinitions())).digest("hex");
+    expect(sha256).toBe("20a76b027812f696c1d21654ac87b0b5123be9c6e692b409e6f2fff2360c0cc2");
+    expect(buildToolDefinitions().length).toBe(82);
+  });
+
+  it("exposes context_id only for Claude, excludes ChatGPT-only tools and validates by profile", () => {
+    const tools = buildToolDefinitions("claude");
+    const read = tools.find((tool) => tool.name === "workspace.read");
+    const select = tools.find((tool) => tool.name === "project.select");
+    const image = tools.find((tool) => tool.name === "image.read");
+    const global = tools.find((tool) => tool.name === "tool.usage");
+    expect(select?.inputSchema.properties).toHaveProperty("context_id");
+    expect(select?.inputSchema.required).toEqual(["project_id"]);
+    expect(read?.inputSchema.required).toContain("context_id");
+    expect(read?.inputSchema.properties).toHaveProperty("context_id");
+    expect(image).not.toHaveProperty("outputSchema");
+    expect(global?.inputSchema.properties).not.toHaveProperty("context_id");
+    expect(tools.some((tool) => tool.name === "artifact.receive" || tool.name === "artifact.link")).toBe(false);
+    expect(isClaudeContextRequired("shell.status")).toBe(true);
+    expect(isClaudeContextRequired("project.select")).toBe(false);
+    expect(validateToolInput("workspace.read", { path: "README.md" }, "claude")).toBeDefined();
+    expect(validateToolInput("workspace.read", { path: "README.md" })).toBeUndefined();
+    expect(validateToolInput("workspace.read", { path: "README.md", context_id: "ctx_test" }, "claude")).toBeUndefined();
+    expect(validateToolInput("artifact.link", { path: "README.md" }, "claude")).toContain("Unknown tool");
+    expect(buildToolSchemaSnapshot({}, "claude").schema_version).toBe("2026-11-01.1");
   });
 });
 

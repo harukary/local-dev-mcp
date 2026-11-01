@@ -29,10 +29,11 @@ import { handleShellApprove, handleShellReject } from "./tools/shell-approval.js
 import { handleShellStatus } from "./tools/shell-status.js";
 import { handleShellCancel } from "./tools/shell-cancel.js";
 import { listPendingRequests } from "../shell/approval.js";
-import { getActiveJobs } from "../shell/job-manager.js";
+import { getActiveJobs, getAllJobs, getJob } from "../shell/job-manager.js";
 import { handleProjectReload } from "./tools/project-reload.js";
 import { handleSkillsList, handleSkillsRead } from "./tools/skills.js";
-import { buildToolDefinitions, buildToolSchemaSnapshot, supportsExplicitProjectScope } from "./tool-definitions.js";
+import { buildToolDefinitions, buildToolSchemaSnapshot, supportsExplicitProjectScope, isClaudeContextRequired, isClaudeToolEnabled, type ClientToolProfile } from "./tool-definitions.js";
+import { handleClaudeProjectSelect, hashClaudeOwner, resolveClaudeContext } from "./claude-context.js";
 import { handleProjectInspect } from "./tools/dev/project-inspect.js";
 import { handleWorkspaceRead } from "./tools/dev/workspace-read.js";
 import { handleWorkspaceList } from "./tools/dev/workspace-list.js";
@@ -66,6 +67,8 @@ export interface AppContext {
   turnLeaseManager: InteractiveTurnLeaseManager;
   allowedOpenAiSubject?: string;
   openAiSubjectPolicy?: OpenAiSubjectPolicy;
+  clientProfile?: ClientToolProfile;
+  claudeOwnerHash?: string;
 }
 
 type CallToolMeta = Record<string, unknown> & {
@@ -341,25 +344,39 @@ For substantive work on a project:
 11. For model-only inspection of a project image, try image.read first instead of materializing preemptively. If image.read returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, artifact.link/resource materialization is a fallback only when the file is within the resource materialization size limit. If image.read reports IMAGE_TOO_LARGE, create or request a smaller local preview instead of trying to send the oversized original through the Secure Tunnel. Also materialize/download when a downstream operation genuinely requires file bytes and the file fits the tunnel-safe limit.
 `.trim();
 
+const CLAUDE_SERVER_INSTRUCTIONS = `
+For Claude.ai, start each independent work context with project.select({project_id, working_dir?}) and keep the returned context_id.
+Pass that context_id unchanged on EVERY subsequent project-scoped tool call, including browser, workspace, git, mobile, shell and project.current.
+To switch projects within the same work context, call project.select({context_id, project_id, working_dir?}).
+A fresh project.select without context_id creates a separate work context; never guess or reuse another chat's handle.
+If a handle is missing, invalid or lost, select the project again and use the newly returned ID.
+The MCP server enforces context ownership; do not use ChatGPT-only attachment tools.
+`.trim();
+
 export function createMcpServer(ctx: AppContext): Server {
+  const clientProfile = ctx.clientProfile === "claude" ? "claude" : "chatgpt";
+  const isClaude = clientProfile === "claude";
   const server = new Server(
     { name: "local-dev-mcp", version: "0.1.0" },
     {
       capabilities: { tools: { listChanged: true }, resources: {} },
-      instructions: SERVER_INSTRUCTIONS,
+      instructions: isClaude ? CLAUDE_SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS,
     }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: buildToolDefinitions(),
+    tools: buildToolDefinitions(clientProfile),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => withRequestSignal(extra.signal, async () => {
     const { name, arguments: providedArgs } = request.params;
     const args = { ...(providedArgs ?? {}) };
     const meta = request.params._meta as CallToolMeta | undefined;
-    const chatContextId = resolveRequestContextId(meta);
-    const statelessScheduledTask = isObservedScheduledTaskMeta(meta);
+    const resolvedClaudeContext = isClaude
+      ? resolveClaudeContext(ctx.contextStore, ctx.claudeOwnerHash, args.context_id)
+      : undefined;
+    const chatContextId = isClaude ? (resolvedClaudeContext ?? "claude-bootstrap:unbound") : resolveRequestContextId(meta);
+    const statelessScheduledTask = !isClaude && isObservedScheduledTaskMeta(meta);
     const usageStartedAt = performance.now();
     const requestBytes = Buffer.byteLength(JSON.stringify(providedArgs ?? {}));
 
@@ -375,6 +392,11 @@ export function createMcpServer(ctx: AppContext): Server {
           return await handleProjectList(ctx, chatContextId);
 
         case "project.select":
+          if (isClaude) {
+            return await handleClaudeProjectSelect(ctx, ctx.claudeOwnerHash, args as {
+              project_id: string; working_dir?: string; context_id?: string;
+            });
+          }
           if (statelessScheduledTask) {
             return jsonError(
               "STATELESS_PROJECT_CONTEXT",
@@ -647,7 +669,7 @@ export function createMcpServer(ctx: AppContext): Server {
 
         case "tool.schema": {
           await server.sendToolListChanged().catch(() => undefined);
-          const schema = buildToolSchemaSnapshot(args as { prefix?: string; detail?: "summary" | "full" });
+          const schema = buildToolSchemaSnapshot(args as { prefix?: string; detail?: "summary" | "full" }, clientProfile);
           return {
             structuredContent: schema,
             content: [{ type: "text", text: structuredTextFallback(schema) }],
@@ -661,11 +683,30 @@ export function createMcpServer(ctx: AppContext): Server {
           };
         }
       };
-      const invalid = validateToolInput(name, args);
-      const turnLeaseKey = statelessScheduledTask ? undefined : resolveTurnLeaseKey(chatContextId, meta);
+      const toolEnabled = !isClaude || isClaudeToolEnabled(name);
+      const missingContext = isClaude && isClaudeContextRequired(name) && args.context_id === undefined;
+      const unresolvedContext = isClaude && isClaudeContextRequired(name) && !resolvedClaudeContext;
+      const invalid = toolEnabled ? validateToolInput(name, args, clientProfile) : undefined;
+      const turnLeaseKey = isClaude || statelessScheduledTask ? undefined : resolveTurnLeaseKey(chatContextId, meta);
       const turnLease = turnLeaseKey ? ctx.turnLeaseManager.check(turnLeaseKey) : undefined;
-      const explicitScope = invalid ? undefined : resolveExplicitProjectScope(ctx, name, args);
+      const explicitScope = !isClaude && !invalid ? resolveExplicitProjectScope(ctx, name, args) : undefined;
       const scopeRequired = !invalid && statelessScheduledTask && supportsExplicitProjectScope(name) && explicitScope?.ok && !explicitScope.projectId;
+      const contextProject = isClaude && resolvedClaudeContext ? ctx.contextStore.getCurrentProject(chatContextId) : undefined;
+      const contextDirectory = isClaude && resolvedClaudeContext ? ctx.contextStore.getWorkingDirectory(chatContextId) ?? "." : undefined;
+      const scopeConflict = isClaude && resolvedClaudeContext && name !== "project.select" && supportsExplicitProjectScope(name) && (
+        (args.project_id !== undefined && args.project_id !== contextProject)
+        || (args.working_dir !== undefined && args.working_dir !== contextDirectory)
+      );
+      const ownedJob = isClaude && (name === "shell.status" || name === "shell.cancel")
+        ? (typeof args.job_id === "string" ? getJob(args.job_id)
+          : typeof args.pid === "number" ? getAllJobs().find((job) => job.pid === args.pid && job.status === "running")
+          : undefined)
+        : undefined;
+      const jobAccessDenied = isClaude && (name === "shell.status" || name === "shell.cancel")
+        && (args.job_id !== undefined || args.pid !== undefined)
+        && ownedJob?.ownerContextId !== chatContextId;
+      // The public handle belongs to the authenticated dispatcher, never to tool implementations.
+      if (isClaude && name !== "project.select") delete args.context_id;
       const executeTool = async () => name.startsWith("browser.")
         ? await runBrowserToolOperation(chatContextId, name, invokeTool)
         : name.startsWith("mobile.")
@@ -673,7 +714,17 @@ export function createMcpServer(ctx: AppContext): Server {
           : await invokeTool();
 
       let result: any;
-      if (turnLease?.paused) {
+      if (isClaude && !toolEnabled) {
+        result = jsonError("TOOL_UNAVAILABLE", "This tool is unavailable for the authenticated client.");
+      } else if (missingContext) {
+        result = jsonError("CONTEXT_ID_REQUIRED", "Pass context_id from project.select for this Claude work context.");
+      } else if (unresolvedContext) {
+        result = jsonError("CONTEXT_NOT_FOUND", "The requested work context is unavailable.");
+      } else if (scopeConflict) {
+        result = jsonError("CONTEXT_PROJECT_CONFLICT", "Explicit project_id or working_dir conflicts with the selected work context.");
+      } else if (jobAccessDenied) {
+        result = jsonError("JOB_NOT_FOUND", "No job found for this work context.");
+      } else if (turnLease?.paused) {
         result = buildTurnPausedResponse(name, turnLease);
         await ctx.auditLogger.log({
           timestamp: new Date().toISOString(),
@@ -778,6 +829,7 @@ export function createMcpServer(ctx: AppContext): Server {
   }));
 
   server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+    if (isClaude) return { resources: [] };
     const meta = request.params?._meta as CallToolMeta | undefined;
     const authorized = resolveOpenAiAuthorization(meta, ctx.allowedOpenAiSubject).authorized;
     if (ctx.openAiSubjectPolicy || ctx.allowedOpenAiSubject) {
@@ -810,6 +862,7 @@ export function createMcpServer(ctx: AppContext): Server {
   }));
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    if (isClaude) throw new Error("Claude resources are unavailable without a context-bound resource contract.");
     const meta = request.params._meta as CallToolMeta | undefined;
     await requireAuthorizedOpenAiSubject(ctx, meta, "resources/read");
     const uri = request.params.uri;
@@ -946,7 +999,7 @@ function requireLoopbackHost(
 
 function buildHttpAuthMiddleware(
   authConfig: OpenAiTunnelAuthConfig,
-  verifyCloudflareAccessJwt?: (jwt: string) => Promise<void>
+  verifyCloudflareAccessJwt?: (jwt: string) => Promise<{ subject: string }>
 ): express.RequestHandler {
   return (req, res, next) => {
     if (verifyOpenAiTunnelToken(req.headers[OPENAI_TUNNEL_HEADER_NAME], authConfig.token)) {
@@ -956,8 +1009,9 @@ function buildHttpAuthMiddleware(
 
     const assertion = req.headers["cf-access-jwt-assertion"];
     if (verifyCloudflareAccessJwt && typeof assertion === "string") {
-      void verifyCloudflareAccessJwt(assertion).then(() => {
+      void verifyCloudflareAccessJwt(assertion).then(({ subject }) => {
         res.locals.cloudflareAccessAuthorized = true;
+        res.locals.claudeOwnerHash = hashClaudeOwner(subject);
         next();
       }).catch(() => {
         rejectHttpAuth(req, res);
@@ -1041,8 +1095,14 @@ export async function startHttpServer(configPath: string, port: number): Promise
     if (cloudflareDiagnosticsEnabled && res.locals.cloudflareAccessAuthorized) {
       console.error("[Cloudflare MCP metadata] " + JSON.stringify(summarizeCloudflareMcpRequest(req.headers, res.locals.mcpParsed)));
     }
-    const requestContext = res.locals.cloudflareAccessAuthorized
-      ? { ...ctx, allowedOpenAiSubject: undefined, openAiSubjectPolicy: undefined }
+    const requestContext: AppContext = res.locals.cloudflareAccessAuthorized
+      ? {
+          ...ctx,
+          allowedOpenAiSubject: undefined,
+          openAiSubjectPolicy: undefined,
+          clientProfile: "claude",
+          claudeOwnerHash: res.locals.claudeOwnerHash as string,
+        }
       : ctx;
     handleMcpRequest(req, res, requestContext).catch((err) => {
       console.error("MCP POST handler error:", err);

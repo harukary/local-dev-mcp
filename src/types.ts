@@ -38,6 +38,7 @@ export interface ChatContext {
   selectedAt?: string;
   selectedBy?: string;
   lastShellRunAt?: string;
+  claudeOwnerHash?: string;
 }
 
 export interface ShellRunInput {

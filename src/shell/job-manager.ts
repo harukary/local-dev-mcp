@@ -14,6 +14,7 @@ export interface Job {
   pid?: number;
   longRunning?: boolean;
   projectId: string;
+  ownerContextId?: string;
   cwd: string;
   command: string;
   purpose?: string;
@@ -70,7 +71,8 @@ export function startJob(
   timeoutSeconds?: number,
   longRunning = false,
   credentialScope?: CredentialScope,
-  env?: Record<string, string>
+  env?: Record<string, string>,
+  ownerContextId?: string
 ): Job | { error: string } {
   if (getActiveJobs().length >= MAX_CONCURRENT_JOBS) {
     return { error: `Too many active jobs (max ${MAX_CONCURRENT_JOBS}). Wait for some to complete.` };
@@ -101,6 +103,7 @@ export function startJob(
     pid: child.pid,
     longRunning,
     projectId: project.projectId,
+    ...(ownerContextId ? { ownerContextId } : {}),
     cwd: project.hostRoot,
     command,
     purpose,

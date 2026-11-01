@@ -1,3 +1,4 @@
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { buildDevToolDefinitions } from "./dev-tool-definitions.js";
 import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
@@ -5,6 +6,22 @@ import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 import { buildRepoActionToolDefinitions } from "./repo-action-tool-definitions.js";
 
 export const TOOL_SCHEMA_VERSION = "2026-10-28.1";
+export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-01.1";
+export type ClientToolProfile = "chatgpt" | "claude";
+
+const CLAUDE_HIDDEN_TOOLS = new Set(["artifact.receive", "artifact.link"]);
+const CLAUDE_CONTEXT_FREE_TOOLS = new Set([
+  "project.list", "project.select", "project.reload", "skills.read",
+  "tool.usage", "tool.schema", "todo.projects", "todo.list", "todo.get",
+]);
+
+export function isClaudeToolEnabled(name: string): boolean {
+  return !CLAUDE_HIDDEN_TOOLS.has(name);
+}
+
+export function isClaudeContextRequired(name: string): boolean {
+  return isClaudeToolEnabled(name) && !CLAUDE_CONTEXT_FREE_TOOLS.has(name);
+}
 
 const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "skills.list",
@@ -73,8 +90,10 @@ function addExplicitProjectScope<T extends { name: string; inputSchema: Record<s
   };
 }
 
-export function buildToolDefinitions() {
-  const tools = [
+type ToolDraft = { name: string; description: string; inputSchema: Record<string, any>; outputSchema?: Record<string, any>; annotations?: Record<string, any>; _meta?: Record<string, unknown> };
+
+export function buildToolDefinitions(profile: ClientToolProfile = "chatgpt"): Tool[] {
+  const tools: ToolDraft[] = [
     {
       name: "project.list",
       description: "List available local development projects.",
@@ -455,13 +474,43 @@ export function buildToolDefinitions() {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
   ];
-  return tools.map(addExplicitProjectScope);
+  const base = tools.map(addExplicitProjectScope);
+  if (profile !== "claude") return base as Tool[];
+  const claudeTools = base.filter((tool) => isClaudeToolEnabled(tool.name)).map((tool) => {
+    if (tool.name === "project.select") {
+      return {
+        ...tool,
+        description: "Start a new Claude work context by selecting a project. Save the returned context_id and pass it to every subsequent project-scoped tool call. To change the project or working directory in an existing work context, supply its context_id.",
+        inputSchema: {
+          ...tool.inputSchema,
+          properties: {
+            ...tool.inputSchema.properties,
+            context_id: { type: "string", description: "Optional existing Claude work context ID; omit to create a new isolated context." },
+          },
+        },
+      };
+    }
+    if (!isClaudeContextRequired(tool.name)) return tool;
+    return {
+      ...tool,
+      description: `${tool.description} Claude: pass the context_id returned by project.select to use the selected project and working directory. Missing or unknown IDs are rejected.`,
+      inputSchema: {
+        ...tool.inputSchema,
+        properties: {
+          ...tool.inputSchema.properties,
+          context_id: { type: "string", description: "Required Claude work context ID returned by project.select; keeps project and browser state isolated." },
+        },
+        required: [...(tool.inputSchema.required ?? []), "context_id"],
+      },
+    };
+  });
+  return claudeTools as Tool[];
 }
 
-export function buildToolSchemaSnapshot(options: { prefix?: string; detail?: "summary" | "full" } = {}) {
-  const tools = buildToolDefinitions().filter(tool => !options.prefix || tool.name.startsWith(options.prefix));
+export function buildToolSchemaSnapshot(options: { prefix?: string; detail?: "summary" | "full" } = {}, profile: ClientToolProfile = "chatgpt") {
+  const tools = buildToolDefinitions(profile).filter(tool => !options.prefix || tool.name.startsWith(options.prefix));
   return {
-    schema_version: TOOL_SCHEMA_VERSION,
+    schema_version: profile === "claude" ? CLAUDE_TOOL_SCHEMA_VERSION : TOOL_SCHEMA_VERSION,
     generated_at: new Date().toISOString(),
     tools: options.detail === "summary" ? tools.map(tool => ({ name: tool.name, description: tool.description })) : tools,
   };

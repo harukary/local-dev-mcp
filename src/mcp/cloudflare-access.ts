@@ -41,13 +41,17 @@ export function resolveCloudflareAccessConfig(
 export function createCloudflareAccessVerifier(
   config: CloudflareAccessConfig,
   jwks: JWTVerifyGetKey = createRemoteJWKSet(new URL(`${config.issuer}/cdn-cgi/access/certs`))
-): (jwt: string) => Promise<void> {
+): (jwt: string) => Promise<{ subject: string }> {
   return async (jwt) => {
     if (!jwt || jwt.length > 16384) throw new Error("Cloudflare Access JWT is missing or too large.");
-    await jwtVerify(jwt, jwks, {
+    const { payload } = await jwtVerify(jwt, jwks, {
       issuer: config.issuer,
       audience: config.audience,
       algorithms: ["RS256"],
     });
+    if (typeof payload.sub !== "string" || !payload.sub.trim() || payload.sub.length > 512) {
+      throw new Error("Cloudflare Access JWT must identify a user subject.");
+    }
+    return { subject: payload.sub };
   };
 }

@@ -116,6 +116,26 @@ describe("BrowserProfileManager", () => {
     await expect(manager.getOwnedProfile("chatgpt-session:second", first.profileKey)).rejects.toMatchObject({ code: "BROWSER_PROFILE_NOT_OWNED" });
   });
 
+  it("owns distinct browser profiles for verified Claude work contexts", async () => {
+    const home = await tempRoot("browser-claude-home-");
+    const seed = await tempRoot("browser-claude-seed-");
+    await seedChromeProfile(seed);
+    const manager = new BrowserProfileManager({ home, now: () => new Date("2026-08-29T00:00:00.000Z") });
+    await manager.initialize(seed, { seedState: "quiescent" });
+    const a = "claude-context:" + "a".repeat(64);
+    const b = "claude-context:" + "b".repeat(64);
+    const first = await manager.ensureChatProfile(a);
+    const second = await manager.ensureChatProfile(b);
+    expect(first.profileKey).toBe(browserProfileKey(a));
+    expect(second.profileKey).not.toBe(first.profileKey);
+    await expect(manager.getOwnedProfile(b, first.profileKey)).rejects.toMatchObject({
+      code: "BROWSER_PROFILE_NOT_OWNED",
+    });
+    await expect(manager.ensureChatProfile("default")).rejects.toMatchObject({
+      code: "BROWSER_CHAT_ID_UNAVAILABLE",
+    });
+  });
+
   it("does not create profile storage for an optional read", async () => {
     const root = await tempRoot("browser-optional-");
     const home = join(root, "not-created");

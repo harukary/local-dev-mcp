@@ -34,8 +34,8 @@ Important runtime rules:
 
 - HTTP MCP binds to `127.0.0.1` only.
 - HTTP requests accept loopback `Host` values only.
-- HTTP MCP requires `X-Local-Dev-MCP-Tunnel-Token` on every protected request.
-- HTTP tool calls and resource reads also require the ChatGPT `openai/subject` to match the local allowlist.
+- ChatGPT HTTP requests require `X-Local-Dev-MCP-Tunnel-Token`; the independently configured Claude path requires a verified Cloudflare Access JWT with a user subject.
+- ChatGPT tool calls and resource reads also require `openai/subject` to match the local allowlist when that policy is enabled.
 - The local tunnel token is shared only between `tunnel-client` and `local-dev-mcp`.
 - The OpenAI Tunnel runtime API key and local tunnel token are never embedded in launchd plist files.
 - `shell.run` remains the fallback escape hatch; prefer typed tools whenever possible.
@@ -43,7 +43,7 @@ Important runtime rules:
 - denied-path checks apply to file reads, writes, artifact transfer, and project-scoped operations.
 - raw artifact bytes and temporary file download URLs are not written to normal audit logs.
 
-The stdio transport remains available for local MCP clients. HTTP requires the OpenAI Secure Tunnel token by default; an explicitly configured Cloudflare Access JWT verification path can additionally authenticate remote MCP clients such as Claude without weakening ChatGPT authorization. See [Claude through Cloudflare Access](docs/claude-cloudflare-access.md), including opt-in, privacy-preserving metadata diagnostics.
+The stdio transport remains available for local MCP clients. HTTP requires the OpenAI Secure Tunnel token on the ChatGPT path; an explicitly configured Cloudflare Access JWT verification path independently authenticates Claude. Each authenticated client receives its own tool schema, without weakening ChatGPT authorization. See [Claude through Cloudflare Access](docs/claude-cloudflare-access.md) and [Claude work contexts](docs/claude-work-context-design.md).
 
 ## ChatGPT Approvals
 
@@ -74,7 +74,8 @@ Core tool families include:
 
 Prefer typed tools over broad shell commands:
 
-- for interactive work, call `project.select` only when changing the selected project/worktree; a repeated selection re-sends agent instructions. Scheduled Tasks must instead supply `project_id` (and optional `working_dir`) on each project-scoped call
+- in ChatGPT interactive work, call `project.select` only when changing the selected project/worktree; a repeated selection re-sends agent instructions. ChatGPT Scheduled Tasks must supply `project_id` (and optional `working_dir`) on each project-scoped call
+- in Claude, a first `project.select` generates a `context_id`; reuse it on each project-scoped call to keep the selected project, working directory and browser profile isolated. See [Claude work contexts](docs/claude-work-context-design.md)
 - `project.select` composes `$CODEX_HOME/AGENTS.md` first and the selected project/worktree `AGENTS.md` second, so project/worktree instructions take precedence on conflicts; the full instruction body is returned only in `structuredContent`, while the text fallback carries metadata without duplicating the instructions into the transcript; see [`docs/project-select-agent-instructions.md`](docs/project-select-agent-instructions.md)
 - use `project.inspect` rather than filesystem discovery for the active project
 - use bounded `workspace.read`, `workspace.list`, and `workspace.search` rather than large shell scans; combine independent reads with `workspace.batch` and inspect partial failures in `tool.usage` (see [`docs/workspace-operations.md`](docs/workspace-operations.md))
@@ -91,9 +92,10 @@ When an existing website uses an HTTP Basic challenge, pass `http_credentials: {
 
 ## Browser Profiles
 
-Browser state is isolated by the ChatGPT `openai/session` identity. The same chat
-keeps one profile across project changes; different chats never share a running
-profile. Browser tools fail explicitly when a chat session identity is unavailable.
+Browser state is isolated by the ChatGPT `openai/session` identity or a Claude work
+context ID. The same context keeps one profile across project changes; different
+contexts never share a running profile. Browser tools fail explicitly when a verified
+session or work-context identity is unavailable.
 
 Browser operations on the same profile are serialized with a loopback TCP lock.
 A disconnected lock probe closes only that connection; it does not release the

@@ -51,6 +51,12 @@ For review, parse only the structured diagnostic JSON following the `[Cloudflare
 
 After collection, deactivate diagnostics by regenerating and activating the LaunchAgents without `LOCAL_DEV_MCP_CLOUDFLARE_REQUEST_DIAGNOSTICS=1`. Keep the other active Access and Tunnel settings.
 
+## Claude project and work-context selection
+
+Claude does not send a verified chat ID. After connecting, start a work context with `project.select({ "project_id": "local-dev-mcp" })`. Preserve the returned `context_id` and include it in subsequent project-scoped calls, for example `workspace.read({ "context_id": "ctx_...", "path": "README.md" })`. A new `project.select` without that ID creates a separate context, while passing the existing ID changes its project. Missing or unauthorized IDs are rejected rather than selecting a shared default project.
+
+Claude receives its own `tools/list` schema. ChatGPT attachment ingestion (`artifact.receive`) and resource links (`artifact.link` and `resources/read`) are unavailable on Claude until a context-safe transfer contract is supported. Direct scoped `workspace.*`, `image.read`, and `artifact.read` remain available. The complete runtime contract is documented in [Claude work contexts](claude-work-context-design.md).
+
 ## Connection verification
 
 - Verify the Access application's intended hostname, restrictive policy, audience, Managed OAuth setting and Claude callback allowlist.

@@ -159,7 +159,8 @@ export async function handleShellApprove(ctx: AppContext, chatContextId: string,
       request.timeoutSeconds,
       request.longRunning ?? false,
       request.credentialScope,
-      credentialEnv
+      credentialEnv,
+      chatContextId.startsWith("claude-context:") ? chatContextId : undefined
     );
     if ("error" in result) {
       releaseApprovalRequest(request.id);

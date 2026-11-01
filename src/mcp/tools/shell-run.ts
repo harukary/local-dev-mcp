@@ -247,7 +247,8 @@ export async function handleShellRun(
       args.timeout_seconds,
       longRunning,
       args.credential_scope,
-      credentialEnv
+      credentialEnv,
+      chatContextId.startsWith("claude-context:") ? chatContextId : undefined
     );
 
     if ("error" in result) {
