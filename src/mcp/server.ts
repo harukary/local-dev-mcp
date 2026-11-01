@@ -19,7 +19,7 @@ import type { ShellRunner } from "../shell/runner.js";
 import type { AuditLogger } from "../audit/audit-log.js";
 import type { ToolUsageMetrics } from "../metrics/tool-usage.js";
 import { handleProjectList } from "./tools/project-list.js";
-import { handleProjectSelect } from "./tools/project-select.js";
+import { handleProjectSelect, handleMuseProjectOpen } from "./tools/project-select.js";
 import { handleProjectCurrent } from "./tools/project-current.js";
 import { handleShellRun } from "./tools/shell-run.js";
 import { handleImageRead } from "./tools/image-read.js";
@@ -32,7 +32,7 @@ import { listPendingRequests } from "../shell/approval.js";
 import { getActiveJobs, getAllJobs, getJob } from "../shell/job-manager.js";
 import { handleProjectReload } from "./tools/project-reload.js";
 import { handleSkillsList, handleSkillsRead } from "./tools/skills.js";
-import { buildToolDefinitions, buildToolSchemaSnapshot, supportsExplicitProjectScope, isClaudeContextRequired, isClaudeToolEnabled, type ClientToolProfile } from "./tool-definitions.js";
+import { buildToolDefinitions, buildToolSchemaSnapshot, supportsExplicitProjectScope, isClaudeContextRequired, isClaudeToolEnabled, isMuseProjectScopedTool, isMuseToolEnabled, type ClientToolProfile } from "./tool-definitions.js";
 import { handleClaudeProjectSelect, hashClaudeOwner, resolveClaudeContext } from "./claude-context.js";
 import { handleProjectInspect } from "./tools/dev/project-inspect.js";
 import { handleWorkspaceRead } from "./tools/dev/workspace-read.js";
@@ -54,6 +54,7 @@ import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, ha
 import { handleRepoActionList, handleRepoActionRead, handleRepoActionWrite } from "./tools/repo-action.js";
 import { hashOpenAiSubject, OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiSubjectAuthConfig, resolveOpenAiSubjectPolicy, resolveOpenAiTunnelAuthConfig, verifyOpenAiSubject, verifyOpenAiTunnelToken, type OpenAiSubjectPolicy, type OpenAiTunnelAuthConfig } from "./auth.js";
 import { createCloudflareAccessVerifier, resolveCloudflareAccessConfig } from "./cloudflare-access.js";
+import { museWorkContextId, resolveMuseAuthConfig, verifyMuseBearer, type MuseAuthConfig } from "./auth-muse.js";
 import { CLOUDFLARE_REQUEST_DIAGNOSTICS_ENV, summarizeCloudflareMcpRequest } from "./cloudflare-diagnostics.js";
 import { resolveWorkingDirectory } from "../project/working-directory.js";
 import { attachTurnRequestMeta, buildTurnPausedResponse, InteractiveTurnLeaseManager, resolveTurnLeaseKey } from "./turn-lease.js";
@@ -70,6 +71,7 @@ export interface AppContext {
   openAiSubjectPolicy?: OpenAiSubjectPolicy;
   clientProfile?: ClientToolProfile;
   claudeOwnerHash?: string;
+  museOwnerHash?: string;
 }
 
 type CallToolMeta = Record<string, unknown> & {
@@ -133,8 +135,8 @@ export function resolveRequestContextId(meta: CallToolMeta | undefined): string 
   return isObservedScheduledTaskMeta(meta) ? "chatgpt-scheduled-task:stateless" : resolveChatContextId(meta);
 }
 
-function resolveExplicitProjectScope(ctx: AppContext, name: string, args: Record<string, unknown>) {
-  if (!supportsExplicitProjectScope(name)) return { ok: true as const, projectId: undefined, seed: undefined };
+function resolveExplicitProjectScope(ctx: AppContext, name: string, args: Record<string, unknown>, force = false) {
+  if (!force && !supportsExplicitProjectScope(name)) return { ok: true as const, projectId: undefined, seed: undefined };
 
   const projectId = args.project_id;
   const workingDir = args.working_dir;
@@ -354,14 +356,23 @@ If a handle is missing, invalid or lost, select the project again and use the ne
 The MCP server enforces context ownership; do not use ChatGPT-only attachment tools.
 `.trim();
 
+const MUSE_SERVER_INSTRUCTIONS = `
+For Muse, call project.list then project.open({project_id, working_dir?}) to read project instructions.
+Pass project_id on EVERY project-scoped tool call. Use working_dir for worktrees.
+There is no selected global project or conversation context_id. Never infer a project from previous calls.
+For asynchronous shell jobs, pass the same project_id and working_dir to shell.status or shell.cancel.
+Use workspace.batch for multiple independent reads. Do not run concurrent stateful browser workflows in one project.
+`.trim();
+
 export function createMcpServer(ctx: AppContext): Server {
-  const clientProfile = ctx.clientProfile === "claude" ? "claude" : "chatgpt";
+  const clientProfile = ctx.clientProfile ?? "chatgpt";
   const isClaude = clientProfile === "claude";
+  const isMuse = clientProfile === "muse";
   const server = new Server(
     { name: "local-dev-mcp", version: "0.1.0" },
     {
       capabilities: { tools: { listChanged: true }, resources: {} },
-      instructions: isClaude ? CLAUDE_SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS,
+      instructions: isClaude ? CLAUDE_SERVER_INSTRUCTIONS : isMuse ? MUSE_SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS,
     }
   );
 
@@ -376,8 +387,15 @@ export function createMcpServer(ctx: AppContext): Server {
     const resolvedClaudeContext = isClaude
       ? resolveClaudeContext(ctx.contextStore, ctx.claudeOwnerHash, args.context_id)
       : undefined;
-    const chatContextId = isClaude ? (resolvedClaudeContext ?? "claude-bootstrap:unbound") : resolveRequestContextId(meta);
-    const statelessScheduledTask = !isClaude && isObservedScheduledTaskMeta(meta);
+    const museScope = isMuse && isMuseProjectScopedTool(name)
+      ? resolveExplicitProjectScope(ctx, name, args, true) : undefined;
+    const museContextId = museScope?.ok && museScope.projectId && ctx.museOwnerHash
+      ? museWorkContextId(ctx.museOwnerHash, museScope.projectId, museScope.seed?.workingDirectory ?? ".")
+      : undefined;
+    const chatContextId = isClaude ? (resolvedClaudeContext ?? "claude-bootstrap:unbound")
+      : isMuse ? (museContextId ?? "muse-bootstrap:unbound")
+      : resolveRequestContextId(meta);
+    const statelessScheduledTask = clientProfile === "chatgpt" && isObservedScheduledTaskMeta(meta);
     const usageStartedAt = performance.now();
     const requestBytes = Buffer.byteLength(JSON.stringify(providedArgs ?? {}));
 
@@ -391,6 +409,9 @@ export function createMcpServer(ctx: AppContext): Server {
           return await handleWorkspaceBatch(ctx, chatContextId, args as { requests?: ReadBatchItem[]; max_bytes?: number; detail?: "compact" | "full" });
         case "project.list":
           return await handleProjectList(ctx, chatContextId);
+
+        case "project.open":
+          return await handleMuseProjectOpen(ctx, args as { project_id: string; working_dir?: string });
 
         case "project.select":
           if (isClaude) {
@@ -684,26 +705,27 @@ export function createMcpServer(ctx: AppContext): Server {
           };
         }
       };
-      const toolEnabled = !isClaude || isClaudeToolEnabled(name);
+      const toolEnabled = isClaude ? isClaudeToolEnabled(name) : isMuse ? isMuseToolEnabled(name) : name !== "project.open";
       const missingContext = isClaude && isClaudeContextRequired(name) && args.context_id === undefined;
       const unresolvedContext = isClaude && isClaudeContextRequired(name) && !resolvedClaudeContext;
       const invalid = toolEnabled ? validateToolInput(name, args, clientProfile) : undefined;
-      const turnLeaseKey = isClaude || statelessScheduledTask ? undefined : resolveTurnLeaseKey(chatContextId, meta);
+      const turnLeaseKey = isClaude || isMuse || statelessScheduledTask ? undefined : resolveTurnLeaseKey(chatContextId, meta);
       const turnLease = turnLeaseKey ? ctx.turnLeaseManager.check(turnLeaseKey) : undefined;
       const explicitScope = !isClaude && !invalid ? resolveExplicitProjectScope(ctx, name, args) : undefined;
       const scopeRequired = !invalid && statelessScheduledTask && supportsExplicitProjectScope(name) && explicitScope?.ok && !explicitScope.projectId;
+      const museScopeRequired = isMuse && !invalid && isMuseProjectScopedTool(name) && museScope?.ok && !museScope.projectId;
       const contextProject = isClaude && resolvedClaudeContext ? ctx.contextStore.getCurrentProject(chatContextId) : undefined;
       const contextDirectory = isClaude && resolvedClaudeContext ? ctx.contextStore.getWorkingDirectory(chatContextId) ?? "." : undefined;
       const scopeConflict = isClaude && resolvedClaudeContext && name !== "project.select" && supportsExplicitProjectScope(name) && (
         (args.project_id !== undefined && args.project_id !== contextProject)
         || (args.working_dir !== undefined && args.working_dir !== contextDirectory)
       );
-      const ownedJob = isClaude && (name === "shell.status" || name === "shell.cancel")
+      const ownedJob = (isClaude || isMuse) && (name === "shell.status" || name === "shell.cancel")
         ? (typeof args.job_id === "string" ? getJob(args.job_id)
           : typeof args.pid === "number" ? getAllJobs().find((job) => job.pid === args.pid && job.status === "running")
           : undefined)
         : undefined;
-      const jobAccessDenied = isClaude && (name === "shell.status" || name === "shell.cancel")
+      const jobAccessDenied = (isClaude || isMuse) && (name === "shell.status" || name === "shell.cancel")
         && (args.job_id !== undefined || args.pid !== undefined)
         && ownedJob?.ownerContextId !== chatContextId;
       // The public handle belongs to the authenticated dispatcher, never to tool implementations.
@@ -743,8 +765,14 @@ export function createMcpServer(ctx: AppContext): Server {
           "PROJECT_SCOPE_REQUIRED",
           "This ChatGPT Scheduled Task call is stateless. Pass project_id and optional working_dir directly on every project-scoped tool call."
         );
-      } else if (statelessScheduledTask || explicitScope?.seed) {
-        result = await ctx.contextStore.withTemporaryContext(chatContextId, explicitScope?.seed ?? {}, executeTool);
+      } else if (museScope && !museScope.ok) {
+        result = museScope.result;
+      } else if (museScopeRequired) {
+        result = jsonError("PROJECT_SCOPE_REQUIRED", "Muse requires project_id on every project-scoped tool call.");
+      } else if (isMuse && isMuseProjectScopedTool(name) && !museContextId) {
+        result = jsonError("MUSE_CONTEXT_UNAVAILABLE", "Verified Muse identity and project scope are required.");
+      } else if (statelessScheduledTask || explicitScope?.seed || museScope?.seed) {
+        result = await ctx.contextStore.withTemporaryContext(chatContextId, museScope?.seed ?? explicitScope?.seed ?? {}, executeTool);
       } else {
         result = await executeTool();
       }
@@ -793,7 +821,8 @@ export function createMcpServer(ctx: AppContext): Server {
       const structuredResponseBytes = result?.structuredContent ? Buffer.byteLength(JSON.stringify(result.structuredContent)) : 0;
       ctx.toolUsageMetrics.record({
         tool: name,
-        project_id: explicitScope?.ok && explicitScope.projectId
+        project_id: museScope?.ok && museScope.projectId ? museScope.projectId
+          : explicitScope?.ok && explicitScope.projectId
           ? explicitScope.projectId
           : statelessScheduledTask
             ? undefined
@@ -811,7 +840,8 @@ export function createMcpServer(ctx: AppContext): Server {
     } catch (err) {
       ctx.toolUsageMetrics.record({
         tool: name,
-        project_id: statelessScheduledTask
+        project_id: isMuse && museScope?.ok ? museScope.projectId
+          : statelessScheduledTask
           ? (supportsExplicitProjectScope(name) && typeof args.project_id === "string" ? args.project_id : undefined)
           : ctx.contextStore.getCurrentProject(chatContextId),
         duration_ms: performance.now() - usageStartedAt,
@@ -837,7 +867,7 @@ export function createMcpServer(ctx: AppContext): Server {
   }));
 
   server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
-    if (isClaude) return { resources: [] };
+    if (isClaude || isMuse) return { resources: [] };
     const meta = request.params?._meta as CallToolMeta | undefined;
     const authorized = resolveOpenAiAuthorization(meta, ctx.allowedOpenAiSubject).authorized;
     if (ctx.openAiSubjectPolicy || ctx.allowedOpenAiSubject) {
@@ -870,7 +900,7 @@ export function createMcpServer(ctx: AppContext): Server {
   }));
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    if (isClaude) throw new Error("Claude resources are unavailable without a context-bound resource contract.");
+    if (isClaude || isMuse) throw new Error("Resources are unavailable for this MCP client profile.");
     const meta = request.params._meta as CallToolMeta | undefined;
     await requireAuthorizedOpenAiSubject(ctx, meta, "resources/read");
     const uri = request.params.uri;
@@ -989,12 +1019,14 @@ export function isAllowedHttpHost(hostHeader: string | string[] | undefined): bo
   return host !== null && LOCAL_HOSTS.has(host);
 }
 
-function requireLoopbackHost(
+export function requireLoopbackHost(
   req: express.Request,
   res: express.Response,
-  next: express.NextFunction
+  next: express.NextFunction,
+  museConfig?: MuseAuthConfig
 ): void {
-  if (isAllowedHttpHost(req.headers.host)) {
+  if (isAllowedHttpHost(req.headers.host) ||
+      (museConfig && req.headers.host?.toLowerCase() === museConfig.host && req.path === "/mcp")) {
     next();
     return;
   }
@@ -1005,11 +1037,25 @@ function requireLoopbackHost(
   });
 }
 
-function buildHttpAuthMiddleware(
+export function buildHttpAuthMiddleware(
   authConfig: OpenAiTunnelAuthConfig,
-  verifyCloudflareAccessJwt?: (jwt: string) => Promise<{ subject: string }>
+  verifyCloudflareAccessJwt?: (jwt: string) => Promise<{ subject: string }>,
+  museConfig?: MuseAuthConfig
 ): express.RequestHandler {
   return (req, res, next) => {
+    if (museConfig && req.headers.host?.toLowerCase() === museConfig.host) {
+      if (req.headers[OPENAI_TUNNEL_HEADER_NAME] !== undefined ||
+          req.headers["cf-access-jwt-assertion"] !== undefined ||
+          !verifyMuseBearer(req.headers.authorization, museConfig)) {
+        res.setHeader("Cache-Control", "no-store");
+        res.status(401).json({ error: "invalid_muse_token" });
+        return;
+      }
+      res.locals.museAuthorized = true;
+      res.locals.museOwnerHash = museConfig.ownerHash;
+      next();
+      return;
+    }
     if (verifyOpenAiTunnelToken(req.headers[OPENAI_TUNNEL_HEADER_NAME], authConfig.token)) {
       next();
       return;
@@ -1060,12 +1106,13 @@ export async function startHttpServer(configPath: string, port: number): Promise
   const verifyCloudflareAccessJwt = cloudflareAccessConfig
     ? createCloudflareAccessVerifier(cloudflareAccessConfig)
     : undefined;
-  const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig, verifyCloudflareAccessJwt);
+  const museConfig = resolveMuseAuthConfig();
+  const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig, verifyCloudflareAccessJwt, museConfig);
   const cloudflareDiagnosticsEnabled = process.env[CLOUDFLARE_REQUEST_DIAGNOSTICS_ENV] === "1";
   const ctx = await createAppContext(configPath, subjectAuthConfig?.subject, subjectPolicy);
   const browserLifecycle = await createBrowserLifecycleService();
   const app = express();
-  app.use(requireLoopbackHost);
+  app.use((req, res, next) => requireLoopbackHost(req, res, next, museConfig));
   app.use((req, _res, next) => {
     const method = req.method;
     const sanitizedUrl = sanitizeRequestUrlForLog(req.url);
@@ -1103,7 +1150,15 @@ export async function startHttpServer(configPath: string, port: number): Promise
     if (cloudflareDiagnosticsEnabled && res.locals.cloudflareAccessAuthorized) {
       console.error("[Cloudflare MCP metadata] " + JSON.stringify(summarizeCloudflareMcpRequest(req.headers, res.locals.mcpParsed)));
     }
-    const requestContext: AppContext = res.locals.cloudflareAccessAuthorized
+    const requestContext: AppContext = res.locals.museAuthorized
+      ? {
+          ...ctx,
+          allowedOpenAiSubject: undefined,
+          openAiSubjectPolicy: undefined,
+          clientProfile: "muse",
+          museOwnerHash: res.locals.museOwnerHash as string,
+        }
+      : res.locals.cloudflareAccessAuthorized
       ? {
           ...ctx,
           allowedOpenAiSubject: undefined,
@@ -1147,6 +1202,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
 
   console.error(`[OpenAI Tunnel] Local MCP authentication enabled via ${OPENAI_TUNNEL_HEADER_NAME}.`);
   if (cloudflareAccessConfig) console.error("[Cloudflare Access] JWT authentication enabled for Claude MCP clients.");
+  if (museConfig) console.error("[Muse] Dedicated authenticated tailnet endpoint enabled.");
   if (cloudflareDiagnosticsEnabled) console.error("[Cloudflare MCP metadata] Safe request diagnostics enabled for authenticated Cloudflare clients.");
   if (subjectPolicy === "enforce") {
     console.error("[OpenAI Tunnel] ChatGPT subject allowlist enabled for HTTP MCP tool and resource access.");

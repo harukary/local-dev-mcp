@@ -33,7 +33,7 @@ Each project can define:
 Important runtime rules:
 
 - HTTP MCP binds to `127.0.0.1` only.
-- HTTP requests accept loopback `Host` values only.
+- HTTP requests accept loopback `Host` values only, except the configured exact Muse tailnet `Host:port` on `/mcp`, which requires separate Muse Bearer authentication.
 - ChatGPT HTTP requests require `X-Local-Dev-MCP-Tunnel-Token`; the independently configured Claude path requires a verified Cloudflare Access JWT with a user subject.
 - ChatGPT tool calls and resource reads also require `openai/subject` to match the local allowlist when that policy is enabled.
 - The local tunnel token is shared only between `tunnel-client` and `local-dev-mcp`.
@@ -43,7 +43,7 @@ Important runtime rules:
 - denied-path checks apply to file reads, writes, artifact transfer, and project-scoped operations.
 - raw artifact bytes and temporary file download URLs are not written to normal audit logs.
 
-The stdio transport remains available for local MCP clients. HTTP requires the OpenAI Secure Tunnel token on the ChatGPT path; an explicitly configured Cloudflare Access JWT verification path independently authenticates Claude. Each authenticated client receives its own tool schema, without weakening ChatGPT authorization. See [Claude through Cloudflare Access](docs/claude-cloudflare-access.md) and [Claude work contexts](docs/claude-work-context-design.md).
+The stdio transport remains available for local MCP clients. HTTP requires the OpenAI Secure Tunnel token on the ChatGPT path; an explicitly configured Cloudflare Access JWT verification path independently authenticates Claude. Muse may use an additional private Tailscale Serve HTTPS endpoint with its own Bearer token and project-explicit tool schema. Each authenticated client receives its own tool contract without weakening ChatGPT authorization. See [Claude through Cloudflare Access](docs/claude-cloudflare-access.md), [Claude work contexts](docs/claude-work-context-design.md), and [Muse over Tailscale](docs/muse-tailscale-mcp.md).
 
 ## ChatGPT Approvals
 

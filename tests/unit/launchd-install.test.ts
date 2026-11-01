@@ -122,6 +122,37 @@ describe("launchd installer", () => {
     expect(tunnel).not.toContain("LOCAL_DEV_MCP_CLOUDFLARE");
   });
 
+  it("adds only private Muse file path and exact tailnet Host to the server agent", () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-launchd-muse-"));
+    tempDirs.push(tempDir);
+    const command = [path.resolve("scripts/install-launchd.sh"), "--install-only"];
+    const baseEnv = {
+      ...process.env,
+      HOME: tempDir,
+      LOCAL_DEV_MCP_LAUNCH_AGENTS_DIR: tempDir,
+      LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: "test.local-dev-mcp",
+      LOCAL_DEV_MCP_MUSE_HOST: "mac.example-tailnet.ts.net:10000",
+      LOCAL_DEV_MCP_MUSE_TOKEN_FILE: path.join(tempDir, "private", "muse-token"),
+    };
+    const invalid = spawnSync("/bin/bash", command, {
+      cwd: path.resolve("."),
+      env: { ...baseEnv, LOCAL_DEV_MCP_MUSE_TOKEN_FILE: "" },
+      encoding: "utf8",
+    });
+    expect(invalid.status).toBe(1);
+    expect(invalid.stderr).toContain("requires both");
+    const result = spawnSync("/bin/bash", command, { cwd: path.resolve("."), env: baseEnv, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    const server = readFileSync(path.join(tempDir, "test.local-dev-mcp.server.plist"), "utf8");
+    const tunnel = readFileSync(path.join(tempDir, "test.local-dev-mcp.openai-tunnel-personal.plist"), "utf8");
+    expect(server).toContain("<key>LOCAL_DEV_MCP_MUSE_HOST</key>");
+    expect(server).toContain("<string>mac.example-tailnet.ts.net:10000</string>");
+    expect(server).toContain("<key>LOCAL_DEV_MCP_MUSE_TOKEN_FILE</key>");
+    expect(server).toContain(baseEnv.LOCAL_DEV_MCP_MUSE_TOKEN_FILE);
+    expect(server).not.toContain("Bearer ");
+    expect(tunnel).not.toContain("LOCAL_DEV_MCP_MUSE_");
+  });
+
   it("adds an optional Cloudflare Tunnel LaunchAgent with token-file only", () => {
     const tempDir = mkdtempSync(path.join(tmpdir(), "local-dev-mcp-launchd-cloudflare-tunnel-"));
     tempDirs.push(tempDir);

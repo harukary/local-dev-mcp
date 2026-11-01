@@ -7,7 +7,8 @@ import { buildRepoActionToolDefinitions } from "./repo-action-tool-definitions.j
 
 export const TOOL_SCHEMA_VERSION = "2026-10-28.1";
 export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-01.1";
-export type ClientToolProfile = "chatgpt" | "claude";
+export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-02.1";
+export type ClientToolProfile = "chatgpt" | "claude" | "muse";
 
 const CLAUDE_HIDDEN_TOOLS = new Set(["artifact.receive", "artifact.link"]);
 const CLAUDE_CONTEXT_FREE_TOOLS = new Set([
@@ -66,6 +67,21 @@ const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
 
 export function supportsExplicitProjectScope(name: string): boolean {
   return EXPLICIT_PROJECT_SCOPE_TOOLS.has(name);
+}
+
+const MUSE_HIDDEN_TOOLS = new Set([
+  "project.select", "project.current", "project.reload",
+  "artifact.link", "artifact.receive",
+  "shell.approve", "shell.reject", "shell.pending",
+]);
+
+export function isMuseToolEnabled(name: string): boolean {
+  return name === "project.open" || !MUSE_HIDDEN_TOOLS.has(name);
+}
+
+export function isMuseProjectScopedTool(name: string): boolean {
+  return supportsExplicitProjectScope(name) || name.startsWith("browser.") ||
+    name.startsWith("mobile.") || name === "shell.status" || name === "shell.cancel";
 }
 
 function addExplicitProjectScope<T extends { name: string; inputSchema: Record<string, any> }>(tool: T): T {
@@ -475,7 +491,34 @@ export function buildToolDefinitions(profile: ClientToolProfile = "chatgpt"): To
     },
   ];
   const base = tools.map(addExplicitProjectScope);
-  if (profile !== "claude") return base as Tool[];
+  if (profile === "chatgpt") return base as Tool[];
+  if (profile === "muse") {
+    const scoped = base.filter((tool) => isMuseToolEnabled(tool.name)).map((tool) => {
+      if (!isMuseProjectScopedTool(tool.name)) return tool;
+      return {
+        ...tool,
+        description: tool.description + " Muse: project_id is required for every call; working_dir is optional. No persistent selected project.",
+        inputSchema: {
+          ...tool.inputSchema,
+          properties: {
+            ...tool.inputSchema.properties,
+            project_id: { type: "string", description: "Required registered project ID." },
+            working_dir: { type: "string", description: "Optional project-relative directory or worktree." },
+          },
+          required: [...new Set([...(tool.inputSchema.required ?? []), "project_id"])],
+        },
+      };
+    });
+    return [...scoped, {
+      name: "project.open",
+      description: "Read project instructions and working-directory information without selecting global state. Supply project_id to each subsequent project tool call.",
+      inputSchema: { type: "object", properties: {
+        project_id: { type: "string", description: "Registered project ID." },
+        working_dir: { type: "string", description: "Optional project-relative worktree directory." },
+      }, required: ["project_id"], additionalProperties: false },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    }] as Tool[];
+  }
   const claudeTools = base.filter((tool) => isClaudeToolEnabled(tool.name)).map((tool) => {
     if (tool.name === "project.select") {
       return {
@@ -510,7 +553,7 @@ export function buildToolDefinitions(profile: ClientToolProfile = "chatgpt"): To
 export function buildToolSchemaSnapshot(options: { prefix?: string; detail?: "summary" | "full" } = {}, profile: ClientToolProfile = "chatgpt") {
   const tools = buildToolDefinitions(profile).filter(tool => !options.prefix || tool.name.startsWith(options.prefix));
   return {
-    schema_version: profile === "claude" ? CLAUDE_TOOL_SCHEMA_VERSION : TOOL_SCHEMA_VERSION,
+    schema_version: profile === "claude" ? CLAUDE_TOOL_SCHEMA_VERSION : profile === "muse" ? MUSE_TOOL_SCHEMA_VERSION : TOOL_SCHEMA_VERSION,
     generated_at: new Date().toISOString(),
     tools: options.detail === "summary" ? tools.map(tool => ({ name: tool.name, description: tool.description })) : tools,
   };

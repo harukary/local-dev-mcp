@@ -156,6 +156,34 @@ function selectedText(data: RecordValue): string | undefined {
   return lines.join("\n");
 }
 
+function museProjectText(data: RecordValue): string | undefined {
+  if (!knownFields(data, [
+    "project_id", "display_name", "project_root", "working_dir", "cwd", "sandbox_type", "agent_instructions",
+  ]) || typeof data.project_id !== "string" || typeof data.working_dir !== "string" ||
+    typeof data.cwd !== "string") return undefined;
+  const lines = [
+    "Project: " + data.project_id,
+    "Working directory: " + data.working_dir,
+    "CWD: " + data.cwd,
+  ];
+  if (data.agent_instructions === null) return [...lines, "", "Agent instructions: none"].join("\n");
+  const agent = record(data.agent_instructions);
+  if (!agent || !knownFields(agent, ["path", "content", "truncated", "sources"]) ||
+      typeof agent.content !== "string" || !Array.isArray(agent.sources) ||
+      typeof agent.truncated !== "boolean") return undefined;
+  const sources: string[] = [];
+  for (const item of agent.sources) {
+    const source = record(item);
+    if (!source || !knownFields(source, ["scope", "path", "truncated"]) ||
+        typeof source.scope !== "string" || typeof source.path !== "string" ||
+        typeof source.truncated !== "boolean") return undefined;
+    sources.push(source.scope + ": " + source.path + (source.truncated ? " [truncated]" : ""));
+  }
+  lines.push("", "Agent instructions from:", ...sources, "", agent.content);
+  if (agent.truncated) lines.push("[Agent instructions truncated at source]");
+  return lines.join("\n");
+}
+
 function batchText(data: RecordValue): string | undefined {
   if (!knownFields(data, ["results"]) || !Array.isArray(data.results)) return undefined;
   const parts: string[] = [];
@@ -189,7 +217,7 @@ export function adaptMcpToolResult(
   profile: ClientToolProfile, name: string,
   args: Record<string, unknown>, result: Result
 ): Result {
-  if (profile !== "claude" || result.isError || !Array.isArray(result.content) ||
+  if (profile === "chatgpt" || result.isError || !Array.isArray(result.content) ||
       result.content.some((item) => item.type !== "text")) return result;
   if (!knownFields(result as RecordValue, ["structuredContent", "content", "isError"])) return result;
   const data = record(result.structuredContent);
@@ -199,7 +227,8 @@ export function adaptMcpToolResult(
     : name === "workspace.search" ? searchText(data)
     : name === "workspace.list" ? listText(data)
     : name === "skills.read" ? skillText(data)
-    : name === "project.select" ? selectedText(data)
+    : name === "project.select" && profile === "claude" ? selectedText(data)
+    : name === "project.open" && profile === "muse" ? museProjectText(data)
     : name === "workspace.batch" && args.detail !== "full" ? batchText(data)
     : undefined;
   return formatted === undefined ? result : textOnly(formatted);

@@ -159,6 +159,14 @@ fi
 if [ "${LOCAL_DEV_MCP_CLOUDFLARE_REQUEST_DIAGNOSTICS:-0}" = "1" ]; then
   SERVER_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_CLOUDFLARE_REQUEST_DIAGNOSTICS" "1")"
 fi
+if [ -n "${LOCAL_DEV_MCP_MUSE_HOST:-}" ] || [ -n "${LOCAL_DEV_MCP_MUSE_TOKEN_FILE:-}" ]; then
+  if [ -z "${LOCAL_DEV_MCP_MUSE_HOST:-}" ] || [ -z "${LOCAL_DEV_MCP_MUSE_TOKEN_FILE:-}" ]; then
+    echo "Muse requires both LOCAL_DEV_MCP_MUSE_HOST and LOCAL_DEV_MCP_MUSE_TOKEN_FILE." >&2
+    exit 1
+  fi
+  SERVER_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_MUSE_HOST" "$LOCAL_DEV_MCP_MUSE_HOST")"
+  SERVER_EXTRA_ENV+="$(env_entry "LOCAL_DEV_MCP_MUSE_TOKEN_FILE" "$LOCAL_DEV_MCP_MUSE_TOKEN_FILE")"
+fi
 write_agent "$SERVER_LABEL" "$SERVER_LABEL_XML" "server.sh" "mcp-server.log" "$SERVER_EXTRA_ENV"
 
 if is_enabled "$PERSONAL_TUNNEL_ENABLE"; then

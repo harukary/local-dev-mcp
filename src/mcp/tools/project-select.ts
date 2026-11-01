@@ -114,6 +114,27 @@ function jsonError(code: string, message: string, details?: Record<string, unkno
   };
 }
 
+export async function handleMuseProjectOpen(
+  ctx: AppContext,
+  args: { project_id: string; working_dir?: string }
+) {
+  const project = ctx.registry.get(args.project_id);
+  if (!project) return jsonError("PROJECT_NOT_FOUND", "Unknown project.", {
+    available_projects: ctx.registry.getAll().map((p) => p.projectId),
+  });
+  const working = resolveWorkingDirectory(project, args.working_dir);
+  if (!working.ok) return jsonError(working.code, working.message);
+  return jsonResult({
+    project_id: project.projectId,
+    display_name: project.displayName,
+    project_root: project.hostRoot,
+    working_dir: working.relativePath,
+    cwd: working.hostRoot,
+    sandbox_type: project.sandboxType,
+    agent_instructions: await readAgentInstructions(project.hostRoot, working.hostRoot),
+  });
+}
+
 export async function handleProjectSelect(
   ctx: AppContext,
   chatContextId: string,
