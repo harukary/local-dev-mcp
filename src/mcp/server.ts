@@ -52,6 +52,7 @@ import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, ha
 import { handleRepoActionList, handleRepoActionRead, handleRepoActionWrite } from "./tools/repo-action.js";
 import { hashOpenAiSubject, OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiSubjectAuthConfig, resolveOpenAiSubjectPolicy, resolveOpenAiTunnelAuthConfig, verifyOpenAiSubject, verifyOpenAiTunnelToken, type OpenAiSubjectPolicy, type OpenAiTunnelAuthConfig } from "./auth.js";
 import { createCloudflareAccessVerifier, resolveCloudflareAccessConfig } from "./cloudflare-access.js";
+import { CLOUDFLARE_REQUEST_DIAGNOSTICS_ENV, summarizeCloudflareMcpRequest } from "./cloudflare-diagnostics.js";
 import { resolveWorkingDirectory } from "../project/working-directory.js";
 import { attachTurnRequestMeta, buildTurnPausedResponse, InteractiveTurnLeaseManager, resolveTurnLeaseKey } from "./turn-lease.js";
 
@@ -998,6 +999,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
     ? createCloudflareAccessVerifier(cloudflareAccessConfig)
     : undefined;
   const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig, verifyCloudflareAccessJwt);
+  const cloudflareDiagnosticsEnabled = process.env[CLOUDFLARE_REQUEST_DIAGNOSTICS_ENV] === "1";
   const ctx = await createAppContext(configPath, subjectAuthConfig?.subject, subjectPolicy);
   const browserLifecycle = await createBrowserLifecycleService();
   const app = express();
@@ -1036,6 +1038,9 @@ export async function startHttpServer(configPath: string, port: number): Promise
   }
 
   app.post("/mcp", requireHttpAuth, express.raw({ type: "*/*", limit: MCP_HTTP_MAX_REQUEST_BYTES }), parseAndLimitMcpRequest, (req, res) => {
+    if (cloudflareDiagnosticsEnabled && res.locals.cloudflareAccessAuthorized) {
+      console.error("[Cloudflare MCP metadata] " + JSON.stringify(summarizeCloudflareMcpRequest(req.headers, res.locals.mcpParsed)));
+    }
     const requestContext = res.locals.cloudflareAccessAuthorized
       ? { ...ctx, allowedOpenAiSubject: undefined, openAiSubjectPolicy: undefined }
       : ctx;
@@ -1074,6 +1079,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
 
   console.error(`[OpenAI Tunnel] Local MCP authentication enabled via ${OPENAI_TUNNEL_HEADER_NAME}.`);
   if (cloudflareAccessConfig) console.error("[Cloudflare Access] JWT authentication enabled for Claude MCP clients.");
+  if (cloudflareDiagnosticsEnabled) console.error("[Cloudflare MCP metadata] Safe request diagnostics enabled for authenticated Cloudflare clients.");
   if (subjectPolicy === "enforce") {
     console.error("[OpenAI Tunnel] ChatGPT subject allowlist enabled for HTTP MCP tool and resource access.");
   } else {

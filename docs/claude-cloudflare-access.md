@@ -36,6 +36,14 @@ When using the repository's launchd installer, supply both values as part of `pn
 
 The Cloudflare authentication path is opt-in: with neither variable set, the original OpenAI-only HTTP behavior remains active. Supplying only one variable is an error.
 
+## Inspecting Claude request metadata
+
+Set `LOCAL_DEV_MCP_CLOUDFLARE_REQUEST_DIAGNOSTICS=1` when running `scripts/install-launchd.sh --activate` to enable metadata diagnostics for **successfully authenticated Cloudflare POST /mcp requests only**. The default is off. The existing rotating `logs/mcp-server.log` (mode 0600) records one `[Cloudflare MCP metadata]` entry per request. Diagnose the client in a new Claude conversation after activation; historical headers and metadata were not captured.
+
+Entries include the MCP method, available HTTP **header names** (not values), fingerprinted request/session-like header values, shapes and key names of top-level and `params._meta`, and the initialize client information shapes. String values are recorded as length and a short process-keyed HMAC fingerprint, enabling comparisons between calls in the same server process without storing the value. The process-local fingerprint key is not persisted, so fingerprints change after restart. Sensitive headers such as tokens, authorization, assertions and cookies are never fingerprinted. Tool arguments, prompt bodies, raw header values, IP addresses and JWT contents are never written by this diagnostic.
+
+After collecting enough observations, deactivate it by regenerating/activating launchd without that environment variable. This is **diagnostic observation**, not a guarantee that Claude sends a stable conversation identifier; do not infer conversation isolation solely from a matching user-agent or access token.
+
 ## Verification
 
 - Confirm the Access application's hostname, restrictive policy, audience, Managed OAuth state, and Claude's allowed callback URI.

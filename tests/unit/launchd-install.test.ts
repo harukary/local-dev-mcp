@@ -95,6 +95,7 @@ describe("launchd installer", () => {
       LOCAL_DEV_MCP_LAUNCHD_LABEL_PREFIX: "test.local-dev-mcp",
       LOCAL_DEV_MCP_CLOUDFLARE_TEAM_DOMAIN: "example.cloudflareaccess.com",
       LOCAL_DEV_MCP_CLOUDFLARE_AUDIENCE: "a".repeat(64),
+      LOCAL_DEV_MCP_CLOUDFLARE_REQUEST_DIAGNOSTICS: "1",
     };
     const command = [path.resolve("scripts/install-launchd.sh"), "--install-only"];
     const missingAudience = spawnSync("/bin/bash", command, {
@@ -117,6 +118,7 @@ describe("launchd installer", () => {
     expect(server).toContain("<string>example.cloudflareaccess.com</string>");
     expect(server).toContain("<key>LOCAL_DEV_MCP_CLOUDFLARE_AUDIENCE</key>");
     expect(server).toContain("<string>" + "a".repeat(64) + "</string>");
+    expect(server).toContain("<key>LOCAL_DEV_MCP_CLOUDFLARE_REQUEST_DIAGNOSTICS</key>");
     expect(tunnel).not.toContain("LOCAL_DEV_MCP_CLOUDFLARE");
   });
 
