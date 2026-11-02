@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CredentialScope, ProjectConfig, RiskLevel } from "../types.js";
 import { classifyRisk, isCatastrophicCommand } from "./risk-classifier.js";
@@ -303,8 +303,12 @@ function persistJob(job: Job, allowRunning = false): void {
   }
 
   try {
-    mkdirSync(JOB_STORE_DIR, { recursive: true });
-    writeFileSync(persistedJobPath(job.id), JSON.stringify(toPersistedJob(job), null, 2), "utf-8");
+    mkdirSync(JOB_STORE_DIR, { recursive: true, mode: 0o700 });
+    chmodSync(JOB_STORE_DIR, 0o700);
+    const path = persistedJobPath(job.id);
+    try { chmodSync(path, 0o600); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    writeFileSync(path, JSON.stringify(toPersistedJob(job), null, 2), { encoding: "utf8", mode: 0o600 });
   } catch {
     // Best-effort persistence: shell.status should still work from memory.
   }
@@ -334,12 +338,15 @@ function readPersistedJob(jobId: string): Job | undefined {
 
 function cleanupOldPersistedJobs(now = Date.now()): void {
   try {
+    mkdirSync(JOB_STORE_DIR, { recursive: true, mode: 0o700 });
+    chmodSync(JOB_STORE_DIR, 0o700);
     for (const entry of readdirSync(JOB_STORE_DIR, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) {
         continue;
       }
 
       const filePath = join(JOB_STORE_DIR, entry.name);
+      chmodSync(filePath, 0o600);
       const ageMs = now - statSync(filePath).mtimeMs;
       if (ageMs >= PERSISTED_JOB_RETENTION_MS) {
         rmSync(filePath, { force: true });

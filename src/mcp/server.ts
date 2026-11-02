@@ -32,7 +32,7 @@ import { listPendingRequests } from "../shell/approval.js";
 import { getActiveJobs, getAllJobs, getJob } from "../shell/job-manager.js";
 import { handleProjectReload } from "./tools/project-reload.js";
 import { handleSkillsList, handleSkillsRead } from "./tools/skills.js";
-import { buildToolDefinitions, buildToolSchemaSnapshot, supportsExplicitProjectScope, isClaudeContextRequired, isClaudeToolEnabled, isMuseProjectScopedTool, isMuseToolEnabled, type ClientToolProfile } from "./tool-definitions.js";
+import { buildToolDefinitions, buildToolSchemaSnapshot, supportsExplicitProjectScope, isClaudeContextRequired, isMuseProjectScopedTool, isClientToolEnabled, type ClientToolProfile } from "./tool-definitions.js";
 import { handleClaudeProjectSelect, hashClaudeOwner, resolveClaudeContext } from "./claude-context.js";
 import { handleProjectInspect } from "./tools/dev/project-inspect.js";
 import { handleWorkspaceRead } from "./tools/dev/workspace-read.js";
@@ -350,7 +350,7 @@ For substantive work on a project:
 const CLAUDE_SERVER_INSTRUCTIONS = `
 For Claude.ai, start each independent work context with project.select({project_id, working_dir?}) and keep the returned context_id.
 Pass that context_id unchanged on EVERY subsequent project-scoped tool call, including browser, workspace, git, mobile, shell and project.current.
-To switch projects within the same work context, call project.select({context_id, project_id, working_dir?}).
+A work context stays bound to its original project and working directory. To change either, call project.select without context_id to create a new work context.
 A fresh project.select without context_id creates a separate work context; never guess or reuse another chat's handle.
 If a handle is missing, invalid or lost, select the project again and use the newly returned ID.
 The MCP server enforces context ownership; do not use ChatGPT-only attachment tools.
@@ -705,9 +705,7 @@ export function createMcpServer(ctx: AppContext): Server {
           };
         }
       };
-      const toolEnabled = isClaude ? name !== "project.open" && isClaudeToolEnabled(name)
-        : isMuse ? isMuseToolEnabled(name)
-        : name !== "project.open";
+      const toolEnabled = isClientToolEnabled(clientProfile, name);
       const missingContext = isClaude && isClaudeContextRequired(name) && args.context_id === undefined;
       const unresolvedContext = isClaude && isClaudeContextRequired(name) && !resolvedClaudeContext;
       const invalid = toolEnabled ? validateToolInput(name, args, clientProfile) : undefined;

@@ -161,6 +161,31 @@ export async function handleWorkspacePatch(ctx: AppContext, chatContextId: strin
     }
   });
   queues.set(queueKey, operation);
-  try { return await operation; }
-  finally { if (queues.get(queueKey) === operation) queues.delete(queueKey); }
+  try {
+    const result = await operation;
+    const data = result.structuredContent as {
+      error?: { code?: string }; dry_run?: boolean; changed_files?: string[];
+    };
+    const errorCode = data.error?.code;
+    try {
+      await ctx.auditLogger.log({
+        timestamp: new Date().toISOString(),
+        chatContextId,
+        tool: "workspace.patch",
+        clientProfile: ctx.clientProfile ?? "chatgpt",
+        event: errorCode ? "workspace_patch_failed" : data.dry_run ? "workspace_patch_previewed" : "workspace_patch_applied",
+        projectId: project.projectId,
+        cwd: project.hostRoot,
+        changedPaths: data.changed_files ?? [],
+        ...(errorCode ? { error: errorCode } : {}),
+      });
+    } catch (error) {
+      // The file operation already completed. Never report it as failed only
+      // because the audit append failed afterward.
+      console.error("[workspace.patch] Audit append failed:", error);
+    }
+    return result;
+  } finally {
+    if (queues.get(queueKey) === operation) queues.delete(queueKey);
+  }
 }

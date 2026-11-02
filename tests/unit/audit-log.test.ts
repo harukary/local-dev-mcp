@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AuditLogger } from "../../src/audit/audit-log.js";
@@ -34,6 +34,8 @@ describe("AuditLogger", () => {
     const parsed = JSON.parse(content);
     expect(parsed.tool).toBe("shell.run");
     expect(parsed.command).toBe("ls -la");
+    expect(statSync(logPath).mode & 0o777).toBe(0o600);
+    expect(statSync(tmpDir).mode & 0o777).toBe(0o700);
   });
 
   it("appends multiple entries", async () => {
@@ -69,5 +71,30 @@ describe("AuditLogger", () => {
     expect(existsSync(`${rotatingPath}.1`)).toBe(true);
     expect(readFileSync(rotatingPath, "utf8")).toContain("2026-01-01T00:00:04.000Z");
     expect(readFileSync(`${rotatingPath}.1`, "utf8")).toContain("2026-01-01T00:00:03.000Z");
+    expect(statSync(rotatingPath).mode & 0o777).toBe(0o600);
+    expect(statSync(`${rotatingPath}.1`).mode & 0o777).toBe(0o600);
+  });
+
+  it("tightens existing audit and rotated-log permissions before new writes", () => {
+    const dir = join(tmpDir, "old-audit");
+    mkdirSync(dir, { mode: 0o755 });
+    chmodSync(dir, 0o755);
+    const existing = join(dir, "audit.jsonl");
+    writeFileSync(existing, "old data\n", { mode: 0o644 });
+    writeFileSync(`${existing}.1`, "older data\n", { mode: 0o644 });
+    const logger = new AuditLogger(existing);
+    expect(logger).toBeInstanceOf(AuditLogger);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(statSync(existing).mode & 0o777).toBe(0o600);
+    expect(statSync(`${existing}.1`).mode & 0o777).toBe(0o600);
+  });
+
+  it("rejects audit paths that are symbolic links", () => {
+    const target = join(tmpDir, "target");
+    const link = join(tmpDir, "link.jsonl");
+    writeFileSync(target, "protected\n");
+    symlinkSync(target, link);
+    expect(() => new AuditLogger(link)).toThrow("regular file");
+    expect(readFileSync(target, "utf8")).toBe("protected\n");
   });
 });

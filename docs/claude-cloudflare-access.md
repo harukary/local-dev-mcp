@@ -53,7 +53,7 @@ After collection, deactivate diagnostics by regenerating and activating the Laun
 
 ## Claude project and work-context selection
 
-Claude does not send a verified chat ID. After connecting, start a work context with `project.select({ "project_id": "local-dev-mcp" })`. Preserve the returned `context_id` and include it in subsequent project-scoped calls, for example `workspace.read({ "context_id": "ctx_...", "path": "README.md" })`. A new `project.select` without that ID creates a separate context, while passing the existing ID changes its project. Missing or unauthorized IDs are rejected rather than selecting a shared default project.
+Claude does not send a verified chat ID. After connecting, start a work context with `project.select({ "project_id": "local-dev-mcp" })`. Preserve the returned `context_id` and include it in subsequent project-scoped calls, for example `workspace.read({ "context_id": "ctx_...", "path": "README.md" })`. A new `project.select` without that ID creates a separate context. The project and working directory remain fixed for the lifetime of each context; supplying the existing ID only reloads the same scope's instructions. To work on another project or worktree, create a new context. Missing or unauthorized IDs are rejected rather than selecting a shared default project.
 
 Claude receives its own `tools/list` schema. ChatGPT attachment ingestion (`artifact.receive`) and resource links (`artifact.link` and `resources/read`) are unavailable on Claude until a context-safe transfer contract is supported. Direct scoped `workspace.*`, `image.read`, and `artifact.read` remain available. The complete runtime contract is documented in [Claude work contexts](claude-work-context-design.md).
 

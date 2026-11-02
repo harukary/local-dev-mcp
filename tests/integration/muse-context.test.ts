@@ -16,6 +16,7 @@ it("isolates Muse project calls without chat IDs or persisted selection", async 
   const betaRoot = join(root, "beta");
   await mkdir(alphaRoot, { recursive: true });
   await mkdir(betaRoot, { recursive: true });
+  await mkdir(join(alphaRoot, "worktree"), { recursive: true });
   await writeFile(join(alphaRoot, "sample.txt"), "alpha-only\n");
   await writeFile(join(betaRoot, "sample.txt"), "beta-only\n");
   await writeFile(join(alphaRoot, "AGENTS.md"), "Only modify project alpha.\n");
@@ -28,10 +29,11 @@ it("isolates Muse project calls without chat IDs or persisted selection", async 
   const contextStore = new ChatContextStore();
   const metrics = new ToolUsageMetrics(join(root, "usage.json"), { flush_every: 1 });
   const ownerHash = "b".repeat(64);
+  const audit = vi.fn().mockResolvedValue(undefined);
   const server = createMcpServer({
     registry: { has: (id: string) => projects.some(p => p.projectId === id),
       get: (id: string) => projects.find(p => p.projectId === id), getAll: () => projects },
-    contextStore, shellRunner: new ShellRunner(), auditLogger: { log: vi.fn() },
+    contextStore, shellRunner: new ShellRunner(), auditLogger: { log: audit },
     toolUsageMetrics: metrics, clientProfile: "muse", museOwnerHash: ownerHash,
   } as unknown as AppContext);
   const client = new Client({ name: "muse-test", version: "1" });
@@ -61,6 +63,7 @@ it("isolates Muse project calls without chat IDs or persisted selection", async 
       ["shell.approve", { approval_request_id: "untrusted" }],
       ["shell.reject", { approval_request_id: "untrusted" }],
       ["shell.pending", {}],
+      ["future.privileged", {}],
     ] as const) {
       const rejected = await client.callTool({ name, arguments: args });
       expect(rejected.isError, name).toBe(true);
@@ -89,6 +92,58 @@ it("isolates Muse project calls without chat IDs or persisted selection", async 
     expect(beta.content[0]).toMatchObject({ text: expect.stringContaining("beta-only") });
     expect(alpha.structuredContent).toBeUndefined();
 
+    const nestedScope = await client.callTool({ name: "workspace.batch", arguments: {
+      project_id: "alpha",
+      requests: [{ tool: "workspace.read", arguments: { project_id: "beta", path: "sample.txt" } }],
+    } });
+    expect(nestedScope.structuredContent).toMatchObject({ error: { code: "CONTEXT_PROJECT_CONFLICT" } });
+
+    const patch = await client.callTool({ name: "workspace.patch", arguments: {
+      project_id: "alpha",
+      patches: [{ path: "sample.txt", old_text: "alpha-only", new_text: "alpha-updated" }],
+    } });
+    expect(patch.isError).toBeUndefined();
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      tool: "workspace.patch", event: "workspace_patch_applied", clientProfile: "muse",
+      projectId: "alpha", changedPaths: ["sample.txt"],
+      chatContextId: museWorkContextId(ownerHash, "alpha"),
+    }));
+    expect(JSON.stringify(audit.mock.calls)).not.toContain("alpha-updated");
+
+    const preview = await client.callTool({ name: "workspace.patch", arguments: {
+      project_id: "alpha", dry_run: true,
+      patches: [{ path: "sample.txt", old_text: "alpha-updated", new_text: "preview-only" }],
+    } });
+    expect(preview.isError).toBeUndefined();
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      event: "workspace_patch_previewed", changedPaths: ["sample.txt"],
+    }));
+    const conflict = await client.callTool({ name: "workspace.patch", arguments: {
+      project_id: "alpha", patches: [{ path: "sample.txt", old_text: "not-present", new_text: "unsafe" }],
+    } });
+    expect(conflict.isError).toBe(true);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      event: "workspace_patch_failed", error: "PATCH_CONFLICT", changedPaths: [],
+    }));
+    expect(JSON.stringify(audit.mock.calls)).not.toContain("preview-only");
+
+    const started = await client.callTool({ name: "shell.run", arguments: {
+      project_id: "alpha", command: "sleep 20", async: true,
+    } });
+    expect(started.isError).toBeUndefined();
+    const jobId = JSON.parse(started.content[0].text ?? "{}").job_id as string;
+    expect(jobId).toMatch(/^[0-9a-f-]{36}$/);
+    const ownStatus = await client.callTool({ name: "shell.status", arguments: { project_id: "alpha", job_id: jobId } });
+    expect(ownStatus.structuredContent).toMatchObject({ job_id: jobId, project_id: "alpha" });
+    for (const scope of [{ project_id: "beta" }, { project_id: "alpha", working_dir: "worktree" }]) {
+      const deniedStatus = await client.callTool({ name: "shell.status", arguments: { ...scope, job_id: jobId } });
+      expect(deniedStatus.structuredContent).toMatchObject({ error: { code: "JOB_NOT_FOUND" } });
+      const deniedCancel = await client.callTool({ name: "shell.cancel", arguments: { ...scope, job_id: jobId } });
+      expect(deniedCancel.structuredContent).toMatchObject({ error: { code: "JOB_NOT_FOUND" } });
+    }
+    const canceled = await client.callTool({ name: "shell.cancel", arguments: { project_id: "alpha", job_id: jobId } });
+    expect(canceled.isError).toBeUndefined();
+    expect(canceled.content[0]).toMatchObject({ text: expect.stringContaining('"canceled": true') });
     const lostJob = await client.callTool({ name: "shell.status", arguments: { project_id: "alpha", job_id: "unknown" } });
     expect(lostJob.content[0]).toMatchObject({ text: expect.stringContaining("JOB_NOT_FOUND") });
     expect(contextStore.getAll().size).toBe(0);

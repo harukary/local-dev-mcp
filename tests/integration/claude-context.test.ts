@@ -78,13 +78,15 @@ const getContextId = (r: { content: Array<{ type: string; text?: string }> }) =>
   getText(r).match(/(?:^|\n)Context ID: (ctx_[A-Za-z0-9_-]{43})(?:\n|$)/)?.[1];
 
 describe("Claude explicit work contexts through real MCP dispatcher", () => {
-  it("creates isolated projects, maintains cwd, supports explicit resume, and rejects default fallbacks", async () => {
+  it("creates isolated projects, fixes context scope, supports same-scope resume, and rejects default fallbacks", async () => {
     const f = fixture();
     // Existing ChatGPT state must never be inherited.
     f.store.setCurrentProject("default", "primary");
     const client = await connect(f, "claude", "owner-one");
     const tools = (await client.listTools()).tools;
     expect(tools.find((t) => t.name === "workspace.read")?.inputSchema.required).toContain("context_id");
+    expect(tools.find((t) => t.name === "workspace.read")?.inputSchema.properties).not.toHaveProperty("project_id");
+    expect(tools.find((t) => t.name === "workspace.read")?.inputSchema.properties).not.toHaveProperty("working_dir");
     expect(tools.some((t) => t.name === "artifact.link")).toBe(false);
     expect(tools.some((t) => t.name === "artifact.receive")).toBe(false);
     expect(tools.some((t) => t.name === "project.open")).toBe(false);
@@ -158,11 +160,28 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
     const badScope = await client.callTool({ name: "workspace.read", arguments: { context_id: a, project_id: "secondary", path: "sample.txt" } });
     expect(getPayload(badScope).error.code).toBe("CONTEXT_PROJECT_CONFLICT");
 
-    const resumed = await client.callTool({ name: "project.select", arguments: { context_id: a, project_id: "secondary" } });
+    const wrongProject = await client.callTool({ name: "project.select", arguments: { context_id: a, project_id: "secondary" } });
+    expect(getPayload(wrongProject).error.code).toBe("CONTEXT_SCOPE_IMMUTABLE");
+    const wrongDirectory = await client.callTool({ name: "project.select", arguments: {
+      context_id: a, project_id: "primary", working_dir: "secondary",
+    } });
+    expect(getPayload(wrongDirectory).error.code).toBe("CONTEXT_SCOPE_IMMUTABLE");
+    const resumed = await client.callTool({ name: "project.select", arguments: { context_id: a, project_id: "primary" } });
     expect(getContextId(resumed)).toBe(a);
-    expect(getText(resumed)).toContain("Changed: true");
+    expect(getText(resumed)).toContain("Changed: false");
     const after = await client.callTool({ name: "workspace.read", arguments: { context_id: a, path: "sample.txt" } });
-    expect(getText(after)).toContain("secondary project");
+    expect(getText(after)).toContain("primary project");
+    const newWorktree = await client.callTool({ name: "project.select", arguments: {
+      project_id: "primary", working_dir: "secondary",
+    } });
+    const c = getContextId(newWorktree)!;
+    expect(c).not.toBe(a);
+    expect(getText(await client.callTool({ name: "workspace.read", arguments: { context_id: c, path: "sample.txt" } }))).toContain("secondary project");
+    const reloadedWorktree = await client.callTool({ name: "project.select", arguments: {
+      context_id: c, project_id: "primary",
+    } });
+    expect(getContextId(reloadedWorktree)).toBe(c);
+    expect(getText(reloadedWorktree)).toContain("Working directory: secondary");
     const wrongHandle = await client.callTool({ name: "project.select", arguments: { context_id: "ctx_invalid", project_id: "primary" } });
     expect(getPayload(wrongHandle).error.code).toBe("CONTEXT_NOT_FOUND");
 
@@ -173,7 +192,7 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
     await expect(client.readResource({ uri: "project://primary/status" })).rejects.toThrow("unavailable");
 
     const schema = await client.callTool({ name: "tool.schema", arguments: { prefix: "workspace.read" } });
-    expect(getPayload(schema).schema_version).toBe("2026-11-01.1");
+    expect(getPayload(schema).schema_version).toBe("2026-11-02.2");
     expect(getPayload(schema).tools[0].inputSchema.required).toContain("context_id");
     expect(JSON.stringify(f.audit.mock.calls)).not.toContain(a);
     expect(JSON.stringify(f.audit.mock.calls)).not.toContain(b);

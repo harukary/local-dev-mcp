@@ -94,6 +94,8 @@ export interface AuditLogEntry {
   chatContextId: string;
   tool: string;
   event?: string;
+  clientProfile?: "chatgpt" | "claude" | "muse";
+  changedPaths?: string[];
   projectId?: string;
   cwd?: string;
   command?: string;

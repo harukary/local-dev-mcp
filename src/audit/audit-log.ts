@@ -1,5 +1,5 @@
 import { appendFile, rename, rm, stat } from "node:fs/promises";
-import { existsSync, mkdirSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { AuditLogEntry } from "../types.js";
 
@@ -17,7 +17,19 @@ export class AuditLogger {
     this.maxBytes = Math.max(1024, options.max_bytes ?? DEFAULT_MAX_BYTES);
     this.backups = Math.min(10, Math.max(0, Math.round(options.backups ?? DEFAULT_BACKUPS)));
     const dir = dirname(logPath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (!lstatSync(dir).isDirectory()) throw new Error("Audit log directory must be a real directory.");
+    chmodSync(dir, 0o700);
+    // Restrict existing logs and rotated archives before any new writes.
+    for (let index = 0; index <= this.backups; index++) {
+      const path = index === 0 ? logPath : `${logPath}.${index}`;
+      try {
+        if (!lstatSync(path).isFile()) throw new Error("Audit log must be a regular file.");
+        chmodSync(path, 0o600);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
   }
 
   async log(entry: AuditLogEntry): Promise<void> {
@@ -26,7 +38,7 @@ export class AuditLogger {
       .catch(() => undefined)
       .then(async () => {
         await this.rotateIfNeeded(Buffer.byteLength(line, "utf8"));
-        await appendFile(this.logPath, line, "utf8");
+        await appendFile(this.logPath, line, { encoding: "utf8", mode: 0o600 });
       });
     this.pending = operation;
     return await operation;

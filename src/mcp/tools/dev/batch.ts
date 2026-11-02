@@ -26,10 +26,10 @@ function compactBatchValue(tool: ReadBatchItem["tool"], value: unknown): unknown
 export async function handleWorkspaceBatch(ctx: AppContext, chat: string, args: { requests?: ReadBatchItem[]; max_bytes?: number; detail?: "compact" | "full" }) {
   if (!Array.isArray(args.requests) || !args.requests.length || args.requests.length > 20) return jsonError("INVALID_BATCH", "Provide 1 to 20 read-only requests.");
   if (args.requests.some(item => !item || !["workspace.read", "workspace.search", "workspace.list"].includes(item.tool) || !item.arguments || typeof item.arguments !== "object")) return jsonError("INVALID_BATCH", "Only workspace read, search and list are supported.");
-  if (ctx.clientProfile === "claude" && args.requests.some(item =>
+  if ((ctx.clientProfile === "claude" || ctx.clientProfile === "muse") && args.requests.some(item =>
     Object.hasOwn(item.arguments, "project_id") || Object.hasOwn(item.arguments, "working_dir")
   )) {
-    return jsonError("CONTEXT_PROJECT_CONFLICT", "Nested batch project scope cannot override the Claude work context.");
+    return jsonError("CONTEXT_PROJECT_CONFLICT", "Nested batch project scope cannot override the authenticated work context.");
   }
   const contextStore = new ChatContextStore();
   Object.assign(contextStore.getOrCreate(chat), ctx.contextStore.get(chat));

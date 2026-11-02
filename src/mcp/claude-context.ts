@@ -49,9 +49,23 @@ export async function handleClaudeProjectSelect(
     return jsonError("PROJECT_ID_REQUIRED", "Missing required argument: project_id");
   }
   let identity: { context_id: string; chatContextId: string };
+  let workingDir = args.working_dir;
   if (args.context_id !== undefined) {
     const resolved = resolveClaudeContext(ctx.contextStore, ownerHash, args.context_id);
     if (!resolved) return jsonError("CONTEXT_NOT_FOUND", "The requested work context is unavailable.");
+    const existingProject = ctx.contextStore.getCurrentProject(resolved);
+    if (existingProject && existingProject !== args.project_id) {
+      return jsonError("CONTEXT_SCOPE_IMMUTABLE", "A Claude work context cannot change projects. Create a new context with project.select.");
+    }
+    const project = ctx.registry.get(args.project_id);
+    if (!project) return jsonError("PROJECT_NOT_FOUND", "Unknown project.");
+    const selectedDirectory = ctx.contextStore.getWorkingDirectory(resolved) ?? ".";
+    const working = resolveWorkingDirectory(project, args.working_dir ?? selectedDirectory);
+    if (!working.ok) return jsonError(working.code, working.message);
+    if (existingProject && working.relativePath !== selectedDirectory) {
+      return jsonError("CONTEXT_SCOPE_IMMUTABLE", "A Claude work context cannot change working directories. Create a new context with project.select.");
+    }
+    workingDir = working.relativePath;
     identity = { context_id: args.context_id, chatContextId: resolved };
   } else {
     // Validate the complete project selection before persisting any new work context.
@@ -66,7 +80,7 @@ export async function handleClaudeProjectSelect(
 
   const result = await handleProjectSelect(ctx, identity.chatContextId, {
     project_id: args.project_id,
-    working_dir: args.working_dir,
+    working_dir: workingDir,
   });
   if ("isError" in result && result.isError) return result;
   const structuredContent = { ...result.structuredContent, context_id: identity.context_id };

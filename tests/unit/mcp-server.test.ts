@@ -220,7 +220,7 @@ describe("client-isolated tool schemas", () => {
     expect(validateToolInput("workspace.read", { path: "README.md" })).toBeUndefined();
     expect(validateToolInput("workspace.read", { path: "README.md", context_id: "ctx_test" }, "claude")).toBeUndefined();
     expect(validateToolInput("artifact.link", { path: "README.md" }, "claude")).toContain("Unknown tool");
-    expect(buildToolSchemaSnapshot({}, "claude").schema_version).toBe("2026-11-01.1");
+    expect(buildToolSchemaSnapshot({}, "claude").schema_version).toBe("2026-11-02.2");
   });
 });
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleShellStatus } from "../../src/mcp/tools/shell-status.js";
@@ -128,6 +128,22 @@ describe("job retention", () => {
     expect(completed.stdout).not.toContain("keychain-token");
     expect(completed.redactions).toContainEqual({ type: "runtime_credential", count: 1 });
     expect(completed.credentialScope).toBe("bitwarden");
+  });
+
+  it("keeps job histories private and tightens older persisted files", async () => {
+    const started = startJob(project, "echo retained-output");
+    if ("error" in started) throw new Error(started.error);
+    await waitForJobCompletion(started.id);
+    const directory = process.env.LOCAL_DEV_MCP_JOB_STORE_DIR!;
+    const path = join(directory, started.id + ".json");
+    expect(statSync(directory).mode & 0o777).toBe(0o700);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+
+    chmodSync(directory, 0o755);
+    chmodSync(path, 0o644);
+    cleanupOldPersistedJobsForTests();
+    expect(statSync(directory).mode & 0o777).toBe(0o700);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   it("cleans up persisted jobs older than seven days", () => {

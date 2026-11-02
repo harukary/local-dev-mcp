@@ -6,19 +6,53 @@ import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 import { buildRepoActionToolDefinitions } from "./repo-action-tool-definitions.js";
 
 export const TOOL_SCHEMA_VERSION = "2026-10-28.1";
-export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-01.1";
+export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-02.2";
 export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-02.1";
 export type ClientToolProfile = "chatgpt" | "claude" | "muse";
 
-const CLAUDE_HIDDEN_TOOLS = new Set(["artifact.receive", "artifact.link"]);
+// External clients opt into each tool explicitly. Adding a handler to ChatGPT
+// must never publish it through Claude or Muse by accident.
+const EXTERNAL_SHARED_TOOLS = new Set([
+  "project.list", "skills.list", "skills.read",
+  "todo.projects", "todo.list", "todo.get", "todo.create", "todo.update",
+  "todo.decompose", "todo.set_completed", "todo.move", "todo.delete",
+  "workspace.batch", "project.inspect", "workspace.read", "workspace.list",
+  "workspace.search", "workspace.patch",
+  "git.inspect", "git.status", "git.log", "git.show", "git.diff", "git.commit", "git.push",
+  "repo.action.list", "repo.action.read", "repo.action.write",
+  "browser.interact", "browser.status", "browser.start", "browser.sessions",
+  "browser.stop", "browser.tabs", "browser.tab.open", "browser.tab.use",
+  "browser.tab.close", "browser.dom", "browser.selectors", "browser.click",
+  "browser.type", "browser.wait", "browser.eval", "browser.press",
+  "browser.reload", "browser.back", "browser.forward", "browser.screenshot", "browser.open",
+  "mobile.status", "mobile.list_devices", "mobile.screenshot", "mobile.snapshot",
+  "mobile.current_app", "mobile.logs", "mobile.stop_app", "mobile.restart_app",
+  "mobile.boot", "mobile.launch_app", "mobile.open_url", "mobile.tap",
+  "mobile.tap_element", "mobile.type", "mobile.swipe", "mobile.press",
+  "mobile.wait", "mobile.batch",
+  "shell.run", "shell.status", "shell.cancel",
+  "image.read", "artifact.read", "tool.usage", "tool.schema",
+]);
+const CLAUDE_ADDITIONAL_TOOLS = new Set([
+  "project.select", "project.current", "project.reload",
+  "shell.approve", "shell.reject", "shell.pending",
+]);
+const MUSE_ADDITIONAL_TOOLS = new Set(["project.open"]);
+
+export function isClientToolEnabled(profile: ClientToolProfile, name: string): boolean {
+  if (profile === "chatgpt") return name !== "project.open";
+  return EXTERNAL_SHARED_TOOLS.has(name) ||
+    (profile === "claude" ? CLAUDE_ADDITIONAL_TOOLS.has(name) : MUSE_ADDITIONAL_TOOLS.has(name));
+}
+
+export function isClaudeToolEnabled(name: string): boolean {
+  return isClientToolEnabled("claude", name);
+}
+
 const CLAUDE_CONTEXT_FREE_TOOLS = new Set([
   "project.list", "project.select", "project.reload", "skills.read",
   "tool.usage", "tool.schema", "todo.projects", "todo.list", "todo.get",
 ]);
-
-export function isClaudeToolEnabled(name: string): boolean {
-  return !CLAUDE_HIDDEN_TOOLS.has(name);
-}
 
 export function isClaudeContextRequired(name: string): boolean {
   return isClaudeToolEnabled(name) && !CLAUDE_CONTEXT_FREE_TOOLS.has(name);
@@ -69,14 +103,8 @@ export function supportsExplicitProjectScope(name: string): boolean {
   return EXPLICIT_PROJECT_SCOPE_TOOLS.has(name);
 }
 
-const MUSE_HIDDEN_TOOLS = new Set([
-  "project.select", "project.current", "project.reload",
-  "artifact.link", "artifact.receive",
-  "shell.approve", "shell.reject", "shell.pending",
-]);
-
 export function isMuseToolEnabled(name: string): boolean {
-  return name === "project.open" || !MUSE_HIDDEN_TOOLS.has(name);
+  return isClientToolEnabled("muse", name);
 }
 
 export function isMuseProjectScopedTool(name: string): boolean {
@@ -519,16 +547,18 @@ export function buildToolDefinitions(profile: ClientToolProfile = "chatgpt"): To
       annotations: { readOnlyHint: true, openWorldHint: false },
     }] as Tool[];
   }
-  const claudeTools = base.filter((tool) => isClaudeToolEnabled(tool.name)).map((tool) => {
+  // Claude owns its scope through context_id, not the ChatGPT Scheduled Task
+  // project_id / working_dir arguments. Start from the unmodified definitions.
+  const claudeTools = tools.filter((tool) => isClaudeToolEnabled(tool.name)).map((tool) => {
     if (tool.name === "project.select") {
       return {
         ...tool,
-        description: "Start a new Claude work context by selecting a project. Save the returned context_id and pass it to every subsequent project-scoped tool call. To change the project or working directory in an existing work context, supply its context_id.",
+        description: "Start a new Claude work context by selecting a project. Save the returned context_id and pass it to subsequent project-scoped calls. A work context is permanently bound to its project and working directory; call project.select without context_id to change scope. Supplying the existing context_id only re-reads instructions in the same scope.",
         inputSchema: {
           ...tool.inputSchema,
           properties: {
             ...tool.inputSchema.properties,
-            context_id: { type: "string", description: "Optional existing Claude work context ID; omit to create a new isolated context." },
+            context_id: { type: "string", description: "Optional work context ID for resuming the same project and working directory; omit to start a different scope." },
           },
         },
       };
