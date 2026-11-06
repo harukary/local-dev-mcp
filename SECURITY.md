@@ -4,7 +4,7 @@
 
 Please do not open a public issue for a vulnerability that could expose credentials, private data, or remote-code-execution paths.
 
-Use GitHub's private vulnerability reporting feature for this repository when available. If private reporting is unavailable, contact the repository owner privately before disclosing technical details publicly.
+Use GitHub's private vulnerability reporting feature for this repository when available. If private reporting is unavailable, contact the repository owner privately before disclosing technical details publicly. Do not use `feedback.report` for vulnerability details: it records reports in the local MCP host's feedback store and is not a confidential disclosure channel to maintainers.
 
 ## Secret handling
 

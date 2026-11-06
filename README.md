@@ -1,8 +1,10 @@
 # local-dev-mcp
 
+[日本語](README_ja.md) · [License](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+
 ![local-dev-mcp System Architecture](docs/local-dev-mcp-system-overview-en.png)
 
-`local-dev-mcp` is a private MCP server for operating a trusted development workstation from ChatGPT. It exposes registered projects through typed project, workspace, git, repository-action, browser, mobile, Todo, artifact, and controlled shell tools.
+`local-dev-mcp` is an open-source, self-hosted MCP server for privately operating a trusted development workstation from ChatGPT. It exposes registered projects through typed project, workspace, git, repository-action, browser, mobile, Todo, artifact, and controlled shell tools.
 
 For ChatGPT, the canonical transport is **OpenAI Secure MCP Tunnel**. The HTTP MCP server listens on loopback only and does not expose a public MCP endpoint.
 
@@ -69,7 +71,7 @@ Core tool families include:
 - `artifact.read` — compatibility fallback that embeds a local file directly in the MCP tool result
 - `artifact.receive` — receive a normal ChatGPT attachment in one MCP call
 - `tool.schema` / `tool.usage` — schema refresh and compact usage diagnostics
-- `feedback.report` / `feedback.list` / `feedback.update` — durable client-shared MCP defect/improvement reporting and review, independent of the selected project; see [`docs/feedback.md`](docs/feedback.md)
+- `feedback.report` / `feedback.list` / `feedback.update` — durable, host-local issue and improvement tracking across authenticated clients; see the [feedback guide](docs/feedback.md) ([日本語](docs/feedback_ja.md))
 
 ## Efficient Tool Usage And Diagnostics
 
@@ -87,6 +89,8 @@ Prefer typed tools over broad shell commands:
 - interactive ChatGPT turns use a 20-minute local-dev lease; after expiry, the next local-dev call returns `turn_paused` without changing or cancelling the workflow. See [`docs/chatgpt-interactive-turn-lease.md`](docs/chatgpt-interactive-turn-lease.md)
 - use `tool.schema` after server/tool changes when ChatGPT has stale action metadata
 - report reproducible tool problems or recurring workflow friction through `feedback.report`; review `feedback.list` alongside `tool.usage` weekly, rather than storing raw request/output logs
+
+A typical feedback report is an MCP call to `feedback.report` with `{"kind":"bug","title":"Short symptom","description":"Minimal reproduction steps"}`. Each installation stores reports on its own host; they are not GitHub issues or automatically shared with maintainers. The [feedback guide](docs/feedback.md) covers status updates, deduplication, and a copyable weekly review prompt.
 
 ## Browser HTTP Basic Authentication
 
@@ -465,3 +469,7 @@ bash -n scripts/server.sh scripts/tunnel.sh scripts/install-launchd.sh scripts/i
 ```
 
 After changing the tool surface, increment `TOOL_SCHEMA_VERSION` and follow the scope-specific ChatGPT schema update workflow. For this Business workspace, prefer the existing-app action refresh documented in `docs/chatgpt-business-app-schema-refresh.md`; recreation is a fallback.
+
+## License and Contributions
+
+Source code is provided under the [Apache License 2.0](LICENSE), except for files or subprojects carrying their own licenses. The bundled `agentic-inbox/` directory retains its separate [license and attribution](agentic-inbox/LICENSE). See [CONTRIBUTING.md](CONTRIBUTING.md) for issues, pull requests, and security reporting guidance.

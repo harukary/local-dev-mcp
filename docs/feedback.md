@@ -1,36 +1,74 @@
-# local-dev MCP feedback workflow
+# Feedback and continuous improvement
 
-local-dev のツール利用統計（`tool.usage`）では、成功していても使いにくい操作、ツール不足、繰り返される非効率までは観測できない。認証済みMCPクライアントが発見した再現性のある課題を記録し、週次レビューで改善する。
+`local-dev-mcp` exposes three MCP tools to record recurring problems and improvement ideas that are not visible in `tool.usage` metrics. Reports stay on the MCP server you operate. They are **not** GitHub issues, are not sent to the repository maintainers, and are not synchronized across hosts.
 
-## 登録
+## When to report
 
-- `feedback.report`: `kind=bug|improvement|missing_feature`、`title`、`description`を指定する。必要なら`related_tool`、`impact`、`suggestion`、`project_id`を指定する。
-- ChatGPTは選択中のprojectを補完する。Claudeは`context_id`を任意で渡すと、そのwork contextのprojectを補完する。Museはprojectを付ける場合に`project_id`を渡す。いずれも選択・指定なしでサーバー全体の課題として報告できる。
-- 繰り返し再現する不具合、誤解を招く説明、不足機能、繰り返し必要な迂回操作などを簡潔に記載する。単発のネットワークエラーや通常のリトライは報告しない。
-- 同じproject・kind・related_tool・正規化したtitleは自動的に1件へまとめ、`occurrences`を増やす。既知の項目に`existing_id`を指定すると、タイトル表現が違っても同じ課題として数える。解決済みの項目が再報告された場合は再オープンして`reopened`を増やす。
-- 自動で取り込むのは実際のMCPクライアント種別、報告時刻、project選択状態のみ。ツールの引数、返却本文、会話全文やshell/browserの生ログは収集しない。報告本文にも秘密情報、実ユーザーデータ、認証済みページのHTML等を含めない。保存時には一般的なcredential文字列を追加マスクするが、完全な秘匿化を保証する仕組みではない。
+Report reproducible defects, missing capabilities, misleading tool descriptions, or recurring inefficient workflows. Do not create reports for one-off network failures that resolve through a normal retry.
 
-## 一覧と対応
+Do not include credentials, real user content, full conversations, browser HTML, or raw tool requests/responses. The server masks some common secret patterns as a precaution, not as a guarantee.
 
-- `feedback.list({})`: 未解決（`open`と`in_progress`）を最新更新順で取得。project未指定なら全project、既定50件・最大100件。必要なら`offset`でページングする。
-- `feedback.list({status:"all", recent_days:7})`: 直近7日間に登録・再発・更新した全報告（解決済みを含む）。
-- `feedback.update({id,status:"in_progress",note:"..."})`: 原因調査や修正中であることを示す。
-- `feedback.update({id,status:"resolved",resolution:"検証結果や関連コミット"})`: 修正と検証が終わってからクローズする。解決・dismissにする際は初回の理由記載が必要。`dismissed`は対応不要と判断した根拠を残すために使う。
-- `resolution`は以前の修正内容の参照にもなるため、後日再発しても保持する。`latest_note`は最新の経過記録であり、完全な監査履歴ではない。
+## Report a problem
 
-## 週次レビュー
+Call `feedback.report` with an MCP argument object such as this **illustrative** example:
 
-毎週、`tool.usage({recent_days:7})`とともに次を実行する。
+```json
+{
+  "kind": "bug",
+  "title": "Large batch results are unexpectedly truncated",
+  "description": "A multi-file read returned incomplete content without an actionable explanation. Expected an explicit truncation notice.",
+  "impact": "Repeated reads are needed to complete the operation.",
+  "related_tool": "workspace.batch",
+  "suggestion": "Identify which result exceeded the limit."
+}
+```
 
-1. `feedback.list({status:"active"})`で未解決課題を確認（必要なら全件ページング）。
-2. `feedback.list({status:"all",recent_days:7})`で新規・再発・最近の解決を確認。
-3. エラー頻度、発生回数、再発回数、ユーザー影響、実装工数を見て優先順位を判断する。単なる件数増を品質改善とはみなさない。
-4. 原因と対策を示し、実装・検証できたものは`feedback.update`で結果を記録する。分析・提案のみを指示されたScheduled Taskではコード変更・状態更新は行わない。
-5. 新しい報告がなくてもその旨を明記し、前週改善した項目の再発有無を確認する。
+`kind` accepts `bug`, `improvement`, or `missing_feature`. `title` and `description` are required; `impact`, `related_tool`, `suggestion`, and `project_id` are optional.
 
-## 保存と運用
+No selected project is required. In ChatGPT, a selected project is used when available. Claude can optionally pass `context_id` to associate the report with a work context; Muse can pass `project_id` explicitly. Without an associated project, the report describes a server-wide issue.
 
-- 正本はMCP実行ホストの`~/.local-dev-mcp/runtime/feedback.json`。既存の`logs/tool-usage.json`とは別で、Git管理対象ではない。
-- ディレクトリの権限は0700、データファイルは0600。更新は単一サーバーのキューで直列化し、一時ファイルからrenameして保存する。無効・破損したデータは黙って初期化せず、起動時にエラーとする。
-- 同じHTTPサーバーのChatGPT・Claude・Museは同じ正本を見る。別ホストの`local-dev-mini`は別のローカル正本を持つ。ホスト間の自動同期はしない。
-- 5000件を上限とし、一覧レスポンスは最大100件。報告を大量自動生成する設計にはしない。
+Reports with the same project, kind, related tool, and normalized title count toward one record. The response includes `id`, `occurrences`, and `created`. To report a known recurrence, pass its `existing_id` to `feedback.report`; if the issue was closed, it reopens and its `reopened` counter increases.
+
+## List and resolve reports
+
+The following JSON objects are **MCP tool arguments**, not shell commands.
+
+Call `feedback.list` with:
+
+```json
+{"status":"active","limit":50}
+```
+
+The default `active` filter includes `open` and `in_progress` reports across all projects. For recently changed reports, including closed ones:
+
+```json
+{"status":"all","recent_days":7,"limit":100}
+```
+
+Use `project_id` or `kind` to narrow the results. If `has_more` is true, repeat the call with `offset` set to the returned `next_offset`. Each response includes `total` and up to 100 items.
+
+Update an item after investigation:
+
+```json
+{"id":"fb_12345678-1234-4123-8123-123456789abc","status":"in_progress","note":"Reproduced with the current server build."}
+```
+
+After verifying a fix, call `feedback.update` with `status: "resolved"` and a nonempty `resolution`. To close a report that needs no change, use `status: "dismissed"` with the reason in `resolution`. The latest note and resolution are retained, but this store is **not** a complete event history.
+
+## Weekly review
+
+Use this process manually, or copy the following instruction into a ChatGPT Scheduled Task connected to your own MCP App. No scheduled job is created by installing this repository.
+
+> Every week, use `tool.usage` with `recent_days=7` to review call volume, failures, partial failures, and latency. Use `feedback.list` with `status=active,limit=100` to retrieve every unresolved issue, paging through `next_offset` if needed. Also call `feedback.list` with `status=all,recent_days=7,limit=100` to review new, reopened, and recently resolved items. Compare reports with usage evidence, distinguish observations from verified bugs, and recommend the top one to three improvements by impact, frequency, recurrence, and effort. Mention when there are no new reports. Do not change code or feedback statuses as part of this review.
+
+Scheduled Tasks require a supported ChatGPT account, a connected App, and access to the relevant tools. Running the review manually works with any supported MCP client.
+
+## Storage, privacy, and limits
+
+- Records are stored at `~/.local-dev-mcp/runtime/feedback.json` on the MCP host, outside Git. The file is created on the first report and uses restrictive directory/file permissions (0700/0600).
+- Reports from ChatGPT, Claude, and Muse connected to the **same server** share one store. A second host such as `local-dev-mini` keeps a separate store; code synchronization does not synchronize feedback.
+- The server records client type, relevant project when known, timestamps, status, occurrence and reopen counts. It does not automatically capture tool arguments, complete results, or conversation transcripts.
+- Writes are serialized and saved through atomic file replacement. Corrupt data causes an explicit load error rather than silent reset. The store holds at most 5,000 reports.
+- Treat stored reports as sensitive operational metadata. Redaction of common credential patterns is best-effort; review the content before submitting it.
+
+For suggestions meant for **all users** of this project, use GitHub issues and pull requests as described in [CONTRIBUTING.md](../CONTRIBUTING.md). For suspected vulnerabilities, use private reporting as described in [SECURITY.md](../SECURITY.md).

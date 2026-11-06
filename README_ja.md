@@ -1,8 +1,10 @@
 # local-dev-mcp
 
+[English](README.md) · [ライセンス](LICENSE) · [貢献方法](CONTRIBUTING_ja.md) · [セキュリティ](SECURITY.md)
+
 ![local-dev-mcp システム構成](docs/local-dev-mcp-system-overview-ja.png)
 
-`local-dev-mcp` は、信頼した開発用PCを ChatGPT から操作するための private MCP server です。登録した project に対して、project / workspace / git / repository action / browser / mobile / Todo / artifact / controlled shell の typed tool を提供します。
+`local-dev-mcp` は、信頼した開発用PCを ChatGPT から安全な接続で操作するための、OSSとして公開されたセルフホスト型MCPサーバーです。登録した project に対して、project / workspace / git / repository action / browser / mobile / Todo / artifact / controlled shell の typed tool を提供します。
 
 ChatGPT との正規接続経路は **OpenAI Secure MCP Tunnel** です。HTTP MCP server は loopback のみで待ち受け、public な MCP endpoint は公開しません。
 
@@ -69,7 +71,7 @@ MCP server側でもproject policyとshell risk policyを適用します。ChatGP
 - `artifact.read` — local fileをtool resultへ直接埋め込む互換fallback
 - `artifact.receive` — ChatGPT通常添付を1回のMCP callで受信
 - `tool.schema` / `tool.usage` — tool schema refreshとusage diagnostics
-- `feedback.report` / `feedback.list` / `feedback.update` — ChatGPT・Claude・Muse共通の課題・改善報告。プロジェクト未選択でも使え、解決・再発を追跡できます。詳細は [`docs/feedback.md`](docs/feedback.md)
+- `feedback.report` / `feedback.list` / `feedback.update` — 認証済みクライアント間で共有できるローカルの課題・改善管理。未選択プロジェクトでも利用でき、解決・再発を追跡できます。詳細は[フィードバックガイド](docs/feedback_ja.md)（[English](docs/feedback.md)）
 
 ## 効率的な Tool 利用と Diagnostics
 
@@ -84,6 +86,8 @@ broadなshell commandよりtyped toolを優先します。
 - 約30秒を超えそうな処理は`shell.run(async=true)`で開始し、`shell.status`でpoll
 - server/tool変更後にChatGPT側schemaが古い場合は`tool.schema`とPlugin Refreshを使う
 - 再現性のあるMCPの不具合・継続的な使いにくさは`feedback.report`で報告し、週次レビューで`feedback.list`と`tool.usage`を併用する。生のログや機密情報は報告しない
+
+報告例: `feedback.report`に`{"kind":"bug","title":"短い症状","description":"機密情報を含まない再現条件"}`を渡します。報告は各実行ホストに保存され、GitHub Issueやメンテナーへ自動送信されません。状態更新・重複集約・週次レビューの指示例は[フィードバックガイド](docs/feedback_ja.md)を参照してください。
 
 ## BrowserのHTTP Basic認証
 
@@ -396,3 +400,7 @@ bash -n scripts/server.sh scripts/tunnel.sh scripts/install-launchd.sh scripts/i
 ```
 
 tool surfaceを変更したら`TOOL_SCHEMA_VERSION`を更新し、対象scopeのschema更新手順を実行します。Business Workspaceでは `docs/chatgpt-business-app-schema-refresh.md` の既存App Refresh手順を優先し、再作成はfallbackにします。
+
+## ライセンスと貢献
+
+ソースコードは、ファイルや同梱プロジェクトで別途指定がある場合を除き、[Apache License 2.0](LICENSE)で提供します。`agentic-inbox/`には別の[ライセンスと出典表示](agentic-inbox/LICENSE)があります。Issue・プルリクエスト・脆弱性報告は[貢献ガイド](CONTRIBUTING_ja.md)を参照してください。
