@@ -197,7 +197,7 @@ describe("Secure Tunnel HTTP host boundary", () => {
 describe("client-isolated tool schemas", () => {
   it("pins the current ChatGPT descriptors, including output schemas", () => {
     const sha256 = createHash("sha256").update(JSON.stringify(buildToolDefinitions())).digest("hex");
-    expect(sha256).toBe("2b208d2f80735317c311eb4d3c3b0ab788c5b82f0560da7b83636fb0c61718ee");
+    expect(sha256).toBe("424da432a512f2ab4a1d06a17c1118da61c50ad73102bad3f24b3f8f05777bf1");
     expect(buildToolDefinitions().length).toBe(85);
   });
 
