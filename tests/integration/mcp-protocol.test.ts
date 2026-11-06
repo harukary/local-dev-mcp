@@ -154,6 +154,36 @@ it("negotiates MCP, discovers tools, validates calls, and runs a bounded batch t
   } finally { await client.close(); await server.close(); metrics.flush(); }
 });
 
+it("supports larger workspace.batch budgets without dropping successful reads", async () => {
+  const root = join(dirname(process.env.LOCAL_DEV_MCP_JOB_STORE_DIR!), "protocol-batch-budget");
+  await mkdir(root);
+  await writeFile(join(root, "large.txt"), "x".repeat(100 * 1024) + "\n");
+  const project: ProjectConfig = { projectId: "fixture", displayName: "Fixture", hostRoot: root, sandboxRoot: root, sandboxType: "host", defaultShell: "/bin/bash", defaultTimeoutSeconds: 10, maxTimeoutSeconds: 30, networkPolicy: "ask", writePolicy: "allow", approvalMode: "never", deniedPaths: [], redactionProfile: "default" };
+  const contextStore = new ChatContextStore();
+  contextStore.setCurrentProject("default", "fixture");
+  const metrics = new ToolUsageMetrics(join(root, "usage.json"), { flush_every: 1 });
+  const server = createMcpServer({ registry: { has: () => true, get: () => project, getAll: () => [project] }, contextStore, shellRunner: new ShellRunner(), auditLogger: { log: vi.fn() }, toolUsageMetrics: metrics } as unknown as AppContext);
+  const client = new Client({ name: "local-batch-budget-regression", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const read = { tool: "workspace.read", arguments: { path: "large.txt", max_bytes: 128 * 1024 } };
+  try {
+    await server.connect(b);
+    await client.connect(a);
+    const standard = await client.callTool({ name: "workspace.batch", arguments: { requests: [read, read] } });
+    const standardResults = (standard.structuredContent as { results: Array<{ result: any }> }).results;
+    expect(standardResults.map(item => item.result.returned_bytes)).toEqual([100 * 1024 + 1, 100 * 1024 + 1]);
+    expect(standardResults.every(item => item.result.truncated === false)).toBe(true);
+
+    const extended = await client.callTool({ name: "workspace.batch", arguments: { max_bytes: 1024 * 1024, requests: Array.from({ length: 8 }, () => read) } });
+    const extendedResults = (extended.structuredContent as { results: Array<{ result: any }> }).results;
+    expect(extendedResults).toHaveLength(8);
+    expect(extendedResults.every(item => item.result.returned_bytes === 100 * 1024 + 1)).toBe(true);
+
+    const exhausted = await client.callTool({ name: "workspace.batch", arguments: { max_bytes: 1024, requests: [read] } });
+    expect(exhausted.structuredContent).toMatchObject({ results: [{ result: { error: { code: "BATCH_OUTPUT_LIMIT" } } }] });
+  } finally { await client.close(); await server.close(); metrics.flush(); }
+});
+
 it("keeps Scheduled Task project context request-scoped", async () => {
   const root = join(dirname(process.env.LOCAL_DEV_MCP_JOB_STORE_DIR!), "scheduled-task-project-scope");
   await mkdir(root);

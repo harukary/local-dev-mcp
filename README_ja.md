@@ -76,7 +76,7 @@ broadなshell commandよりtyped toolを優先します。
 
 - 対話での`project.select`はproject/worktreeを変更するときだけ使う。同一選択の繰り返しはAGENTS.md本文を再返却するため避け、Scheduled Taskでは各project-scoped toolに`project_id`を明示する
 - active project確認はfilesystem探索ではなく`project.inspect`
-- 大規模なshell scanではなくboundedな`workspace.read` / `workspace.list` / `workspace.search`を使い、独立した複数読込は`workspace.batch`にまとめる（部分失敗の集計と`workspace.patch`の競合処理は[`docs/workspace-operations.md`](docs/workspace-operations.md)）
+- 大規模なshell scanではなくboundedな`workspace.read` / `workspace.list` / `workspace.search`を使い、独立した複数読込は`workspace.batch`にまとめる。Batchの出力予算は全体で既定256 KiB・最大1 MiB、各読込で既定32 KiB・最大128 KiB（部分失敗の集計と`workspace.patch`の競合処理は[`docs/workspace-operations.md`](docs/workspace-operations.md)）
 - 一般的なGit確認はtyped `git.*`
 - 既知のlocal operationは`repo.action.list`でcatalogを確認し、`repo.action.read` / `repo.action.write`を使う
 - build/test/deploy/install/未対応またはad-hoc操作では`shell.run`

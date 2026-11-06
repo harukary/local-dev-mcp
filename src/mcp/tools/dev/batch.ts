@@ -35,12 +35,12 @@ export async function handleWorkspaceBatch(ctx: AppContext, chat: string, args: 
   Object.assign(contextStore.getOrCreate(chat), ctx.contextStore.get(chat));
   const capturedContext = { ...ctx, contextStore };
   const results: unknown[] = [];
-  let remaining = Math.min(256 * 1024, Math.max(1024, args.max_bytes ?? 64 * 1024));
+  let remaining = Math.min(1024 * 1024, Math.max(1024, args.max_bytes ?? 256 * 1024));
   for (let offset = 0; offset < args.requests.length; offset += 4) {
     const group = await Promise.allSettled(args.requests.slice(offset, offset + 4).map(async item => {
       const invalid = validateToolInput(item.tool, item.arguments);
       if (invalid) return jsonError("INVALID_ARGUMENT", invalid);
-      const options = { ...item.arguments, max_bytes: Math.min(Number(item.arguments.max_bytes) || 16 * 1024, 32 * 1024), max_results: Math.min(Number(item.arguments.max_results) || 20, 50), max_entries: Math.min(Number(item.arguments.max_entries) || 100, 200) };
+      const options = { ...item.arguments, max_bytes: Math.min(Number(item.arguments.max_bytes) || 32 * 1024, 128 * 1024), max_results: Math.min(Number(item.arguments.max_results) || 20, 50), max_entries: Math.min(Number(item.arguments.max_entries) || 100, 200) };
       if (item.tool === "workspace.read") return await handleWorkspaceRead(capturedContext, chat, options);
       if (item.tool === "workspace.search") return await handleWorkspaceSearch(capturedContext, chat, options);
       return await handleWorkspaceList(capturedContext, chat, options);
