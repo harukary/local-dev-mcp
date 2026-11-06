@@ -17,7 +17,7 @@ A Tunnel alone provides **no authentication**. Never expose this MCP endpoint th
 1. Create a dedicated Access self-hosted application with a policy allowing only the intended exact account address. Do not use Allow Everyone.
 2. Enable **Managed OAuth** in the Access application's Additional settings and allow the Claude callback URI: `https://claude.ai/api/mcp/auth_callback`. Save and re-read the configuration.
 3. Copy the application's Audience (AUD) identifier.
-4. Create a dedicated Cloudflare Tunnel on the development Mac and publish the hostname to `http://127.0.0.1:3456`; set `httpHostHeader: 127.0.0.1`.
+4. Create a dedicated Cloudflare Tunnel on the development Mac and publish the hostname to `http://127.0.0.1:3456`; set `httpHostHeader: 127.0.0.1`. The bundled `cloudflare-tunnel.sh` uses `--protocol http2` for the connector-to-Cloudflare leg, avoiding unreliable QUIC/UDP connections on restricted or unstable networks.
 5. Store the Tunnel connector token in a private mode 0600 file, such as `~/.cloudflared/local-dev-mcp-claude.token`. Run the separate LaunchAgent with `LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_ENABLE=1` when using `scripts/install-launchd.sh --activate`. The connector reads the token file rather than placing the token in the LaunchAgent or command-line arguments.
 6. Add the published `https://<dedicated-hostname>/mcp` endpoint as a Claude custom connector and complete the OAuth sign-in.
 
@@ -62,6 +62,7 @@ Claude receives its own `tools/list` schema. ChatGPT attachment ingestion (`arti
 - Verify the Access application's intended hostname, restrictive policy, audience, Managed OAuth setting and Claude callback allowlist.
 - Confirm unauthenticated remote and loopback MCP calls are rejected.
 - Verify an invalid Cloudflare JWT, wrong issuer, wrong audience and expired JWT are rejected.
+- After changing the Cloudflare Access team domain or MCP hostname, inspect the current OAuth discovery issuer, authorization/token endpoint hosts, Access application audience, and registered Claude callback URI. Existing Claude connector OAuth credentials may be tied to the former issuer or resource; disconnect and re-add the custom connector at the current MCP URL if a fresh Reconnect still shows an expired connection request. Do not reuse an OAuth consent URL from an earlier attempt.
 - Verify Claude can call a read-only tool after OAuth sign-in.
 - Verify the original ChatGPT Secure MCP Tunnel still accepts an actual ChatGPT MCP tool call.
 

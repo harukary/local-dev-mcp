@@ -173,6 +173,8 @@ describe("launchd installer", () => {
     expect(tunnel).toContain("<key>LOCAL_DEV_MCP_CLOUDFLARE_TUNNEL_TOKEN_FILE</key>");
     expect(tunnel).toContain(`<string>${tempDir}/.cloudflared/local-dev-mcp-claude.token</string>`);
     expect(tunnel).not.toContain("eyJ");
+    const tunnelScript = readFileSync(path.resolve("scripts/cloudflare-tunnel.sh"), "utf8");
+    expect(tunnelScript).toContain("--protocol http2 run --token-file");
   });
 
   it("hands activation to an independent launchd worker", () => {

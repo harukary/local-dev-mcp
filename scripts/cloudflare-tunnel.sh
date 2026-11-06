@@ -11,4 +11,4 @@ if ! command -v cloudflared >/dev/null 2>&1; then
   exit 1
 fi
 
-exec cloudflared tunnel --no-autoupdate --loglevel warn run --token-file "$TOKEN_FILE"
+exec cloudflared tunnel --no-autoupdate --loglevel warn --protocol http2 run --token-file "$TOKEN_FILE"

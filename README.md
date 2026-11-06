@@ -43,7 +43,7 @@ Important runtime rules:
 - denied-path checks apply to file reads, writes, artifact transfer, and project-scoped operations.
 - raw artifact bytes and temporary file download URLs are not written to normal audit logs.
 
-The stdio transport remains available for local MCP clients. HTTP requires the OpenAI Secure Tunnel token on the ChatGPT path; an explicitly configured Cloudflare Access JWT verification path independently authenticates Claude. Muse may use an additional private Tailscale Serve HTTPS endpoint with its own Bearer token and project-explicit tool schema. Each authenticated client receives its own tool contract without weakening ChatGPT authorization. See [Claude through Cloudflare Access](docs/claude-cloudflare-access.md), [Claude work contexts](docs/claude-work-context-design.md), and [Muse over Tailscale](docs/muse-tailscale-mcp.md).
+The stdio transport remains available for local MCP clients. HTTP requires the OpenAI Secure Tunnel token on the ChatGPT path; an explicitly configured Cloudflare Access JWT verification path independently authenticates Claude. Muse may use an additional private Tailscale Serve HTTPS endpoint with its own Bearer token and project-explicit tool schema. Each authenticated client receives its own tool contract without weakening ChatGPT authorization. The optional Cloudflare Tunnel is launched over HTTP/2 to avoid repeated QUIC/UDP failures; Cloudflare Access authentication and the dedicated public MCP hostname are configured separately. See [Claude through Cloudflare Access](docs/claude-cloudflare-access.md), [Claude work contexts](docs/claude-work-context-design.md), and [Muse over Tailscale](docs/muse-tailscale-mcp.md).
 
 ## ChatGPT Approvals
 
