@@ -9,6 +9,7 @@ import { hashClaudeOwner } from "../../src/mcp/claude-context.js";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import { ShellRunner } from "../../src/shell/runner.js";
 import { ToolUsageMetrics } from "../../src/metrics/tool-usage.js";
+import { FeedbackStore } from "../../src/feedback/store.js";
 import type { ProjectConfig } from "../../src/types.js";
 
 const roots: string[] = [];
@@ -54,10 +55,11 @@ async function connect(
   principal: string,
 ) {
   const metrics = new ToolUsageMetrics(join(f.root, `usage-${principal}.json`));
+  const feedbackStore = await FeedbackStore.open(join(f.root, "feedback.json"));
   const ctx = {
     registry: f.registry, contextStore: f.store,
     shellRunner: new ShellRunner(), auditLogger: { log: f.audit },
-    toolUsageMetrics: metrics, clientProfile: profile,
+    toolUsageMetrics: metrics, feedbackStore, clientProfile: profile,
     ...(profile === "claude" ? { claudeOwnerHash: hashClaudeOwner(principal) } : {}),
   } as unknown as AppContext;
   const server = createMcpServer(ctx);
@@ -107,6 +109,15 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
     const second = await client.callTool({ name: "project.select", arguments: { project_id: "secondary" } });
     const b = getContextId(second)!;
     expect(b).not.toBe(a);
+
+    const reported = await client.callTool({ name: "feedback.report", arguments: {
+      context_id: a, kind: "bug", title: "In-project tool feedback", description: "A reproducible tool issue.",
+    } });
+    expect(reported.structuredContent).toMatchObject({ created: true, item: { project_id: "primary", sources: ["claude"] } });
+    const invalidFeedback = await client.callTool({ name: "feedback.report", arguments: {
+      context_id: "ctx_invalid", kind: "bug", title: "Invalid context", description: "Should be rejected.",
+    } });
+    expect(invalidFeedback.structuredContent).toMatchObject({ error: { code: "CONTEXT_NOT_FOUND" } });
 
     const jobStarted = await client.callTool({
       name: "shell.run", arguments: { context_id: a, command: "printf hello", async: true },
@@ -192,7 +203,7 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
     await expect(client.readResource({ uri: "project://primary/status" })).rejects.toThrow("unavailable");
 
     const schema = await client.callTool({ name: "tool.schema", arguments: { prefix: "workspace.read" } });
-    expect(getPayload(schema).schema_version).toBe("2026-11-02.2");
+    expect(getPayload(schema).schema_version).toBe("2026-11-06.1");
     expect(getPayload(schema).tools[0].inputSchema.required).toContain("context_id");
     expect(JSON.stringify(f.audit.mock.calls)).not.toContain(a);
     expect(JSON.stringify(f.audit.mock.calls)).not.toContain(b);

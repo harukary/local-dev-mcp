@@ -9,9 +9,12 @@ describe("authenticated client tool policy", () => {
     const chatgpt = buildToolDefinitions("chatgpt").map((tool) => tool.name);
     const claude = buildToolDefinitions("claude").map((tool) => tool.name);
     const muse = buildToolDefinitions("muse").map((tool) => tool.name);
-    expect(chatgpt).toHaveLength(82);
-    expect(claude).toHaveLength(80);
-    expect(muse).toHaveLength(75);
+    expect(chatgpt).toHaveLength(85);
+    expect(claude).toHaveLength(83);
+    expect(muse).toHaveLength(78);
+    for (const names of [chatgpt, claude, muse]) {
+      expect(names).toEqual(expect.arrayContaining(["feedback.report", "feedback.list", "feedback.update"]));
+    }
     expect(claude.every((name) => isClientToolEnabled("claude", name))).toBe(true);
     expect(muse.every((name) => isClientToolEnabled("muse", name))).toBe(true);
     for (const unknown of ["future.privileged", "shell.terminate_all", "project.erase", "browser.admin"]) {
@@ -44,6 +47,10 @@ describe("authenticated client tool policy", () => {
     expect(muse.inputSchema.properties).not.toHaveProperty("context_id");
     expect(isClaudeContextRequired(name)).toBe(true);
     expect(isMuseProjectScopedTool(name)).toBe(true);
+    expect(isMuseProjectScopedTool("feedback.report")).toBe(false);
+    expect(isClaudeContextRequired("feedback.report")).toBe(false);
+    const museFeedback = buildToolDefinitions("muse").find((tool) => tool.name === "feedback.report")!;
+    expect(museFeedback.inputSchema.required).not.toContain("project_id");
     const resume = buildToolDefinitions("claude").find((tool) => tool.name === "project.select")!;
     expect(resume.inputSchema.properties).toHaveProperty("working_dir");
     expect(resume.inputSchema.properties).toHaveProperty("context_id");

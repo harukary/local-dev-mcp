@@ -18,6 +18,8 @@ import type { ChatContextStore } from "../project/context-store.js";
 import type { ShellRunner } from "../shell/runner.js";
 import type { AuditLogger } from "../audit/audit-log.js";
 import type { ToolUsageMetrics } from "../metrics/tool-usage.js";
+import type { FeedbackStore } from "../feedback/store.js";
+import type { FeedbackReport, FeedbackUpdate, FeedbackQuery } from "../feedback/store.js";
 import { handleProjectList } from "./tools/project-list.js";
 import { handleProjectSelect, handleMuseProjectOpen } from "./tools/project-select.js";
 import { handleProjectCurrent } from "./tools/project-current.js";
@@ -51,6 +53,7 @@ import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleG
 import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserToolOperation, handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserTabOpen, handleBrowserTabUse, handleBrowserTabClose, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait, handleMobileBatch } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete } from "./tools/todo.js";
+import { handleFeedbackReport, handleFeedbackList, handleFeedbackUpdate } from "./tools/feedback.js";
 import { handleRepoActionList, handleRepoActionRead, handleRepoActionWrite } from "./tools/repo-action.js";
 import { hashOpenAiSubject, OPENAI_TUNNEL_HEADER_NAME, resolveOpenAiSubjectAuthConfig, resolveOpenAiSubjectPolicy, resolveOpenAiTunnelAuthConfig, verifyOpenAiSubject, verifyOpenAiTunnelToken, type OpenAiSubjectPolicy, type OpenAiTunnelAuthConfig } from "./auth.js";
 import { createCloudflareAccessVerifier, resolveCloudflareAccessConfig } from "./cloudflare-access.js";
@@ -66,6 +69,7 @@ export interface AppContext {
   shellRunner: ShellRunner;
   auditLogger: AuditLogger;
   toolUsageMetrics: ToolUsageMetrics;
+  feedbackStore: FeedbackStore;
   turnLeaseManager: InteractiveTurnLeaseManager;
   allowedOpenAiSubject?: string;
   openAiSubjectPolicy?: OpenAiSubjectPolicy;
@@ -318,6 +322,7 @@ async function createAppContext(
   const { ShellRunner } = await import("../shell/runner.js");
   const { AuditLogger } = await import("../audit/audit-log.js");
   const { ToolUsageMetrics } = await import("../metrics/tool-usage.js");
+  const { FeedbackStore } = await import("../feedback/store.js");
 
   const registry = await ProjectRegistry.load(configPath);
   const runtimeDir = join(homedir(), ".local-dev-mcp", "runtime");
@@ -327,9 +332,10 @@ async function createAppContext(
   const shellRunner = new ShellRunner();
   const auditLogger = new AuditLogger("./logs/audit.jsonl");
   const toolUsageMetrics = new ToolUsageMetrics("./logs/tool-usage.json");
+  const feedbackStore = await FeedbackStore.open(join(runtimeDir, "feedback.json"));
   const turnLeaseManager = new InteractiveTurnLeaseManager();
 
-  return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics, turnLeaseManager, allowedOpenAiSubject, openAiSubjectPolicy };
+  return { configPath, registry, contextStore, shellRunner, auditLogger, toolUsageMetrics, feedbackStore, turnLeaseManager, allowedOpenAiSubject, openAiSubjectPolicy };
 }
 
 export const SERVER_INSTRUCTIONS = `
@@ -344,7 +350,8 @@ For substantive work on a project:
 8. Use git.inspect/status/diff/log/show for read-only Git inspection. Use git.commit for normal commits of an already-reviewed staged snapshot; provide expected_head and expected_staged_fingerprint from git.status/git.inspect. Use git.push for normal pushes of the current branch to its configured upstream; provide the expected local HEAD. Deployment is project-specific: follow the selected repo's deployment contract rather than assuming a generic local-dev deployment tool. Use shell.run only for Git writes or project operations not covered by typed tools.
 9. For long shell jobs, reuse shell.status cursors. For normal completion polling use wait_ms=30000 and output=none; keep max_bytes small unless output is needed.
 10. Interactive ChatGPT turns have a 20-minute local-dev lease measured from the first local-dev tool call in that turn. If any local-dev tool returns status=turn_paused, treat it as an intentional turn boundary rather than an error: do not call local-dev again in the same assistant turn, do not alter or shorten the workflow because of the pause, and resume the unchanged workflow after the user sends the next message.
-11. For model-only inspection of a project image, try image.read first instead of materializing preemptively. If image.read returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, artifact.link/resource materialization is a fallback only when the file is within the resource materialization size limit. If image.read reports IMAGE_TOO_LARGE, create or request a smaller local preview instead of trying to send the oversized original through the Secure Tunnel. Also materialize/download when a downstream operation genuinely requires file bytes and the file fits the tunnel-safe limit.
+11. When you observe a reproducible local-dev tool issue, repeated friction, or missing capability, proactively call feedback.report with a concise sanitized summary. Do not report transient retries or include raw logs, tool arguments, personal data, or secrets. feedback.list and feedback.update support periodic review across projects without selecting a project.
+12. For model-only inspection of a project image, try image.read first instead of materializing preemptively. If image.read returns preview_unavailable without inline ImageContent, or the client cannot expose the inline image reliably, artifact.link/resource materialization is a fallback only when the file is within the resource materialization size limit. If image.read reports IMAGE_TOO_LARGE, create or request a smaller local preview instead of trying to send the oversized original through the Secure Tunnel. Also materialize/download when a downstream operation genuinely requires file bytes and the file fits the tunnel-safe limit.
 `.trim();
 
 const CLAUDE_SERVER_INSTRUCTIONS = `
@@ -354,6 +361,7 @@ A work context stays bound to its original project and working directory. To cha
 A fresh project.select without context_id creates a separate work context; never guess or reuse another chat's handle.
 If a handle is missing, invalid or lost, select the project again and use the newly returned ID.
 The MCP server enforces context ownership; do not use ChatGPT-only attachment tools.
+For reproducible local-dev MCP defects or recurring tool friction, call feedback.report with a sanitized summary. Transient retries are not reports. feedback tools work without a project selection; feedback.report accepts an optional context_id to infer the active project.
 `.trim();
 
 const MUSE_SERVER_INSTRUCTIONS = `
@@ -362,6 +370,7 @@ Pass project_id on EVERY project-scoped tool call. Use working_dir for worktrees
 There is no selected global project or conversation context_id. Never infer a project from previous calls.
 For asynchronous shell jobs, pass the same project_id and working_dir to shell.status or shell.cancel.
 Use workspace.batch for multiple independent reads. Do not run concurrent stateful browser workflows in one project.
+For reproducible local-dev MCP defects or recurring tool friction, call feedback.report with a sanitized summary. Transient retries are not reports. feedback tools do not require project.open; pass project_id on feedback.report when it is relevant.
 `.trim();
 
 export function createMcpServer(ctx: AppContext): Server {
@@ -387,6 +396,7 @@ export function createMcpServer(ctx: AppContext): Server {
     const resolvedClaudeContext = isClaude
       ? resolveClaudeContext(ctx.contextStore, ctx.claudeOwnerHash, args.context_id)
       : undefined;
+    const feedbackContextRequested = isClaude && name === "feedback.report" && args.context_id !== undefined;
     const museScope = isMuse && isMuseProjectScopedTool(name)
       ? resolveExplicitProjectScope(ctx, name, args, true) : undefined;
     const museContextId = museScope?.ok && museScope.projectId && ctx.museOwnerHash
@@ -601,6 +611,15 @@ export function createMcpServer(ctx: AppContext): Server {
         case "mobile.batch":
           return await handleMobileBatch(ctx, chatContextId, args as Parameters<typeof handleMobileBatch>[2]);
 
+        case "feedback.report":
+          return await handleFeedbackReport(ctx, chatContextId, args as FeedbackReport);
+
+        case "feedback.list":
+          return await handleFeedbackList(ctx, args as FeedbackQuery);
+
+        case "feedback.update":
+          return await handleFeedbackUpdate(ctx, chatContextId, args as FeedbackUpdate);
+
         case "todo.projects":
           return await handleTodoProjects(ctx, args as { include_archived?: boolean });
 
@@ -741,7 +760,7 @@ export function createMcpServer(ctx: AppContext): Server {
         result = jsonError("TOOL_UNAVAILABLE", "This tool is unavailable for the authenticated client.");
       } else if (missingContext) {
         result = jsonError("CONTEXT_ID_REQUIRED", "Pass context_id from project.select for this Claude work context.");
-      } else if (unresolvedContext) {
+      } else if (unresolvedContext || (feedbackContextRequested && !resolvedClaudeContext)) {
         result = jsonError("CONTEXT_NOT_FOUND", "The requested work context is unavailable.");
       } else if (scopeConflict) {
         result = jsonError("CONTEXT_PROJECT_CONFLICT", "Explicit project_id or working_dir conflicts with the selected work context.");

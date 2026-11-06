@@ -3,6 +3,7 @@ import { buildDevToolDefinitions } from "./dev-tool-definitions.js";
 import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
+import { buildFeedbackToolDefinitions } from "./feedback-tool-definitions.js";
 import { buildRepoActionToolDefinitions } from "./repo-action-tool-definitions.js";
 
 export const TOOL_SCHEMA_VERSION = "2026-11-06.1";
@@ -32,6 +33,7 @@ const EXTERNAL_SHARED_TOOLS = new Set([
   "mobile.wait", "mobile.batch",
   "shell.run", "shell.status", "shell.cancel",
   "image.read", "artifact.read", "tool.usage", "tool.schema",
+  "feedback.report", "feedback.list", "feedback.update",
 ]);
 const CLAUDE_ADDITIONAL_TOOLS = new Set([
   "project.select", "project.current", "project.reload",
@@ -52,6 +54,7 @@ export function isClaudeToolEnabled(name: string): boolean {
 const CLAUDE_CONTEXT_FREE_TOOLS = new Set([
   "project.list", "project.select", "project.reload", "skills.read",
   "tool.usage", "tool.schema", "todo.projects", "todo.list", "todo.get",
+  "feedback.report", "feedback.list", "feedback.update",
 ]);
 
 export function isClaudeContextRequired(name: string): boolean {
@@ -517,6 +520,7 @@ export function buildToolDefinitions(profile: ClientToolProfile = "chatgpt"): To
       } },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
+    ...buildFeedbackToolDefinitions(),
   ];
   const base = tools.map(addExplicitProjectScope);
   if (profile === "chatgpt") return base as Tool[];
@@ -559,6 +563,18 @@ export function buildToolDefinitions(profile: ClientToolProfile = "chatgpt"): To
           properties: {
             ...tool.inputSchema.properties,
             context_id: { type: "string", description: "Optional work context ID for resuming the same project and working directory; omit to start a different scope." },
+          },
+        },
+      };
+    }
+    if (tool.name === "feedback.report") {
+      return {
+        ...tool,
+        inputSchema: {
+          ...tool.inputSchema,
+          properties: {
+            ...tool.inputSchema.properties,
+            context_id: { type: "string", description: "Optional selected Claude work context. If supplied, derive the feedback project from this context." },
           },
         },
       };

@@ -69,6 +69,7 @@ Core tool families include:
 - `artifact.read` — compatibility fallback that embeds a local file directly in the MCP tool result
 - `artifact.receive` — receive a normal ChatGPT attachment in one MCP call
 - `tool.schema` / `tool.usage` — schema refresh and compact usage diagnostics
+- `feedback.report` / `feedback.list` / `feedback.update` — durable client-shared MCP defect/improvement reporting and review, independent of the selected project; see [`docs/feedback.md`](docs/feedback.md)
 
 ## Efficient Tool Usage And Diagnostics
 
@@ -85,6 +86,7 @@ Prefer typed tools over broad shell commands:
 - use `shell.run` with `async=true` for work that may exceed roughly 30 seconds, then poll `shell.status`
 - interactive ChatGPT turns use a 20-minute local-dev lease; after expiry, the next local-dev call returns `turn_paused` without changing or cancelling the workflow. See [`docs/chatgpt-interactive-turn-lease.md`](docs/chatgpt-interactive-turn-lease.md)
 - use `tool.schema` after server/tool changes when ChatGPT has stale action metadata
+- report reproducible tool problems or recurring workflow friction through `feedback.report`; review `feedback.list` alongside `tool.usage` weekly, rather than storing raw request/output logs
 
 ## Browser HTTP Basic Authentication
 

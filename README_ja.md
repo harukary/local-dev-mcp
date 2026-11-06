@@ -69,6 +69,7 @@ MCP server側でもproject policyとshell risk policyを適用します。ChatGP
 - `artifact.read` — local fileをtool resultへ直接埋め込む互換fallback
 - `artifact.receive` — ChatGPT通常添付を1回のMCP callで受信
 - `tool.schema` / `tool.usage` — tool schema refreshとusage diagnostics
+- `feedback.report` / `feedback.list` / `feedback.update` — ChatGPT・Claude・Muse共通の課題・改善報告。プロジェクト未選択でも使え、解決・再発を追跡できます。詳細は [`docs/feedback.md`](docs/feedback.md)
 
 ## 効率的な Tool 利用と Diagnostics
 
@@ -82,6 +83,7 @@ broadなshell commandよりtyped toolを優先します。
 - build/test/deploy/install/未対応またはad-hoc操作では`shell.run`
 - 約30秒を超えそうな処理は`shell.run(async=true)`で開始し、`shell.status`でpoll
 - server/tool変更後にChatGPT側schemaが古い場合は`tool.schema`とPlugin Refreshを使う
+- 再現性のあるMCPの不具合・継続的な使いにくさは`feedback.report`で報告し、週次レビューで`feedback.list`と`tool.usage`を併用する。生のログや機密情報は報告しない
 
 ## BrowserのHTTP Basic認証
 

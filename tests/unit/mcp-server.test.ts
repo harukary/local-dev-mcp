@@ -195,10 +195,10 @@ describe("Secure Tunnel HTTP host boundary", () => {
 });
 
 describe("client-isolated tool schemas", () => {
-  it("preserves the exact pre-change ChatGPT descriptors, including output schemas", () => {
+  it("pins the current ChatGPT descriptors, including output schemas", () => {
     const sha256 = createHash("sha256").update(JSON.stringify(buildToolDefinitions())).digest("hex");
-    expect(sha256).toBe("20a76b027812f696c1d21654ac87b0b5123be9c6e692b409e6f2fff2360c0cc2");
-    expect(buildToolDefinitions().length).toBe(82);
+    expect(sha256).toBe("2b208d2f80735317c311eb4d3c3b0ab788c5b82f0560da7b83636fb0c61718ee");
+    expect(buildToolDefinitions().length).toBe(85);
   });
 
   it("exposes context_id only for Claude, excludes ChatGPT-only tools and validates by profile", () => {
@@ -220,7 +220,14 @@ describe("client-isolated tool schemas", () => {
     expect(validateToolInput("workspace.read", { path: "README.md" })).toBeUndefined();
     expect(validateToolInput("workspace.read", { path: "README.md", context_id: "ctx_test" }, "claude")).toBeUndefined();
     expect(validateToolInput("artifact.link", { path: "README.md" }, "claude")).toContain("Unknown tool");
-    expect(buildToolSchemaSnapshot({}, "claude").schema_version).toBe("2026-11-02.2");
+    expect(buildToolSchemaSnapshot({}, "claude").schema_version).toBe("2026-11-06.1");
+    const feedback = tools.find((tool) => tool.name === "feedback.report");
+    expect(feedback?.inputSchema.required).not.toContain("context_id");
+    expect(feedback?.inputSchema.properties).toHaveProperty("context_id");
+    expect(isClaudeContextRequired("feedback.report")).toBe(false);
+    expect(validateToolInput("feedback.report", { kind: "bug", title: "Error", description: "Details" }, "claude")).toBeUndefined();
+    expect(validateToolInput("feedback.report", { kind: "bug", title: "Error", description: "Details", context_id: "ctx_test" }, "claude")).toBeUndefined();
+    expect(validateToolInput("feedback.report", { kind: "bug", title: "Error", description: "Details", context_id: "ctx_test" }, "muse")).toBeDefined();
   });
 });
 
@@ -242,7 +249,8 @@ describe("tool schema snapshot", () => {
     const repoActionList = snapshot.tools.find((tool) => tool.name === "repo.action.list");
     const repoActionRead = snapshot.tools.find((tool) => tool.name === "repo.action.read");
     const repoActionWrite = snapshot.tools.find((tool) => tool.name === "repo.action.write");
-    expect(snapshot.schema_version).toBe("2026-10-28.1");
+    expect(snapshot.schema_version).toBe("2026-11-06.1");
+    expect(names).toEqual(expect.arrayContaining(["feedback.report", "feedback.list", "feedback.update"]));
     expect(projectSelect?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
     expect(names).toContain("tool.schema");
     expect(names).toContain("git.commit");
