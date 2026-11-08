@@ -197,8 +197,8 @@ describe("Secure Tunnel HTTP host boundary", () => {
 describe("client-isolated tool schemas", () => {
   it("pins the current ChatGPT descriptors, including output schemas", () => {
     const sha256 = createHash("sha256").update(JSON.stringify(buildToolDefinitions())).digest("hex");
-    expect(sha256).toBe("424da432a512f2ab4a1d06a17c1118da61c50ad73102bad3f24b3f8f05777bf1");
-    expect(buildToolDefinitions().length).toBe(85);
+    expect(sha256).toBe("ec9d81da2105cc54a5a5578d13f1affb9e898c83f85ccacf4093d79e71860b88");
+    expect(buildToolDefinitions().length).toBe(98);
   });
 
   it("exposes context_id only for Claude, excludes ChatGPT-only tools and validates by profile", () => {
@@ -220,7 +220,7 @@ describe("client-isolated tool schemas", () => {
     expect(validateToolInput("workspace.read", { path: "README.md" })).toBeUndefined();
     expect(validateToolInput("workspace.read", { path: "README.md", context_id: "ctx_test" }, "claude")).toBeUndefined();
     expect(validateToolInput("artifact.link", { path: "README.md" }, "claude")).toContain("Unknown tool");
-    expect(buildToolSchemaSnapshot({}, "claude").schema_version).toBe("2026-11-06.1");
+    expect(buildToolSchemaSnapshot({}, "claude").schema_version).toBe("2026-11-08.1");
     const feedback = tools.find((tool) => tool.name === "feedback.report");
     expect(feedback?.inputSchema.required).not.toContain("context_id");
     expect(feedback?.inputSchema.properties).toHaveProperty("context_id");
@@ -249,7 +249,7 @@ describe("tool schema snapshot", () => {
     const repoActionList = snapshot.tools.find((tool) => tool.name === "repo.action.list");
     const repoActionRead = snapshot.tools.find((tool) => tool.name === "repo.action.read");
     const repoActionWrite = snapshot.tools.find((tool) => tool.name === "repo.action.write");
-    expect(snapshot.schema_version).toBe("2026-11-06.1");
+    expect(snapshot.schema_version).toBe("2026-11-08.1");
     expect(names).toEqual(expect.arrayContaining(["feedback.report", "feedback.list", "feedback.update"]));
     expect(projectSelect?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
     expect(names).toContain("tool.schema");

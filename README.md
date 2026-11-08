@@ -4,7 +4,7 @@
 
 ![local-dev-mcp System Architecture](docs/local-dev-mcp-system-overview-en.png)
 
-`local-dev-mcp` is an open-source, self-hosted MCP server for privately operating a trusted development workstation from ChatGPT. It exposes registered projects through typed project, workspace, git, repository-action, browser, mobile, Todo, artifact, and controlled shell tools.
+`local-dev-mcp` is an open-source, self-hosted MCP server for privately operating a trusted development workstation from ChatGPT. It exposes registered projects through typed project, workspace, git, repository-action, browser, computer, mobile, Todo, artifact, and controlled shell tools.
 
 For ChatGPT, the canonical transport is **OpenAI Secure MCP Tunnel**. The HTTP MCP server listens on loopback only and does not expose a public MCP endpoint.
 
@@ -12,7 +12,7 @@ For ChatGPT, the canonical transport is **OpenAI Secure MCP Tunnel**. The HTTP M
 
 - inspect and edit source repositories
 - run tests, builds, deploy commands, and custom scripts
-- operate browser sessions and mobile devices
+- operate browser sessions, macOS desktop windows, and mobile devices
 - inspect images through MCP inline image content
 - transfer generated files from the development host to ChatGPT
 - receive normal ChatGPT attachments into a selected project
@@ -42,7 +42,7 @@ Important runtime rules:
 - The OpenAI Tunnel runtime API key and local tunnel token are never embedded in launchd plist files.
 - `shell.run` remains the fallback escape hatch; prefer typed tools whenever possible.
 - repositories can opt into closed-world actions through `.local-dev/actions.json` and `repo.action.list/read/write`; a narrowly scoped deployment operation supports credentialed publication from a verified pushed Git HEAD without arbitrary shell text.
-- denied-path checks apply to file reads, writes, artifact transfer, and project-scoped operations.
+- denied-path checks apply to file reads, writes, artifact transfer, and project-scoped operations. **Desktop Computer Use is different:** it can inspect or manipulate macOS windows beyond the project root; explicit pid/window IDs, a verified work context, and write_policy=allow for mutations are mandatory.
 - raw artifact bytes and temporary file download URLs are not written to normal audit logs.
 
 The stdio transport remains available for local MCP clients. HTTP requires the OpenAI Secure Tunnel token on the ChatGPT path; an explicitly configured Cloudflare Access JWT verification path independently authenticates Claude. Muse may use an additional private Tailscale Serve HTTPS endpoint with its own Bearer token and project-explicit tool schema. Each authenticated client receives its own tool contract without weakening ChatGPT authorization. The optional Cloudflare Tunnel is launched over HTTP/2 to avoid repeated QUIC/UDP failures; Cloudflare Access authentication and the dedicated public MCP hostname are configured separately. See [Claude through Cloudflare Access](docs/claude-cloudflare-access.md), [Claude work contexts](docs/claude-work-context-design.md), and [Muse over Tailscale](docs/muse-tailscale-mcp.md).
@@ -63,6 +63,7 @@ Core tool families include:
 - `repo.action.*` — repository-declared local read/write actions and verified deployment actions backed by `.local-dev/actions.json`; see [`docs/repo-actions.md`](docs/repo-actions.md)
 - `shell.*` — managed shell execution, approvals, background jobs, and cancellation
 - `browser.*` — Chrome DevTools Protocol browser automation
+- `computer.*` — macOS desktop window observation and interaction via Cua Driver (separate from browser profiles); see [computer setup and operation](docs/computer-automation.md)
 - `mobile.*` — iOS/Android inspection and interaction (timed iOS swipes use agent-device `gesture pan`; Android swipes use ADB; see [`docs/mobile-automation.md`](docs/mobile-automation.md))
 - `todo.*` — shared Todo Service operations
 - `skills.*` — readable project/user/system Skills

@@ -4,7 +4,7 @@
 
 ![local-dev-mcp システム構成](docs/local-dev-mcp-system-overview-ja.png)
 
-`local-dev-mcp` は、信頼した開発用PCを ChatGPT から安全な接続で操作するための、OSSとして公開されたセルフホスト型MCPサーバーです。登録した project に対して、project / workspace / git / repository action / browser / mobile / Todo / artifact / controlled shell の typed tool を提供します。
+`local-dev-mcp` は、信頼した開発用PCを ChatGPT から安全な接続で操作するための、OSSとして公開されたセルフホスト型MCPサーバーです。登録した project に対して、project / workspace / git / repository action / browser / computer / mobile / Todo / artifact / controlled shell の typed tool を提供します。
 
 ChatGPT との正規接続経路は **OpenAI Secure MCP Tunnel** です。HTTP MCP server は loopback のみで待ち受け、public な MCP endpoint は公開しません。
 
@@ -12,7 +12,7 @@ ChatGPT との正規接続経路は **OpenAI Secure MCP Tunnel** です。HTTP M
 
 - source repository の調査・編集
 - test / build / deploy / custom script の実行
-- browser session や mobile device の操作
+- browser session、macOSのデスクトップ画面、mobile device の操作
 - MCP inline image content による画像確認
 - 開発ホストから ChatGPT への成果物受け渡し
 - ChatGPT の通常添付を selected project へ受信
@@ -42,7 +42,7 @@ runtime の重要ルール:
 - Tunnel runtime API key と local tunnel token を launchd plist に埋め込まない
 - `shell.run` は fallback escape hatch とし、可能な限り typed tool を優先する
 - repository は `.local-dev/actions.json` と `repo.action.list/read/write` で closed-world なlocal actionをopt-inでき、このsurfaceでは任意shell文字列を受け取らない
-- denied-path check を file read/write、artifact transfer、project-scoped operation に適用する
+- denied-path check を file read/write、artifact transfer、project-scoped operation に適用する。ただし **computer.* はデスクトップ全体が対象**で、project rootでアクセスを制限するものではない。確認済みの作業コンテキスト、pid/window_idの明示、操作時のwrite_policy=allowを必須とする
 - artifact本体や一時 file download URL を通常のaudit logへ保存しない
 
 stdio transport はローカルMCP client向けに残します。HTTP transportは既定でOpenAI Secure Tunnel tokenを要求します。ClaudeにはCloudflare Access JWTの追加認証、MuseにはTailscale Serve経由の専用Bearer認証を個別に設定できます。Museは各ツール呼び出しでproject_idを指定し、チャット単位の選択状態を共有しません。ChatGPT・Claudeの既存経路は変わりません。設定は[ClaudeとCloudflare Accessの接続](docs/claude-cloudflare-access.md)、[MuseとTailscaleの接続](docs/muse-tailscale-mcp.md)を参照してください。
@@ -63,6 +63,7 @@ MCP server側でもproject policyとshell risk policyを適用します。ChatGP
 - `repo.action.*` — `.local-dev/actions.json` でrepositoryが宣言するlocal read/write action。詳細は [`docs/repo-actions.md`](docs/repo-actions.md)
 - `shell.*` — shell実行、approval、background job、cancel
 - `browser.*` — Chrome DevTools Protocol browser automation
+- `computer.*` — Cua DriverによるmacOSウィンドウ操作（ブラウザのプロファイルとは独立、[セットアップ・操作](docs/computer-automation_ja.md)）
 - `mobile.*` — iOS/Android確認・操作
 - `todo.*` — shared Todo Service操作
 - `skills.*` — project/user/system Skillsの読み取り

@@ -1,14 +1,15 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { buildDevToolDefinitions } from "./dev-tool-definitions.js";
 import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
+import { buildComputerToolDefinitions } from "./computer-tool-definitions.js";
 import { buildMobileToolDefinitions } from "./mobile-tool-definitions.js";
 import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 import { buildFeedbackToolDefinitions } from "./feedback-tool-definitions.js";
 import { buildRepoActionToolDefinitions } from "./repo-action-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-11-06.1";
-export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-06.1";
-export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-06.1";
+export const TOOL_SCHEMA_VERSION = "2026-11-08.1";
+export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-08.1";
+export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-08.1";
 export type ClientToolProfile = "chatgpt" | "claude" | "muse";
 
 // External clients opt into each tool explicitly. Adding a handler to ChatGPT
@@ -26,6 +27,9 @@ const EXTERNAL_SHARED_TOOLS = new Set([
   "browser.tab.close", "browser.dom", "browser.selectors", "browser.click",
   "browser.type", "browser.wait", "browser.eval", "browser.press",
   "browser.reload", "browser.back", "browser.forward", "browser.screenshot", "browser.open",
+  "computer.status", "computer.list_apps", "computer.list_windows", "computer.get_window_state",
+  "computer.screenshot", "computer.activate_window", "computer.launch_app", "computer.click",
+  "computer.drag", "computer.scroll", "computer.type", "computer.press_key", "computer.hotkey",
   "mobile.status", "mobile.list_devices", "mobile.screenshot", "mobile.snapshot",
   "mobile.current_app", "mobile.logs", "mobile.stop_app", "mobile.restart_app",
   "mobile.boot", "mobile.launch_app", "mobile.open_url", "mobile.tap",
@@ -84,6 +88,9 @@ const EXPLICIT_PROJECT_SCOPE_TOOLS = new Set([
   "artifact.link",
   "artifact.read",
   "artifact.receive",
+  "computer.status", "computer.list_apps", "computer.list_windows", "computer.get_window_state",
+  "computer.screenshot", "computer.activate_window", "computer.launch_app", "computer.click",
+  "computer.drag", "computer.scroll", "computer.type", "computer.press_key", "computer.hotkey",
   "mobile.screenshot",
   "mobile.snapshot",
   "mobile.current_app",
@@ -112,7 +119,7 @@ export function isMuseToolEnabled(name: string): boolean {
 
 export function isMuseProjectScopedTool(name: string): boolean {
   return supportsExplicitProjectScope(name) || name.startsWith("browser.") ||
-    name.startsWith("mobile.") || name === "shell.status" || name === "shell.cancel";
+    name.startsWith("computer.") || name.startsWith("mobile.") || name === "shell.status" || name === "shell.cancel";
 }
 
 function addExplicitProjectScope<T extends { name: string; inputSchema: Record<string, any> }>(tool: T): T {
@@ -235,11 +242,12 @@ export function buildToolDefinitions(profile: ClientToolProfile = "chatgpt"): To
     ...buildDevToolDefinitions(),
     ...buildRepoActionToolDefinitions(),
     ...buildBrowserToolDefinitions(),
+    ...buildComputerToolDefinitions(),
     ...buildMobileToolDefinitions(),
     {
       name: "shell.run",
       description:
-        "Fallback escape hatch for operations not covered by typed tools. Prefer workspace.*, git.*, browser.*, mobile.*, and todo.* when they support the task. Use git.inspect/status/diff/log/show for read-only Git inspection, git.commit for committing the verified staged snapshot, and git.push for publishing the verified current HEAD. Reserve shell.run for Git writes not covered by typed tools or unsupported compound operations. For file edits, prefer workspace.patch over Python/Node/Ruby heredocs or text-replacement scripts. If work is in a git worktree, select it once with project.select working_dir in interactive chats, or pass project_id + working_dir directly in stateless Scheduled Tasks. Use shell.run for builds, tests, deploys, installs, custom scripts, or unsupported operations. For any command likely to exceed about 30 seconds, use async=true. For normal completion polling call shell.status with wait_ms=30000 and output=none; when output matters, reuse cursor. Do not create repeated sleep + ps polling commands.",
+        "Fallback escape hatch for operations not covered by typed tools. Prefer workspace.*, git.*, browser.*, computer.*, mobile.*, and todo.* when they support the task. Use git.inspect/status/diff/log/show for read-only Git inspection, git.commit for committing the verified staged snapshot, and git.push for publishing the verified current HEAD. Reserve shell.run for Git writes not covered by typed tools or unsupported compound operations. For file edits, prefer workspace.patch over Python/Node/Ruby heredocs or text-replacement scripts. If work is in a git worktree, select it once with project.select working_dir in interactive chats, or pass project_id + working_dir directly in stateless Scheduled Tasks. Use shell.run for builds, tests, deploys, installs, custom scripts, or unsupported operations. For any command likely to exceed about 30 seconds, use async=true. For normal completion polling call shell.status with wait_ms=30000 and output=none; when output matters, reuse cursor. Do not create repeated sleep + ps polling commands.",
       inputSchema: {
         type: "object",
         properties: {

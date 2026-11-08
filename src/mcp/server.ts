@@ -49,6 +49,7 @@ import { structuredTextFallback } from "./output.js";
 import { adaptMcpToolResult } from "./response-adapter.js";
 import { jsonError } from "./tools/dev/common.js";
 import { handleBrowserInteract } from "./tools/browser.js";
+import { handleComputerTool, runComputerToolOperation } from "./tools/computer.js";
 import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleGitDiff, handleGitCommit, handleGitPush } from "./tools/dev/git.js";
 import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserToolOperation, handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserTabOpen, handleBrowserTabUse, handleBrowserTabClose, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait, handleMobileBatch } from "./tools/mobile.js";
@@ -414,6 +415,7 @@ export function createMcpServer(ctx: AppContext): Server {
       debugMcpLog(`[CallTool] ${name} chatContextId=${chatContextId} store=${ctx.contextStore.getAll().size}ctxs`);
       const invokeTool = async () => {
         extra.signal.throwIfAborted();
+        if (name.startsWith("computer.")) return await handleComputerTool(ctx, chatContextId, name, args);
         switch (name) {
         case "workspace.batch":
           return await handleWorkspaceBatch(ctx, chatContextId, args as { requests?: ReadBatchItem[]; max_bytes?: number; detail?: "compact" | "full" });
@@ -753,7 +755,9 @@ export function createMcpServer(ctx: AppContext): Server {
         ? await runBrowserToolOperation(chatContextId, name, invokeTool)
         : name.startsWith("mobile.")
           ? await runMobileToolOperation(ctx, chatContextId, name, args, invokeTool)
-          : await invokeTool();
+          : name.startsWith("computer.")
+            ? await runComputerToolOperation(invokeTool)
+            : await invokeTool();
 
       let result: any;
       if (!toolEnabled) {
