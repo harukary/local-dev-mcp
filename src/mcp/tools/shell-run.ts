@@ -122,7 +122,11 @@ export async function handleShellRun(
       enforcement: "blocked",
       enforcementReason: risk.level === "forbidden"
         ? "risk classifier forbids this command"
-        : `catastrophic command blocked by approval mode: ${project.approvalMode}`,
+        : risk.level === "workspace_write" && project.writePolicy === "deny"
+          ? "project write_policy denies shell writes"
+          : risk.level === "network_or_dependency" && project.networkPolicy === "deny"
+            ? "project network_policy denies network commands"
+            : `catastrophic command blocked by approval mode: ${project.approvalMode}`,
       error: `Forbidden: ${risk.reasons.join(", ")}`,
     });
 
@@ -155,17 +159,21 @@ export async function handleShellRun(
       async: args.async,
       timeoutSeconds: args.timeout_seconds,
       longRunning: args.long_running ?? (args.async === true && args.timeout_seconds === undefined),
-      force: false,
+      force: Boolean(args.credential_scope),
+      createRequest: ctx.clientProfile !== "muse",
       credentialScope: args.credential_scope,
     }
   );
 
   if (approval.required) {
+    const pending = approval.request;
+    const unavailable = !pending;
+    const approvalPolicy = approval.approvalPolicy ?? pending?.approvalPolicy;
     await ctx.auditLogger.log({
       timestamp: new Date().toISOString(),
       chatContextId,
       tool: "shell.run",
-      event: "approval_required",
+      event: unavailable ? "approval_unavailable" : "approval_required",
       projectId: project.projectId,
       command: args.command,
       purpose: args.purpose,
@@ -173,11 +181,11 @@ export async function handleShellRun(
       riskLevel: risk.level,
       riskReasons: approvalReasons,
       enforcement: "approval_required",
-      enforcementReason: approval.request!.approvalPolicy === "deny"
-        ? "project policy requires approval for a denied operation"
+      enforcementReason: unavailable ? "client has no shell approval capability"
+        : approvalPolicy === "deny" ? "project policy requires approval for a denied operation"
         : "project policy requires explicit approval",
-      approvalRequestId: approval.request!.id,
-      approvalPolicy: approval.request!.approvalPolicy,
+      approvalRequestId: pending?.id,
+      approvalPolicy,
       approval: {
         required: true,
         approved: null,
@@ -190,13 +198,14 @@ export async function handleShellRun(
           type: "text",
           text: JSON.stringify({
             error: {
-              code: "APPROVAL_REQUIRED",
-              message:
-                approval.request?.approvalPolicy === "deny"
+              code: unavailable ? "APPROVAL_UNAVAILABLE" : "APPROVAL_REQUIRED",
+              message: unavailable
+                ? "This command requires approval, but this client cannot complete the approval flow. No pending request was created."
+                : approvalPolicy === "deny"
                   ? "This command is high risk and requires explicit approval before execution."
                   : "This command requires approval before execution.",
-              approval_request_id: approval.request!.id,
-              approval_policy: approval.request?.approvalPolicy,
+              ...(pending ? { approval_request_id: pending.id } : {}),
+              approval_policy: approvalPolicy,
               risk_level: risk.level,
               reasons: approvalReasons,
               command: args.command,
@@ -362,8 +371,10 @@ export async function handleShellRun(
   };
 }
 
-function shouldBlockCommand(project: { approvalMode: string }, command: string, riskLevel: string): boolean {
-  if (riskLevel === "forbidden") {
+function shouldBlockCommand(project: { approvalMode: string; writePolicy: string; networkPolicy: string }, command: string, riskLevel: string): boolean {
+  if (riskLevel === "forbidden" ||
+      (riskLevel === "workspace_write" && project.writePolicy === "deny") ||
+      (riskLevel === "network_or_dependency" && project.networkPolicy === "deny")) {
     return true;
   }
   if (project.approvalMode === "never") {

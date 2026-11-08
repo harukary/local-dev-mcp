@@ -113,6 +113,8 @@ pnpm test
 
 local project registryを設定します。通常は`config/projects.local.yaml`、未配置の場合は`config/projects.yaml`を使います。
 
+Shellの通常のファイル編集・移動・単一ファイル削除は`write_policy=allow`で自動実行でき、`confirm`では承認が必要、`deny`では拒否します。`approval_mode=policy`では再帰削除などの危険操作は引き続き承認対象です。承認手段のないクライアントには保留要求を作らず`APPROVAL_UNAVAILABLE`を返します。`credential_scope`には通常の書き込み権限とは別の承認が必要です。範囲を限定した`workspace.patch`は`confirm`でも利用できますが、`deny`では書き込みを拒否し、dry runのみ許可します。Host ShellはOSレベルでプロジェクト外へのアクセスを遮断しないため、`write_policy=allow`は信頼できるクライアントへのShell実行権限の委譲です。
+
 診断:
 
 ```bash

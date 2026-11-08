@@ -117,7 +117,7 @@ describe("handleShellRun", () => {
     }));
   });
 
-  it("uses Bitwarden access without forcing approval for an otherwise safe command", async () => {
+  it("requires separate approval for Bitwarden access on an otherwise safe command", async () => {
     const contextStore = new ChatContextStore();
     contextStore.setCurrentProject("chat-a", "alpha");
     const shellRunner = {
@@ -168,19 +168,11 @@ describe("handleShellRun", () => {
       credential_scope: "bitwarden",
     });
 
-    expect(result.isError).not.toBe(true);
-    expect(shellRunner.run).toHaveBeenCalledWith(
-      project,
-      expect.objectContaining({
-        command: "pnpm env:sync",
-        credentialScope: "bitwarden",
-        env: {
-          BWS_ACCESS_TOKEN: "test-token",
-          PATH: "/tmp/bitwarden-bin:/usr/bin",
-        },
-      }),
-      "chat-a"
-    );
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).error).toMatchObject({
+      code: "APPROVAL_REQUIRED", approval_policy: "ask", credential_scope: "bitwarden",
+    });
+    expect(shellRunner.run).not.toHaveBeenCalled();
   });
   it("requires async mode for long-running jobs", async () => {
     const contextStore = new ChatContextStore();

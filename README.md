@@ -162,6 +162,8 @@ pnpm test
 
 Configure the local project registry. A workstation normally uses `config/projects.local.yaml`; otherwise `config/projects.yaml` is used.
 
+For Shell permissions, `write_policy=allow` permits ordinary file edits, moves, and single-file deletions; `confirm` requires approval for Shell writes, while `deny` blocks them. `approval_mode=policy` still requires approval for destructive commands. Clients without approval tools receive `APPROVAL_UNAVAILABLE` without a queued request. Injecting `credential_scope` always requires separate approval. `workspace.patch` remains available under `confirm` for bounded edits but rejects writes under `deny` (dry runs remain available). The host Shell is not OS-isolated to the project root; treat `write_policy=allow` as granting trusted host Shell execution.
+
 Run the local diagnostic command:
 
 ```bash

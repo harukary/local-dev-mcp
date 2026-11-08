@@ -73,7 +73,7 @@ export async function handleShellApprove(ctx: AppContext, chatContextId: string,
   }
 
   const currentRisk = classifyRisk(request.command, project.deniedPaths);
-  if (shouldBlockApprovedCommand(project.approvalMode, request.command, currentRisk.level)) {
+  if (shouldBlockApprovedCommand(project, request.command, currentRisk.level)) {
     releaseApprovalRequest(request.id);
     await ctx.auditLogger.log({
       timestamp: new Date().toISOString(),
@@ -331,14 +331,16 @@ async function logApprovalApproved(
   });
 }
 
-function shouldBlockApprovedCommand(approvalMode: string, command: string, riskLevel: string): boolean {
-  if (riskLevel === "forbidden") {
+function shouldBlockApprovedCommand(project: { approvalMode: string; writePolicy: string; networkPolicy: string }, command: string, riskLevel: string): boolean {
+  if (riskLevel === "forbidden" ||
+      (riskLevel === "workspace_write" && project.writePolicy === "deny") ||
+      (riskLevel === "network_or_dependency" && project.networkPolicy === "deny")) {
     return true;
   }
-  if (approvalMode === "never") {
+  if (project.approvalMode === "never") {
     return false;
   }
-  if (approvalMode === "catastrophic_only") {
+  if (project.approvalMode === "catastrophic_only") {
     return isCatastrophicCommand(command);
   }
   return false;

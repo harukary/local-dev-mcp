@@ -39,7 +39,10 @@ const CATASTROPHIC_PATTERNS: RiskRule[] = [
 ];
 
 const DESTRUCTIVE_PATTERNS: RiskRule[] = [
-  { pattern: /\brm\s+-rf\b/, level: "destructive_or_process_control", reason: "recursive force delete" },
+  { pattern: /\brm\b[^\n;&|]*?(?:-[a-zA-Z]*[rR][a-zA-Z]*\b|--recursive\b)/, level: "destructive_or_process_control", reason: "recursive delete" },
+  { pattern: /\bfind\b[^\n;&|]*\s-delete\b/, level: "destructive_or_process_control", reason: "find delete" },
+  { pattern: /\bgit\s+clean\b[^\n;&|]*\s-[a-zA-Z]*f\b/, level: "destructive_or_process_control", reason: "git clean with force" },
+  { pattern: /\bgit\s+reset\s+--hard\b/, level: "destructive_or_process_control", reason: "git hard reset" },
   { pattern: /\bginit\s+clean\s+-fd\b|\bgit\s+clean\s+-fd\b/, level: "destructive_or_process_control", reason: "force clean git ignored files" },
   { pattern: /\bkill\s+/, level: "destructive_or_process_control", reason: "process kill" },
   { pattern: /\bpkill\b/, level: "destructive_or_process_control", reason: "process kill by name" },
@@ -81,6 +84,7 @@ const WRITE_PATTERNS: RiskRule[] = [
   { pattern: /\bnode\b(?!\s+--check(?:\s|$))/, level: "workspace_write", reason: "arbitrary Node.js script execution" },
   { pattern: /\btsx\b/, level: "workspace_write", reason: "arbitrary TypeScript execution" },
   { pattern: /\bsqlite3\b(?:[^"\n]*"\s*|[^'"\n]*'\s*)(?:BEGIN\s*;\s*)?(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX)\b/i, level: "workspace_write", reason: "SQLite mutation", scan: "raw" },
+  { pattern: /\brm\b/, level: "workspace_write", reason: "delete files" },
   { pattern: /\bmv\b/, level: "workspace_write", reason: "move/rename files" },
   { pattern: /\bcp\b/, level: "workspace_write", reason: "copy files" },
   { pattern: /\bmkdir\b/, level: "workspace_write", reason: "create directories" },

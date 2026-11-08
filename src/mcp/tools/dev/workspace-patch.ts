@@ -64,6 +64,7 @@ export async function handleWorkspacePatch(ctx: AppContext, chatContextId: strin
       return file;
     };
     try {
+      if (!dryRun && project.writePolicy === "deny") throw new PatchError("WRITE_NOT_ALLOWED", "Project write policy denies file changes.");
       for (const patch of patches) {
         if (!patch || typeof patch !== "object") throw new PatchError("INVALID_PATCH", "Each patch must be an object.");
         const modes = [patch.replacement !== undefined, patch.old_text !== undefined || patch.new_text !== undefined, patch.unified_diff !== undefined];

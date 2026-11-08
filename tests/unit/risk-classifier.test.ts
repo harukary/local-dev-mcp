@@ -32,6 +32,8 @@ describe("RiskClassifier", () => {
     expect(classifyRisk("git add src/main.ts").level).toBe("workspace_write");
     expect(classifyRisk("cp src/a.ts src/b.ts").level).toBe("workspace_write");
     expect(classifyRisk("mv src/a.ts src/b.ts").level).toBe("workspace_write");
+    expect(classifyRisk("rm notes/draft.md").level).toBe("workspace_write");
+    expect(classifyRisk("rm -f notes/draft.md").level).toBe("workspace_write");
     expect(classifyRisk("mkdir -p src/components").level).toBe("workspace_write");
     expect(classifyRisk("chmod +x scripts/tool.sh").level).toBe("workspace_write");
     expect(classifyRisk("printf '%s\\n' value | tee output.txt").level).toBe("workspace_write");
@@ -66,6 +68,11 @@ describe("RiskClassifier", () => {
 
   it("classifies destructive commands", () => {
     expect(classifyRisk("rm -rf dist").level).toBe("destructive_or_process_control");
+    expect(classifyRisk("rm -r dist").level).toBe("destructive_or_process_control");
+    expect(classifyRisk("rm --recursive dist").level).toBe("destructive_or_process_control");
+    expect(classifyRisk("rm -f -R dist").level).toBe("destructive_or_process_control");
+    expect(classifyRisk("find docs -type f -delete").level).toBe("destructive_or_process_control");
+    expect(classifyRisk("git reset --hard").level).toBe("destructive_or_process_control");
     expect(classifyRisk("kill -9 12345").level).toBe("destructive_or_process_control");
     expect(classifyRisk("pkill node").level).toBe("destructive_or_process_control");
     expect(classifyRisk("tmux send-keys -t frontend 'npm run dev' Enter").level).toBe("destructive_or_process_control");

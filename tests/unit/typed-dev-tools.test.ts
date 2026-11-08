@@ -165,6 +165,19 @@ describe("typed development tools", () => {
     expect(body.files[0].mode).toBe("replacement");
   });
 
+  it("denies workspace.patch writes when write_policy=deny, but still allows preview", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-typed-"));
+    writeFileSync(join(tmpRoot, "file.txt"), "before\n");
+    const ctx = createContext({ ...createProject(tmpRoot), writePolicy: "deny" });
+    const patches = [{ path: "file.txt", replacement: "after\n" }];
+    const preview = payload(await handleWorkspacePatch(ctx, "chat-a", { patches, dry_run: true }));
+    expect(preview.changed_files).toEqual(["file.txt"]);
+    const blocked = payload(await handleWorkspacePatch(ctx, "chat-a", { patches }));
+    expect(blocked.error.code).toBe("WRITE_NOT_ALLOWED");
+    expect(blocked.applied).toBe(false);
+    expect(readFileSync(join(tmpRoot, "file.txt"), "utf8")).toBe("before\n");
+  });
+
   it("applies exact text replacement patches and rejects ambiguous matches", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-typed-"));
     writeFileSync(join(tmpRoot, "file.txt"), "alpha\nbeta\nalpha\n");

@@ -22,6 +22,7 @@ export interface ApprovalRequest {
 export interface ApprovalDecision {
   required: boolean;
   request?: ApprovalRequest;
+  approvalPolicy?: "ask" | "deny";
 }
 
 const REQUESTS_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
@@ -61,7 +62,7 @@ export function evaluateApproval(
   riskLevel: RiskLevel,
   reasons: string[],
   purpose?: string,
-  options?: { async?: boolean; timeoutSeconds?: number; longRunning?: boolean; force?: boolean; credentialScope?: CredentialScope }
+  options?: { async?: boolean; timeoutSeconds?: number; longRunning?: boolean; force?: boolean; credentialScope?: CredentialScope; createRequest?: boolean }
 ): ApprovalDecision {
   if (options?.force) {
     return createRequest(project, chatContextId, command, riskLevel, reasons, purpose, options, "ask");
@@ -123,9 +124,10 @@ function createRequest(
   riskLevel: RiskLevel,
   reasons: string[],
   purpose: string | undefined,
-  options: { async?: boolean; timeoutSeconds?: number; longRunning?: boolean; credentialScope?: CredentialScope } | undefined,
+  options: { async?: boolean; timeoutSeconds?: number; longRunning?: boolean; credentialScope?: CredentialScope; createRequest?: boolean } | undefined,
   approvalPolicy: "ask" | "deny"
 ): ApprovalDecision {
+  if (options?.createRequest === false) return { required: true, approvalPolicy };
   cleanupExpiredRequests();
   const request: ApprovalRequest = {
     id: generateId(),
@@ -145,7 +147,7 @@ function createRequest(
   };
   pendingRequests.set(request.id, request);
   scheduleGc();
-  return { required: true, request };
+  return { required: true, request, approvalPolicy };
 }
 
 export function approveRequest(chatContextId: string, requestId: string): ApprovalRequest | undefined {

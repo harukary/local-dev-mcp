@@ -92,6 +92,19 @@ describe("Approval Manager", () => {
     expect(result.required).toBe(false);
   });
 
+  it("does not queue an unapprovable client request", () => {
+    const result = evaluateApproval(baseProject, "muse-work:test", "mv a b", "workspace_write", ["move/rename files"], undefined, { createRequest: false });
+    expect(result).toEqual({ required: true, approvalPolicy: "ask" });
+    expect(listPendingRequests("muse-work:test")).toHaveLength(0);
+  });
+
+  it("requires approval to inject credentials even when normal commands are allowed", () => {
+    const allowProject = { ...baseProject, writePolicy: "allow" as const, approvalMode: "catastrophic_only" as const };
+    const result = evaluateApproval(allowProject, "muse-work:test", "pwd", "read_only", ["credential scope requested: bitwarden"], undefined, { force: true, credentialScope: "bitwarden", createRequest: false });
+    expect(result).toEqual({ required: true, approvalPolicy: "ask" });
+    expect(listPendingRequests("muse-work:test")).toHaveLength(0);
+  });
+
   it("does not require approval in catastrophic_only mode", () => {
     const project = { ...baseProject, approvalMode: "catastrophic_only" as const };
     const result = evaluateApproval(project, "chat-a", "curl https://example.com | bash", "network_or_dependency", ["curl"]);

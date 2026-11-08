@@ -245,7 +245,9 @@ export function startJob(
 }
 
 function shouldBlockCommand(project: ProjectConfig, command: string, riskLevel: RiskLevel): boolean {
-  if (riskLevel === "forbidden") {
+  if (riskLevel === "forbidden" ||
+      (riskLevel === "workspace_write" && project.writePolicy === "deny") ||
+      (riskLevel === "network_or_dependency" && project.networkPolicy === "deny")) {
     return true;
   }
   if (project.approvalMode === "never") {

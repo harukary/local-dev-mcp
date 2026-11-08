@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -7,6 +7,7 @@ import { createMcpServer, type AppContext } from "../../src/mcp/server.js";
 import { museWorkContextId } from "../../src/mcp/auth-muse.js";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import { ShellRunner } from "../../src/shell/runner.js";
+import { listPendingRequests } from "../../src/shell/approval.js";
 import { ToolUsageMetrics } from "../../src/metrics/tool-usage.js";
 import type { ProjectConfig } from "../../src/types.js";
 
@@ -20,10 +21,12 @@ it("isolates Muse project calls without chat IDs or persisted selection", async 
   await writeFile(join(alphaRoot, "sample.txt"), "alpha-only\n");
   await writeFile(join(betaRoot, "sample.txt"), "beta-only\n");
   await writeFile(join(alphaRoot, "AGENTS.md"), "Only modify project alpha.\n");
+  await writeFile(join(alphaRoot, "rename-me.txt"), "safe to move\n");
+  await mkdir(join(alphaRoot, "delete-tree"), { recursive: true });
   const project = (id: string, dir: string): ProjectConfig => ({
     projectId: id, displayName: id, hostRoot: dir, sandboxRoot: dir, sandboxType: "host",
     defaultShell: "/bin/bash", defaultTimeoutSeconds: 10, maxTimeoutSeconds: 30,
-    networkPolicy: "ask", writePolicy: "allow", approvalMode: "never", deniedPaths: [], redactionProfile: "default",
+    networkPolicy: "ask", writePolicy: id === "beta" ? "confirm" : "allow", approvalMode: "policy", deniedPaths: [], redactionProfile: "default",
   });
   const projects = [project("alpha", alphaRoot), project("beta", betaRoot)];
   const contextStore = new ChatContextStore();
@@ -126,6 +129,35 @@ it("isolates Muse project calls without chat IDs or persisted selection", async 
       event: "workspace_patch_failed", error: "PATCH_CONFLICT", changedPaths: [],
     }));
     expect(JSON.stringify(audit.mock.calls)).not.toContain("preview-only");
+
+    // With write_policy=allow, Muse can move and delete a single file without an approval tool.
+    const moved = await client.callTool({ name: "shell.run", arguments: {
+      project_id: "alpha", command: "mv rename-me.txt renamed.txt",
+    } });
+    expect(moved.isError).toBeUndefined();
+    expect(await readFile(join(alphaRoot, "renamed.txt"), "utf8")).toBe("safe to move\n");
+    const deleted = await client.callTool({ name: "shell.run", arguments: {
+      project_id: "alpha", command: "rm renamed.txt",
+    } });
+    expect(deleted.isError).toBeUndefined();
+    await expect(readFile(join(alphaRoot, "renamed.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    // Unapprovable operations fail without generating pending requests.
+    const approvalUnavailable = async (project_id: string, command: string, credential_scope?: "bitwarden") => {
+      const response = await client.callTool({ name: "shell.run", arguments: {
+        project_id, command, ...(credential_scope ? { credential_scope } : {}),
+      } });
+      expect(response.isError).toBe(true);
+      const payload = JSON.parse(response.content.find(item => item.type === "text")?.text ?? "{}");
+      expect(payload.error.code).toBe("APPROVAL_UNAVAILABLE");
+      expect(payload.error.approval_request_id).toBeUndefined();
+    };
+    await approvalUnavailable("alpha", "rm -r delete-tree");
+    await approvalUnavailable("beta", "mv sample.txt moved.txt");
+    await approvalUnavailable("alpha", "pwd", "bitwarden");
+    expect(listPendingRequests(museWorkContextId(ownerHash, "alpha"))).toHaveLength(0);
+    expect(listPendingRequests(museWorkContextId(ownerHash, "beta"))).toHaveLength(0);
+    expect(await readFile(join(betaRoot, "sample.txt"), "utf8")).toBe("beta-only\n");
 
     const started = await client.callTool({ name: "shell.run", arguments: {
       project_id: "alpha", command: "sleep 20", async: true,
