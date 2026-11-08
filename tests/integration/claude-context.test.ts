@@ -203,7 +203,7 @@ describe("Claude explicit work contexts through real MCP dispatcher", () => {
     await expect(client.readResource({ uri: "project://primary/status" })).rejects.toThrow("unavailable");
 
     const schema = await client.callTool({ name: "tool.schema", arguments: { prefix: "workspace.read" } });
-    expect(getPayload(schema).schema_version).toBe("2026-11-08.2");
+    expect(getPayload(schema).schema_version).toBe("2026-11-08.3");
     expect(getPayload(schema).tools[0].inputSchema.required).toContain("context_id");
     expect(JSON.stringify(f.audit.mock.calls)).not.toContain(a);
     expect(JSON.stringify(f.audit.mock.calls)).not.toContain(b);

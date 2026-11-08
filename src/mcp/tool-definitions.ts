@@ -8,9 +8,9 @@ import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 import { buildFeedbackToolDefinitions } from "./feedback-tool-definitions.js";
 import { buildRepoActionToolDefinitions } from "./repo-action-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-11-08.2";
-export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-08.2";
-export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-08.2";
+export const TOOL_SCHEMA_VERSION = "2026-11-08.3";
+export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-08.3";
+export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-08.3";
 export type ClientToolProfile = "chatgpt" | "claude" | "muse";
 
 // External clients opt into each tool explicitly. Adding a handler to ChatGPT
