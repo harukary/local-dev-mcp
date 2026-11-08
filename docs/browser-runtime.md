@@ -1,5 +1,7 @@
 # Browser runtime operations
 
+Browser automation is optional (default ON). `pnpm setup --yes --disable browser` hides `browser.*` and prevents the managed Chrome lifecycle from starting. No Chrome installation is necessary when disabled. See [Setup](setup.md).
+
 ## Profile operation locks
 
 Browser operations on the same chat profile are serialized across coordinator

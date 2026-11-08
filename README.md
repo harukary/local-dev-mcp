@@ -60,11 +60,11 @@ Core tool families include:
 - `project.*` — select, inspect, and reload registered projects
 - `workspace.*` — bounded file listing, reading, searching, and patching
 - `git.*` — structured repository status, diff, history, and commit inspection
-- `repo.action.*` — repository-declared local read/write actions and verified deployment actions backed by `.local-dev/actions.json`; see [`docs/repo-actions.md`](docs/repo-actions.md)
+- `repo.action.*` (optional) — repository-declared local read/write actions and verified deployment actions backed by `.local-dev/actions.json`; see [`docs/repo-actions.md`](docs/repo-actions.md)
 - `shell.*` — managed shell execution, approvals, background jobs, and cancellation
-- `browser.*` — Chrome DevTools Protocol browser automation
-- `computer.*` — macOS desktop window observation and interaction via Cua Driver (separate from browser profiles); see [computer setup and operation](docs/computer-automation.md)
-- `mobile.*` — iOS/Android inspection and interaction (timed iOS swipes use agent-device `gesture pan`; Android swipes use ADB; see [`docs/mobile-automation.md`](docs/mobile-automation.md))
+- `browser.*` (optional) — Chrome DevTools Protocol browser automation
+- `computer.*` (optional) — macOS desktop window observation and interaction via Cua Driver (separate from browser profiles); see [computer setup and operation](docs/computer-automation.md)
+- `mobile.*` (optional) — iOS/Android inspection and interaction (timed iOS swipes use agent-device `gesture pan`; Android swipes use ADB; see [`docs/mobile-automation.md`](docs/mobile-automation.md))
 - `todo.*` — shared Todo Service operations
 - `skills.*` — readable project/user/system Skills
 - `image.read` — inline image inspection without a custom viewer or public URL
@@ -153,29 +153,28 @@ is imported only while its Chrome process is stopped.
 
 ## Setup
 
-Install dependencies:
+Install Node.js 22+, pnpm, and Git, then run:
 
 ```bash
+git clone https://github.com/harukary/local-dev-mcp.git
+cd local-dev-mcp
 pnpm install
-pnpm typecheck
-pnpm test
-```
-
-Configure the local project registry. A workstation normally uses `config/projects.local.yaml`; otherwise `config/projects.yaml` is used.
-
-For Shell permissions, `write_policy=allow` permits ordinary file edits, moves, and single-file deletions; `confirm` requires approval for Shell writes, while `deny` blocks them. `approval_mode=policy` still requires approval for destructive commands. Clients without approval tools receive `APPROVAL_UNAVAILABLE` without a queued request. Injecting `credential_scope` always requires separate approval. `workspace.patch` remains available under `confirm` for bounded edits but rejects writes under `deny` (dry runs remain available). The host Shell is not OS-isolated to the project root; treat `write_policy=allow` as granting trusted host Shell execution.
-
-Run the local diagnostic command:
-
-```bash
+pnpm setup
 pnpm doctor
 ```
 
-Start the stdio MCP transport for a local MCP client:
+`pnpm setup` registers an authorized project and selects **Mobile, Computer, Browser, and Repository Actions** independently. **All four default to ON.** Disabled tool families are hidden from ChatGPT, Claude, and Muse, and do not require their external command-line tools.
 
 ```bash
-pnpm dev
+pnpm setup --yes --disable mobile,computer
+pnpm setup --yes --enable computer
 ```
+
+Flags live in the Git-ignored `.env`; registered projects live in `config/projects.local.yaml`. Existing secrets and project registry entries are preserved. Restart the MCP server after changing feature settings. For the complete guided setup and connection options, see [Setup](docs/setup.md).
+
+Use `pnpm dev` for local stdio MCP clients. ChatGPT uses OpenAI Secure MCP Tunnel, described below.
+
+The project registry controls Shell permissions: `write_policy=allow` permits normal writes, `confirm` requires approval, and `deny` blocks writes. Destructive operations remain subject to approval policy. Host Shell execution is not OS-sandboxed to the project root; enable it only for trusted clients.
 
 `skills.list`, `skills.read`, and the global agent-instruction source used by `project.select` use `CODEX_HOME`, defaulting to `~/.haru/.codex`. The global instruction file is `$CODEX_HOME/AGENTS.md`. Set `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` to select the skill origin manifest; relative paths resolve under `CODEX_HOME`, and the default is `.haru-context-origins.json`. When generating LaunchAgents, set these environment variables to pass them into the server plist.
 

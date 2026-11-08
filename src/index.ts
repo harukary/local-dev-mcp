@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
+import { existsSync } from "node:fs";
 import { loadEnvFileIfExists } from "./env.js";
 
 const args = process.argv.slice(2);
@@ -15,7 +16,7 @@ const configPath = args.find((arg, index) => {
   if (arg.startsWith("--")) return false;
   if (index > 0 && optionConsumesValue(args[index - 1])) return false;
   return true;
-}) || resolve("config/projects.yaml");
+}) || process.env.LOCAL_DEV_MCP_PROJECTS_CONFIG || resolve(existsSync("config/projects.local.yaml") ? "config/projects.local.yaml" : "config/projects.yaml");
 
 if (command === "help") {
   printHelp();

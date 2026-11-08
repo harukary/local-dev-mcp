@@ -2,6 +2,8 @@
 
 `computer.*` controls an explicitly selected **macOS application window** using the [Cua Driver](https://github.com/trycua/cua) CLI. It does not use Playwright or the isolated `browser.*` Chrome profile. Use `browser.*` for ordinary web DOM workflows and `mobile.*` for phones/simulators; use `computer.*` only for native dialogs, desktop apps, or a logged-in regular Chrome window.
 
+This capability is optional and defaults to ON. Use `pnpm setup --yes --disable computer` to hide its tools; Cua Driver is not required when OFF. See [Setup](setup.md).
+
 ## Host setup
 
 On macOS, install the `cua-driver` CLI from its official distribution. It is an external dependency, not bundled into local-dev-mcp. When the executable is outside the default installation locations, set `LOCAL_DEV_MCP_COMPUTER_DRIVER` to an **absolute executable path** in the server environment.

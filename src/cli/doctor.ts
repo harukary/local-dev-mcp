@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ProjectRegistry } from "../project/registry.js";
+import { isFeatureEnabled, OPTIONAL_FEATURES } from "../features.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -26,8 +27,14 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   results.push(checkNodeVersion());
   results.push(checkFile("package.json", "package.json"));
   results.push(checkFile("pnpm-lock.yaml", "pnpm lockfile"));
-  results.push(await checkAgentDevice());
-  if (process.platform === "darwin") results.push(await checkDeveloperToolsSecurity());
+  for (const feature of OPTIONAL_FEATURES) {
+    results.push({ status: "ok", label: `feature ${feature}`, detail: isFeatureEnabled(feature) ? "ON" : "OFF (tools hidden)" });
+  }
+  if (isFeatureEnabled("mobile")) {
+    results.push(await checkAgentDevice());
+    if (process.platform === "darwin") results.push(await checkDeveloperToolsSecurity());
+  }
+  if (isFeatureEnabled("computer")) results.push(await checkComputerDriver());
   results.push(checkSecureTunnelState());
   results.push(...await checkProjectConfig(options.configPath));
 
@@ -65,9 +72,9 @@ async function checkAgentDevice(): Promise<CheckResult> {
   const binary = resolve("node_modules/.bin/agent-device");
   if (!existsSync(binary)) {
     return {
-      status: "fail",
+      status: "warn",
       label: "agent-device",
-      detail: `project-local binary missing at ${binary}; run pnpm install`,
+      detail: `project-local binary missing at ${binary}; install it if you use mobile automation`,
     };
   }
   try {
@@ -108,6 +115,26 @@ async function checkDeveloperToolsSecurity(): Promise<CheckResult> {
       label: "physical iOS DevToolsSecurity",
       detail: err instanceof Error ? err.message : String(err),
     };
+  }
+}
+
+async function checkComputerDriver(): Promise<CheckResult> {
+  if (process.platform !== "darwin") {
+    return { status: "warn", label: "Cua Driver", detail: "macOS Computer Use is unavailable on this host" };
+  }
+  const paths = [
+    process.env.LOCAL_DEV_MCP_COMPUTER_DRIVER,
+    join(homedir(), ".local", "bin", "cua-driver"),
+    "/opt/homebrew/bin/cua-driver",
+    "/usr/local/bin/cua-driver",
+  ].filter((path): path is string => Boolean(path));
+  const driver = paths.find(path => existsSync(path));
+  if (!driver) return { status: "warn", label: "Cua Driver", detail: "not installed; see docs/computer-automation.md" };
+  try {
+    const { stdout } = await execFileAsync(driver, ["--version"], { timeout: 5000, maxBuffer: 65536 });
+    return { status: "ok", label: "Cua Driver", detail: stdout.trim() || driver };
+  } catch {
+    return { status: "warn", label: "Cua Driver", detail: "installed but unable to run; check the driver and macOS permissions" };
   }
 }
 

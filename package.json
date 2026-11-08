@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "setup": "node scripts/setup.mjs",
     "dev:http": "tsx src/index.ts --http 3456",
     "serve": "tsx src/index.ts serve",
     "doctor": "tsx src/index.ts doctor",

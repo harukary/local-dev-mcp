@@ -60,11 +60,11 @@ MCP server側でもproject policyとshell risk policyを適用します。ChatGP
 - `project.*` — project選択・確認・reload
 - `workspace.*` — boundedなlist/read/search/patch
 - `git.*` — status/diff/history/commit inspection
-- `repo.action.*` — `.local-dev/actions.json` でrepositoryが宣言するlocal read/write action。詳細は [`docs/repo-actions.md`](docs/repo-actions.md)
+- `repo.action.*`（任意）— `.local-dev/actions.json` でrepositoryが宣言するlocal read/write action。詳細は [`docs/repo-actions.md`](docs/repo-actions.md)
 - `shell.*` — shell実行、approval、background job、cancel
-- `browser.*` — Chrome DevTools Protocol browser automation
-- `computer.*` — Cua DriverによるmacOSウィンドウ操作（ブラウザのプロファイルとは独立、[セットアップ・操作](docs/computer-automation_ja.md)）
-- `mobile.*` — iOS/Android確認・操作
+- `browser.*`（任意）— Chrome DevTools Protocol browser automation
+- `computer.*`（任意）— Cua DriverによるmacOSウィンドウ操作（ブラウザのプロファイルとは独立、[セットアップ・操作](docs/computer-automation_ja.md)）
+- `mobile.*`（任意）— iOS/Android確認・操作
 - `todo.*` — shared Todo Service操作
 - `skills.*` — project/user/system Skillsの読み取り
 - `image.read` — public URLやcustom viewerを使わないinline画像確認
@@ -104,29 +104,28 @@ Basic認証を要求する既存サイトでは、`browser.open` にHTTPSの対�
 
 ## セットアップ
 
-依存関係をinstallします。
+Node.js 22以降とpnpmを用意し、次のコマンドを実行します。
 
 ```bash
+git clone https://github.com/harukary/local-dev-mcp.git
+cd local-dev-mcp
 pnpm install
-pnpm typecheck
-pnpm test
-```
-
-local project registryを設定します。通常は`config/projects.local.yaml`、未配置の場合は`config/projects.yaml`を使います。
-
-Shellの通常のファイル編集・移動・単一ファイル削除は`write_policy=allow`で自動実行でき、`confirm`では承認が必要、`deny`では拒否します。`approval_mode=policy`では再帰削除などの危険操作は引き続き承認対象です。承認手段のないクライアントには保留要求を作らず`APPROVAL_UNAVAILABLE`を返します。`credential_scope`には通常の書き込み権限とは別の承認が必要です。範囲を限定した`workspace.patch`は`confirm`でも利用できますが、`deny`では書き込みを拒否し、dry runのみ許可します。Host ShellはOSレベルでプロジェクト外へのアクセスを遮断しないため、`write_policy=allow`は信頼できるクライアントへのShell実行権限の委譲です。
-
-診断:
-
-```bash
+pnpm setup
 pnpm doctor
 ```
 
-local MCP clientからstdioで使う場合:
+`pnpm setup`では許可するプロジェクトと、**Mobile / Computer / Browser / Repository Actions** のON/OFFを指定できます。**初期値は全てON**です。OFFにしたツールはChatGPT・Claude・Museに公開されず、関連する外部CLIの導入も不要です。
 
 ```bash
-pnpm dev
+pnpm setup --yes --disable mobile,computer
+pnpm setup --yes --enable computer
 ```
+
+設定はGit管理外の`.env`、プロジェクト登録は`config/projects.local.yaml`に保存します。既存の秘密情報やプロジェクト設定は上書きしません。切り替えはサーバー再起動後に反映されます。導入手順と接続方法は[セットアップガイド](docs/setup_ja.md)を参照してください。
+
+local MCPクライアントからstdioで使う場合は`pnpm dev`、ChatGPTから接続する場合は下記のOpenAI Secure MCP Tunnelを使用します。
+
+Shellの通常のファイル編集・移動・単一ファイル削除は`write_policy=allow`で自動実行でき、`confirm`では承認が必要、`deny`では拒否します。`approval_mode=policy`では再帰削除などの危険操作は引き続き承認対象です。Host ShellはOSレベルでプロジェクト外へのアクセスを遮断しないため、`write_policy=allow`は信頼できるクライアントへのShell実行権限の委譲です。
 
 `skills.list` / `skills.read` のCodex Skills参照先は `CODEX_HOME` で指定できます。未設定時は `~/.haru/.codex` を使います。Skillsの由来ファイルは `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` で指定でき、相対パスは `CODEX_HOME` を基準に解決します。未設定時は `.haru-context-origins.json` です。LaunchAgentを再生成する場合も、この2つの環境変数を指定するとserverのplistへ引き継がれます。
 

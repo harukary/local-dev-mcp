@@ -2,6 +2,8 @@
 
 `computer.*` は [Cua Driver](https://github.com/trycua/cua) CLIを利用して、明示したmacOSのウィンドウを観測・操作する機能です。`browser.*` が使う独立Chromeプロファイルとは別です。通常のWeb操作は `browser.*`、スマートフォンは `mobile.*` を優先し、macOSアプリ、ネイティブダイアログ、通常Chromeのログイン済み画面が必要なときに `computer.*` を使います。
 
+この機能は任意です。`pnpm setup --yes --disable computer` でツール一覧から外せます（既定ON）。OFFならCua Driverの導入・権限設定は不要です。詳細は[セットアップ](setup_ja.md)を参照してください。
+
 ## Mac側の準備
 
 公式のCua Driver CLIをMacへインストールします。local-dev-mcpには同梱しません。既定の配置先以外にある場合は、サーバーの環境変数 `LOCAL_DEV_MCP_COMPUTER_DRIVER` に実行ファイルの絶対パスを指定します。

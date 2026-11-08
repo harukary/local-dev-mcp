@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isFeatureEnabled } from "../features.js";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -998,21 +999,21 @@ export async function startMcpServer(configPath: string): Promise<void> {
   const ctx = await createAppContext(configPath);
   const server = createMcpServer(ctx);
   const transport = new StdioServerTransport();
-  const browserLifecycle = await createBrowserLifecycleService();
-  await browserLifecycle.start();
+  const browserLifecycle = isFeatureEnabled("browser") ? await createBrowserLifecycleService() : null;
+  if (browserLifecycle) await browserLifecycle.start();
   await server.connect(transport);
 
   let shuttingDown = false;
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    browserLifecycle.stopTimer();
-    const browserOperationsIdle = beginBrowserOperationDrain();
+    browserLifecycle?.stopTimer();
+    const browserOperationsIdle = browserLifecycle ? beginBrowserOperationDrain() : Promise.resolve();
     void (async () => {
       const result = await withShutdownTimeout((async () => {
         await Promise.allSettled([transport.close(), server.close()]);
         await browserOperationsIdle;
-        return await browserLifecycle.drain();
+        return browserLifecycle ? await browserLifecycle.drain() : { skipped: "browser disabled" };
       })(), 55_000);
       if (result === "timeout") console.error("[BrowserLifecycle] shutdown drain timed out");
       else console.error("[BrowserLifecycle] shutdown drain", result);
@@ -1133,7 +1134,7 @@ export async function startHttpServer(configPath: string, port: number): Promise
   const requireHttpAuth = buildHttpAuthMiddleware(httpAuthConfig, verifyCloudflareAccessJwt, museConfig);
   const cloudflareDiagnosticsEnabled = process.env[CLOUDFLARE_REQUEST_DIAGNOSTICS_ENV] === "1";
   const ctx = await createAppContext(configPath, subjectAuthConfig?.subject, subjectPolicy);
-  const browserLifecycle = await createBrowserLifecycleService();
+  const browserLifecycle = isFeatureEnabled("browser") ? await createBrowserLifecycleService() : null;
   const app = express();
   app.use((req, res, next) => requireLoopbackHost(req, res, next, museConfig));
   app.use((req, _res, next) => {
@@ -1233,9 +1234,11 @@ export async function startHttpServer(configPath: string, port: number): Promise
     console.error("[OpenAI Tunnel] ChatGPT subject auditing enabled; authorization remains tunnel-token-only.");
   }
 
-  const startupResult = await browserLifecycle.start();
-  if (startupResult.recoveredProfileKeys.length || startupResult.stoppedProfileKeys.length || startupResult.failedProfileKeys.length) {
-    console.error("[BrowserLifecycle] startup reconcile", startupResult);
+  if (browserLifecycle) {
+    const startupResult = await browserLifecycle.start();
+    if (startupResult.recoveredProfileKeys.length || startupResult.stoppedProfileKeys.length || startupResult.failedProfileKeys.length) {
+      console.error("[BrowserLifecycle] startup reconcile", startupResult);
+    }
   }
 
   const httpServer = await new Promise<ReturnType<typeof app.listen>>((resolve, reject) => {
@@ -1250,14 +1253,14 @@ export async function startHttpServer(configPath: string, port: number): Promise
     if (shuttingDown) return;
     shuttingDown = true;
     console.error("\n[Server] Shutting down...");
-    browserLifecycle.stopTimer();
-    const browserOperationsIdle = beginBrowserOperationDrain();
+    browserLifecycle?.stopTimer();
+    const browserOperationsIdle = browserLifecycle ? beginBrowserOperationDrain() : Promise.resolve();
     void (async () => {
       return await withShutdownTimeout((async () => {
         const httpCloseMode = await closeHttpServerForShutdown(httpServer);
         if (httpCloseMode === "forced") console.error("[Server] Forced active HTTP connections closed during shutdown.");
         await browserOperationsIdle;
-        return await browserLifecycle.drain();
+        return browserLifecycle ? await browserLifecycle.drain() : { skipped: "browser disabled" };
       })(), 55_000);
     })().then((result) => {
       if (result === "timeout") console.error("[BrowserLifecycle] shutdown drain timed out");

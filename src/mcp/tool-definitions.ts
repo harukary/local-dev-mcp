@@ -1,4 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { isToolFeatureEnabled } from "../features.js";
 import { buildDevToolDefinitions } from "./dev-tool-definitions.js";
 import { buildBrowserToolDefinitions } from "./browser-tool-definitions.js";
 import { buildComputerToolDefinitions } from "./computer-tool-definitions.js";
@@ -7,9 +8,9 @@ import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 import { buildFeedbackToolDefinitions } from "./feedback-tool-definitions.js";
 import { buildRepoActionToolDefinitions } from "./repo-action-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-11-08.1";
-export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-08.1";
-export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-08.1";
+export const TOOL_SCHEMA_VERSION = "2026-11-08.2";
+export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-08.2";
+export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-08.2";
 export type ClientToolProfile = "chatgpt" | "claude" | "muse";
 
 // External clients opt into each tool explicitly. Adding a handler to ChatGPT
@@ -46,6 +47,7 @@ const CLAUDE_ADDITIONAL_TOOLS = new Set([
 const MUSE_ADDITIONAL_TOOLS = new Set(["project.open"]);
 
 export function isClientToolEnabled(profile: ClientToolProfile, name: string): boolean {
+  if (!isToolFeatureEnabled(name)) return false;
   if (profile === "chatgpt") return name !== "project.open";
   return EXTERNAL_SHARED_TOOLS.has(name) ||
     (profile === "claude" ? CLAUDE_ADDITIONAL_TOOLS.has(name) : MUSE_ADDITIONAL_TOOLS.has(name));
@@ -530,7 +532,8 @@ export function buildToolDefinitions(profile: ClientToolProfile = "chatgpt"): To
     },
     ...buildFeedbackToolDefinitions(),
   ];
-  const base = tools.map(addExplicitProjectScope);
+  const enabledTools = tools.filter(tool => isToolFeatureEnabled(tool.name));
+  const base = enabledTools.map(addExplicitProjectScope);
   if (profile === "chatgpt") return base as Tool[];
   if (profile === "muse") {
     const scoped = base.filter((tool) => isMuseToolEnabled(tool.name)).map((tool) => {
@@ -561,7 +564,7 @@ export function buildToolDefinitions(profile: ClientToolProfile = "chatgpt"): To
   }
   // Claude owns its scope through context_id, not the ChatGPT Scheduled Task
   // project_id / working_dir arguments. Start from the unmodified definitions.
-  const claudeTools = tools.filter((tool) => isClaudeToolEnabled(tool.name)).map((tool) => {
+  const claudeTools = enabledTools.filter((tool) => isClaudeToolEnabled(tool.name)).map((tool) => {
     if (tool.name === "project.select") {
       return {
         ...tool,

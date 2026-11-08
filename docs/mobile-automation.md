@@ -1,6 +1,6 @@
 # Mobile automation
 
-The `mobile.*` tools use the existing `agent-device` backend for physical iOS devices and iOS/Android simulators or emulators. There is no additional WebDriverAgent service, mobile server, or dependency.
+The `mobile.*` tools use the existing `agent-device` backend for physical iOS devices and iOS/Android simulators or emulators. There is no additional WebDriverAgent service, mobile server, or dependency. Mobile is optional (default ON); `pnpm setup --yes --disable mobile` hides the tool family and skips mobile dependency diagnostics. See [Setup](setup.md).
 
 ## Observing the device
 
