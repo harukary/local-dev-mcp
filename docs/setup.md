@@ -4,7 +4,7 @@ local-dev-mcp is a self-hosted MCP server for trusted development machines. Mobi
 
 ## 1. Install
 
-Install Node.js 22+, pnpm, and Git.
+Install Node.js 22+, pnpm, Git, and ripgrep (`rg`; on macOS: `brew install ripgrep`). `workspace.search` requires ripgrep.
 
 ```bash
 git clone https://github.com/harukary/local-dev-mcp.git

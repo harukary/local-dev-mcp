@@ -4,7 +4,7 @@ local-dev-mcp は登録した開発用PCを ChatGPT などから操作するセ�
 
 ## 1. インストール
 
-Node.js 22以降、pnpm、Gitを用意します。
+Node.js 22以降、pnpm、Git、ripgrep（`rg`。macOSでは`brew install ripgrep`）を用意します。`workspace.search`にはripgrepが必要です。
 
 ```bash
 git clone https://github.com/harukary/local-dev-mcp.git

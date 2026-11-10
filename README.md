@@ -147,13 +147,14 @@ is imported only while its Chrome process is stopped.
 
 - Node.js 22 or newer
 - pnpm through Corepack or a compatible pnpm installation
+- Git and [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`; on macOS: `brew install ripgrep`) for workspace search
 - macOS for the supplied launchd workflow
 - OpenAI `tunnel-client` for ChatGPT connectivity
 - optional platform-specific tools for browser/mobile workflows
 
 ## Setup
 
-Install Node.js 22+, pnpm, and Git, then run:
+Install Node.js 22+, pnpm, Git, and ripgrep (`brew install ripgrep` on macOS), then run:
 
 ```bash
 git clone https://github.com/harukary/local-dev-mcp.git

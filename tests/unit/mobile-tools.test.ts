@@ -56,8 +56,9 @@ function createContext(project: ProjectConfig) {
   } as unknown as AppContext;
 }
 
-function payload(result: { content: Array<{ text?: string }> }) {
-  return JSON.parse(result.content[0].text ?? "{}");
+function payload(result: { structuredContent?: unknown; content: Array<{ text?: string }> }) {
+  // Text fallbacks may truncate large device lists; inspect structuredContent.
+  return (result.structuredContent ?? JSON.parse(result.content[0].text ?? "{}")) as Record<string, any>;
 }
 
 describe("mobile tools", () => {

@@ -28,6 +28,9 @@ jobs:
           node-version: "22"
           cache: pnpm
 
+      - name: Install ripgrep
+        run: command -v rg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 brew install ripgrep
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
@@ -10,6 +10,11 @@ import { handleSkillsList, handleSkillsRead } from "../../src/mcp/tools/skills.j
 let tmpRoot = "";
 const previousCodexHome = process.env.CODEX_HOME;
 const previousSkillOriginsFile = process.env.LOCAL_DEV_MCP_SKILL_ORIGINS_FILE;
+
+beforeEach(() => {
+  // A workstation-specific origin manifest must not override test fixtures.
+  delete process.env.LOCAL_DEV_MCP_SKILL_ORIGINS_FILE;
+});
 
 afterEach(() => {
   if (tmpRoot) {

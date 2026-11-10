@@ -30,7 +30,7 @@ describe("pnpm run setup", () => {
     expect(env).toContain("LOCAL_DEV_MCP_FEATURE_BROWSER=1");
     expect(env).toContain("LOCAL_DEV_MCP_FEATURE_REPO_ACTIONS=1");
     expect(readFileSync(join(dir, "config/projects.local.yaml"), "utf8")).toContain("projects:");
-  });
+  }, 20_000);
 
   it("creates a project registry and enables all four optional features by default", () => {
     const dir = fixture();

@@ -98,13 +98,14 @@ Basic認証を要求する既存サイトでは、`browser.open` にHTTPSの対�
 
 - Node.js 22以降
 - Corepack経由または互換pnpm
+- Gitとripgrep（`rg`。macOSでは`brew install ripgrep`）
 - 付属launchd workflowを使う場合はmacOS
 - ChatGPT接続にはOpenAI公式`Tunnel-client`
 - browser/mobile用途では各platformの必要tool
 
 ## セットアップ
 
-Node.js 22以降とpnpmを用意し、次のコマンドを実行します。
+Node.js 22以降、pnpm、Git、ripgrep（macOSでは`brew install ripgrep`）を用意し、次のコマンドを実行します。
 
 ```bash
 git clone https://github.com/harukary/local-dev-mcp.git

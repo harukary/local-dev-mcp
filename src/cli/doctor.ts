@@ -26,6 +26,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const results: CheckResult[] = [];
 
   results.push(checkNodeVersion());
+  results.push(await checkRipgrep());
   results.push(checkFile("package.json", "package.json"));
   results.push(checkFile("pnpm-lock.yaml", "pnpm lockfile"));
   for (const feature of OPTIONAL_FEATURES) {
@@ -62,6 +63,15 @@ function checkNodeVersion(): CheckResult {
     label: "Node.js",
     detail: `found ${process.versions.node}; Node.js 22 or newer is required`,
   };
+}
+
+async function checkRipgrep(): Promise<CheckResult> {
+  try {
+    const { stdout } = await execFileAsync("rg", ["--version"], { timeout: 5_000, maxBuffer: 65_536 });
+    return { status: "ok", label: "ripgrep", detail: stdout.split("\n")[0] || "installed" };
+  } catch {
+    return { status: "fail", label: "ripgrep", detail: "required for workspace.search; install ripgrep (macOS: brew install ripgrep)" };
+  }
 }
 
 function checkFile(path: string, label: string): CheckResult {
