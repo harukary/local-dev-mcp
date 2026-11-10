@@ -26,11 +26,11 @@ open -n -g -a CuaDriver --args serve
 cua-driver status
 ```
 
-`permissions status` の `source.attribution` が `caller` の場合は呼び出し元の権限であり、CuaDriver本体の権限とは限りません。デーモン動作時の `daemon` 帰属を確認してください。特別なインストール先なら `LOCAL_DEV_MCP_COMPUTER_DRIVER` にCLI実行ファイルの絶対パスを指定します。
+`permissions status` の `source.attribution` が `caller` の場合は呼び出し元の権限であり、CuaDriver本体の権限とは限りません。現行Cua Driverではデーモン帰属を示す `driver-daemon` を確認してください。特別なインストール先なら `LOCAL_DEV_MCP_COMPUTER_DRIVER` にCLI実行ファイルの絶対パスを指定します。
 
 ## 操作
 
-1. `computer.status` で導入状態と権限を確認する。
+1. `computer.status` の `ready:true` を確認してから画面操作へ進む。`running:true` だけでは操作権限は確認できない。`ready:false` の `hint` を確認し、macOS権限が必要なら利用者がMac上で許可する。
 2. `computer.list_windows` から対象の `pid` と `window_id` を確認する。
 3. `computer.get_window_state` で画像とアクセシビリティツリーを取得する。画像のみなら `computer.screenshot` を使う。
 4. 画像座標かツリーの要素トークンで操作し、再撮影して結果を確認する。

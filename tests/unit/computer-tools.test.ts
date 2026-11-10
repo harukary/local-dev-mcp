@@ -40,7 +40,7 @@ function makeDriver() {
     "const args = process.argv.slice(2);",
     "if (args[0] === '--version') { console.log('cua-driver 0.43.2'); process.exit(0); }",
     "if (args[0] === 'status') { console.log('running'); process.exit(0); }",
-    "if (args[0] === 'permissions') { console.log(JSON.stringify({ accessibility:true,screen_recording:true })); process.exit(0); }",
+    "if (args[0] === 'permissions') { console.log(JSON.stringify({ accessibility:process.env.MOCK_CUA_ACCESSIBILITY_FALSE!=='1',screen_recording:true,source:{attribution:'driver-daemon'} })); process.exit(0); }",
     "if (args[0] !== 'call') process.exit(3);",
     "const cmd = args[1], payload = JSON.parse(args[2] || '{}');",
     "if (cmd === 'list_windows') { console.log(JSON.stringify({windows:[{pid:321,window_id:42,app_name:'Browser',title:'Example',bounds:{x:10,y:20,width:200,height:150},on_current_space:true}]})); process.exit(0); }",
@@ -61,6 +61,7 @@ afterEach(() => {
   else process.env.LOCAL_DEV_MCP_COMPUTER_DRIVER = originalDriver;
   if (root) rmSync(root, { recursive: true, force: true });
   delete process.env.MOCK_CUA_LOCKED;
+  delete process.env.MOCK_CUA_ACCESSIBILITY_FALSE;
   root = "";
 });
 
@@ -69,11 +70,19 @@ describe("computer tools", () => {
     makeDriver();
     const context = ctx();
     const status = data(await handleComputerTool(context, CHAT, "computer.status"));
-    expect(status).toMatchObject({ installed: true, running: true, permissions: { accessibility: true } });
+    expect(status).toMatchObject({ installed: true, running: true, ready: true, permissions: { accessibility: true } });
     expect(data(await handleComputerTool(context, CHAT, "computer.list_apps")).apps).toHaveLength(1);
     expect(data(await handleComputerTool(context, CHAT, "computer.list_windows", { app_name_contains: "browser" })).windows)
       .toMatchObject([{ pid: 321, window_id: 42 }]);
     expect(data(await handleComputerTool(context, CHAT, "computer.list_windows", { title_contains: "other" })).total).toBe(0);
+  });
+
+  it("reports a running driver as not ready when Accessibility permission is missing", async () => {
+    makeDriver();
+    process.env.MOCK_CUA_ACCESSIBILITY_FALSE = "1";
+    const status = data(await handleComputerTool(ctx(), CHAT, "computer.status"));
+    expect(status).toMatchObject({ installed: true, running: true, ready: false, permissions: { accessibility: false } });
+    expect(status.hint).toContain("permissions grant");
   });
 
   it("rejects unverified contexts, forbidden writes, and incorrect window IDs", async () => {

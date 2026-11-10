@@ -217,13 +217,25 @@ export async function handleComputerTool(ctx: AppContext, chatContextId: string,
   if ("error" in project) return project.error;
   const driver = await resolveDriver();
   if (name === "computer.status") {
-    if (!driver) return jsonResult({ project_id: project.projectId, installed: false, running: false, install_hint: "Install the Cua Driver CLI on the macOS host." });
+    if (!driver) return jsonResult({ project_id: project.projectId, installed: false, running: false, ready: false, install_hint: "Install the Cua Driver CLI on the macOS host." });
     const [version, daemon, permissions] = await Promise.all([
       execDriver(driver, ["--version"], 5000).catch(() => null),
       execDriver(driver, ["status"], 5000).then(() => true).catch(() => false),
       execDriver(driver, ["permissions", "status", "--json"], 5000).then((result) => JSON.parse(result) as unknown).catch(() => null),
     ]);
-    return jsonResult({ project_id: project.projectId, installed: true, running: daemon, version, permissions, driver: "cua-driver", ...(daemon ? {} : { hint: "Start Cua Driver on the Mac and grant its Accessibility and Screen Recording permissions." }) });
+    const grants = record(permissions);
+    const daemonPermissions = record(grants.source).attribution !== "caller";
+    const ready = daemon && daemonPermissions && grants.accessibility === true && grants.screen_recording === true;
+    return jsonResult({
+      project_id: project.projectId, installed: true, running: daemon, ready, version, permissions, driver: "cua-driver",
+      ...(ready ? {} : {
+        hint: !daemon
+          ? "Start Cua Driver on the Mac."
+          : !daemonPermissions
+            ? "Verify permissions from the Cua Driver daemon, not the caller."
+            : "Grant CuaDriver.app Accessibility and Screen Recording in macOS: cua-driver permissions grant",
+      }),
+    });
   }
   if (!driver) return jsonError("COMPUTER_DRIVER_MISSING", "Cua Driver is not installed on this Mac.");
   if (!readonly.has(name) && project.writePolicy !== "allow") {

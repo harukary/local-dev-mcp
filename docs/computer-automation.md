@@ -26,11 +26,11 @@ open -n -g -a CuaDriver --args serve
 cua-driver status
 ```
 
-If `permissions status` returns `source.attribution:"caller"`, those permissions describe the calling process, **not necessarily the CuaDriver daemon**. Verify the driver's daemon-attributed permissions when running. To use a nonstandard installation path, set the server's `LOCAL_DEV_MCP_COMPUTER_DRIVER` to an absolute executable path.
+If `permissions status` returns `source.attribution:"caller"`, those permissions describe the calling process, **not necessarily the CuaDriver daemon**. Verify the driver's daemon-attributed permissions when running (`source.attribution:"driver-daemon"` in current Cua Driver). To use a nonstandard installation path, set the server's `LOCAL_DEV_MCP_COMPUTER_DRIVER` to an absolute executable path.
 
 ## Workflow
 
-1. Check installation and permissions with `computer.status`.
+1. Check `computer.status`. Proceed only when `ready:true`; `running:true` alone does not establish permission to control the Mac. A `ready:false` response includes a `hint`; macOS permission switches must be approved locally by the user.
 2. Identify a real `pid` and `window_id` with `computer.list_windows`.
 3. Use `computer.get_window_state` for an image and accessibility tree, or `computer.screenshot` for the image alone.
 4. Perform one action and reacquire the state before further actions.

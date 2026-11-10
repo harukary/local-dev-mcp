@@ -171,7 +171,7 @@ pnpm run setup --yes --disable mobile,computer
 pnpm run setup --yes --enable computer
 ```
 
-Flags live in the Git-ignored `.env`; registered projects live in `config/projects.local.yaml`. Existing secrets and project registry entries are preserved. Restart the MCP server after changing feature settings. For the complete guided setup and connection options, see [Setup](docs/setup.md).
+Flags live in the Git-ignored `.env`; registered projects live in `config/projects.local.yaml`. Existing secrets and project registry entries are preserved. Restart the MCP server after changing feature settings. For the complete guided setup and connection options, see [Setup](docs/setup.md). For Computer Use, `computer.status` returns `ready:true` only when the daemon is running and its Accessibility and Screen Recording permissions are granted; see [Computer automation](docs/computer-automation.md).
 
 Use `pnpm dev` for local stdio MCP clients. ChatGPT uses OpenAI Secure MCP Tunnel, described below.
 
