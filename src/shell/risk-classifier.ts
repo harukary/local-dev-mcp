@@ -39,7 +39,7 @@ const CATASTROPHIC_PATTERNS: RiskRule[] = [
 ];
 
 const DESTRUCTIVE_PATTERNS: RiskRule[] = [
-  { pattern: /\brm\b[^\n;&|]*?(?:-[a-zA-Z]*[rR][a-zA-Z]*\b|--recursive\b)/, level: "destructive_or_process_control", reason: "recursive delete" },
+  { pattern: /\brm\b(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][a-zA-Z-]*(?:=[^\s;&|]+)?))*\s+(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?=\s|$|[;&|])/, level: "destructive_or_process_control", reason: "recursive delete" },
   { pattern: /\bfind\b[^\n;&|]*\s-delete\b/, level: "destructive_or_process_control", reason: "find delete" },
   { pattern: /\bgit\s+clean\b[^\n;&|]*\s-[a-zA-Z]*f\b/, level: "destructive_or_process_control", reason: "git clean with force" },
   { pattern: /\bgit\s+reset\s+--hard\b/, level: "destructive_or_process_control", reason: "git hard reset" },

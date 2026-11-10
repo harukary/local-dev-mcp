@@ -125,7 +125,7 @@ pnpm setup --yes --enable computer
 
 local MCPクライアントからstdioで使う場合は`pnpm dev`、ChatGPTから接続する場合は下記のOpenAI Secure MCP Tunnelを使用します。
 
-Shellの通常のファイル編集・移動・単一ファイル削除は`write_policy=allow`で自動実行でき、`confirm`では承認が必要、`deny`では拒否します。`approval_mode=policy`では再帰削除などの危険操作は引き続き承認対象です。Host ShellはOSレベルでプロジェクト外へのアクセスを遮断しないため、`write_policy=allow`は信頼できるクライアントへのShell実行権限の委譲です。
+Shellの通常のファイル編集・移動・単一ファイル削除は`write_policy=allow`で自動実行でき、`confirm`では承認が必要、`deny`では拒否します。`approval_mode=policy`では再帰削除などの危険操作は引き続き承認対象です。`rm`の再帰削除判定では、ファイルパスに含まれる`-r`をオプションと見なしません。Host ShellはOSレベルでプロジェクト外へのアクセスを遮断しないため、`write_policy=allow`は信頼できるクライアントへのShell実行権限の委譲です。
 
 `skills.list` / `skills.read` のCodex Skills参照先は `CODEX_HOME` で指定できます。未設定時は `~/.haru/.codex` を使います。Skillsの由来ファイルは `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` で指定でき、相対パスは `CODEX_HOME` を基準に解決します。未設定時は `.haru-context-origins.json` です。LaunchAgentを再生成する場合も、この2つの環境変数を指定するとserverのplistへ引き継がれます。
 

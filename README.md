@@ -174,7 +174,7 @@ Flags live in the Git-ignored `.env`; registered projects live in `config/projec
 
 Use `pnpm dev` for local stdio MCP clients. ChatGPT uses OpenAI Secure MCP Tunnel, described below.
 
-The project registry controls Shell permissions: `write_policy=allow` permits normal writes, `confirm` requires approval, and `deny` blocks writes. Destructive operations remain subject to approval policy. Host Shell execution is not OS-sandboxed to the project root; enable it only for trusted clients.
+The project registry controls Shell permissions: `write_policy=allow` permits normal writes, `confirm` requires approval, and `deny` blocks writes. Destructive operations remain subject to approval policy. Recursive `rm` options are recognized as options, not mistaken for hyphenated path segments. Host Shell execution is not OS-sandboxed to the project root; enable it only for trusted clients.
 
 `skills.list`, `skills.read`, and the global agent-instruction source used by `project.select` use `CODEX_HOME`, defaulting to `~/.haru/.codex`. The global instruction file is `$CODEX_HOME/AGENTS.md`. Set `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` to select the skill origin manifest; relative paths resolve under `CODEX_HOME`, and the default is `.haru-context-origins.json`. When generating LaunchAgents, set these environment variables to pass them into the server plist.
 

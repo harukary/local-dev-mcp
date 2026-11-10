@@ -59,7 +59,7 @@ python3 client.py call workspace.batch '{"project_id":"local-dev-mcp","requests"
 - `workspace.*`、`git.*`、`repo.action.*`、`shell.run/status/cancel`、`browser.*`、`mobile.*`などのproject操作は、毎回`project_id`を指定する。worktreeでは`working_dir`も同じ値に揃える。
 - Browser profileと非同期Shell jobの所有権は、認証主体・project・working_dirから作る非公開の`muse-work:`内部識別子で分離する。Browser profileは同じ作業スコープの連続操作で再利用できるが、同一projectの複数の並行ブラウザ作業は避ける。
 - `project.select/current/reload`、`shell.approve/reject/pending`、`artifact.link/receive`はMuseに公開せず、ツール名を直接指定しても`TOOL_UNAVAILABLE`で拒否する。MCP resources/list/readもMuseでは無効。
-- 認証済みMuseの操作も、登録project制限、denied paths、Shellのリスク分類、既存の書き込みポリシーを引き続き受ける。`write_policy=allow`かつ`approval_mode=policy`なら、単一ファイルの`mv`や`rm`は承認なしで実行できる。再帰削除・強制リセットなどは承認対象となる。
+- 認証済みMuseの操作も、登録project制限、denied paths、Shellのリスク分類、既存の書き込みポリシーを引き続き受ける。`write_policy=allow`かつ`approval_mode=policy`なら、単一ファイルの`mv`や`rm`は承認なしで実行できる。再帰削除・強制リセットなどは承認対象となる。ファイル名やディレクトリ名の`-r`は`rm`の再帰削除オプションとして扱わない。
 - Museには承認ツールがない。承認が必要な`shell.run`は`APPROVAL_UNAVAILABLE`を返し、承認要求を作成しない。認証情報を注入する`credential_scope`も、通常の書き込み許可とは別に必ず承認が必要なためMuseでは利用できない。
 - `write_policy=deny`は`workspace.patch`の書き込みとShell書き込みを拒否する。`write_policy=confirm`でも、ファイル内容を厳密に指定する`workspace.patch`は利用できるが、Shell書き込みは承認対象になる。`workspace.patch`の`dry_run`は書き込み禁止プロジェクトでも利用できる。
 - Host Sandboxはプロジェクトのパスを作業ディレクトリにするだけで、OSレベルでファイルシステムを隔離しない。Shellのdenied paths・危険度分類はコマンド文字列の検査であり、厳密な安全境界ではない。`write_policy=allow`は接続クライアントへのShell実行権限の委譲を意味する。

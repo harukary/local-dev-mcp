@@ -34,6 +34,10 @@ describe("RiskClassifier", () => {
     expect(classifyRisk("mv src/a.ts src/b.ts").level).toBe("workspace_write");
     expect(classifyRisk("rm notes/draft.md").level).toBe("workspace_write");
     expect(classifyRisk("rm -f notes/draft.md").level).toBe("workspace_write");
+    expect(classifyRisk("rm ~/workspace/harukary-workspace/tokyo-bay-space-staging.html ~/workspace/harukary-workspace/tokyo-bay-space-partA.html ~/workspace/harukary-workspace/tokyo-bay-space-partB.html").level).toBe("workspace_write");
+    expect(classifyRisk("rm ./folder-r/file-r.txt").level).toBe("workspace_write");
+    expect(classifyRisk("rm -f -- ./file-r.txt").level).toBe("workspace_write");
+    expect(classifyRisk("rm existing.txt -rf directory").level).toBe("workspace_write");
     expect(classifyRisk("mkdir -p src/components").level).toBe("workspace_write");
     expect(classifyRisk("chmod +x scripts/tool.sh").level).toBe("workspace_write");
     expect(classifyRisk("printf '%s\\n' value | tee output.txt").level).toBe("workspace_write");
@@ -71,6 +75,9 @@ describe("RiskClassifier", () => {
     expect(classifyRisk("rm -r dist").level).toBe("destructive_or_process_control");
     expect(classifyRisk("rm --recursive dist").level).toBe("destructive_or_process_control");
     expect(classifyRisk("rm -f -R dist").level).toBe("destructive_or_process_control");
+    expect(classifyRisk("rm --force --recursive dist").level).toBe("destructive_or_process_control");
+    expect(classifyRisk("rm -fr dist").level).toBe("destructive_or_process_control");
+    expect(classifyRisk("rm -f --recursive dist").level).toBe("destructive_or_process_control");
     expect(classifyRisk("find docs -type f -delete").level).toBe("destructive_or_process_control");
     expect(classifyRisk("git reset --hard").level).toBe("destructive_or_process_control");
     expect(classifyRisk("kill -9 12345").level).toBe("destructive_or_process_control");
