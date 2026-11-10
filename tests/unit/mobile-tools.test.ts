@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,20 +8,36 @@ import type { ProjectConfig } from "../../src/types.js";
 import { handleMobileLaunchApp, handleMobileListDevices, handleMobileOpenUrl, handleMobilePress, handleMobileRestartApp, handleMobileScreenshot, handleMobileStatus, handleMobileStopApp, handleMobileSwipe, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileWait, parseAndroidCurrentApp } from "../../src/mcp/tools/mobile.js";
 
 let tmpRoot = "";
-let originalAgentDeviceBin: string | undefined;
+let cliRoot = "";
+const previousEnv = new Map<string, string | undefined>();
 
 beforeEach(() => {
-  originalAgentDeviceBin = process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN;
-  process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN = join(tmpdir(), "local-dev-mcp-missing-agent-device");
+  const keys = ["LOCAL_DEV_MCP_AGENT_DEVICE_BIN", "LOCAL_DEV_MCP_ROAMRUNCTL_BIN", "ANDROID_HOME", "ANDROID_SDK_ROOT", "PATH"];
+  for (const key of keys) previousEnv.set(key, process.env[key]);
+
+  // Unit tests must not enumerate the host's real simulators or paired devices.
+  cliRoot = mkdtempSync(join(tmpdir(), "local-dev-mobile-clis-"));
+  mkdirSync(join(cliRoot, "platform-tools"));
+  writeFileSync(join(cliRoot, "xcrun"), "#!/bin/sh\nprintf '{\"devices\":{}}\\n'\n", { mode: 0o755 });
+  const adb = "#!/bin/sh\nprintf 'List of devices attached\\n\\n'\n";
+  writeFileSync(join(cliRoot, "adb"), adb, { mode: 0o755 });
+  writeFileSync(join(cliRoot, "platform-tools", "adb"), adb, { mode: 0o755 });
+  writeFileSync(join(cliRoot, "roamrunctl"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo test; fi\n", { mode: 0o755 });
+  process.env.PATH = cliRoot + ":" + (previousEnv.get("PATH") ?? "");
+  process.env.ANDROID_HOME = cliRoot;
+  process.env.ANDROID_SDK_ROOT = cliRoot;
+  process.env.LOCAL_DEV_MCP_ROAMRUNCTL_BIN = join(cliRoot, "roamrunctl");
+  process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN = join(cliRoot, "missing-agent-device");
 });
 
 afterEach(() => {
-  if (originalAgentDeviceBin === undefined) delete process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN;
-  else process.env.LOCAL_DEV_MCP_AGENT_DEVICE_BIN = originalAgentDeviceBin;
-  if (tmpRoot) {
-    rmSync(tmpRoot, { recursive: true, force: true });
-    tmpRoot = "";
+  for (const [key, previous] of previousEnv) {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
   }
+  previousEnv.clear();
+  if (tmpRoot) { rmSync(tmpRoot, { recursive: true, force: true }); tmpRoot = ""; }
+  if (cliRoot) { rmSync(cliRoot, { recursive: true, force: true }); cliRoot = ""; }
 });
 
 function createProject(hostRoot: string): ProjectConfig {
