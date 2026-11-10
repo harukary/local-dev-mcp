@@ -20,16 +20,18 @@ The `feedback.report` / `feedback.list` / `feedback.update` tools are for tracki
 4. Run the relevant checks:
 
    ```bash
-   pnpm typecheck
-   pnpm test
-   pnpm build
+   pnpm run typecheck
+   pnpm run build
+   pnpm run test
    ```
+
+   GitHub Actions runs these checks, the Muse Python tests, and shell syntax checks for pull requests.
 
 5. Update `README.md`, `README_ja.md`, or the relevant `docs/` page when behavior or setup changes. For MCP tool contract changes, update the schema version and document how maintainers can refresh the existing ChatGPT App. Contributors do not need access to the maintainers' Workspace.
 6. Open a pull request explaining the problem, solution, potential security impact, and which checks you ran.
 
-Do not include personal runtime state, stored feedback, authentication files, browser profiles, logs, screenshots of private data, or generated build artifacts in a pull request.
+Do not include personal runtime state, stored feedback, authentication files, browser profiles, logs, screenshots of private data, or generated build artifacts in a pull request. Git commit author email addresses are public; choose your GitHub noreply address when privacy matters.
 
 ## Licensing and third-party code
 
-Unless otherwise indicated in a directory or file, contributions are submitted under the repository's [Apache License 2.0](LICENSE). Only submit material you have the right to license. Preserve third-party notices and file-specific licenses; `agentic-inbox/` retains its own [license](agentic-inbox/LICENSE) and upstream attribution.
+Unless otherwise indicated in a tracked file, contributions are submitted under the repository's [Apache License 2.0](LICENSE). Submit only material you have the right to license, and preserve applicable third-party notices and file-specific licenses.

@@ -10,11 +10,11 @@ Install Node.js 22+, pnpm, and Git.
 git clone https://github.com/harukary/local-dev-mcp.git
 cd local-dev-mcp
 pnpm install
-pnpm setup
-pnpm doctor
+pnpm run setup
+pnpm run doctor
 ```
 
-`pnpm setup` selects a project directory/ID and optional capabilities. **All four default to ON.** OFF means the tools disappear from the MCP schema and stale calls are rejected.
+`pnpm run setup` selects a project directory/ID and optional capabilities. **All four default to ON.** OFF means the tools disappear from the MCP schema and stale calls are rejected.
 
 | Feature | Tools | External setup if used |
 | --- | --- | --- |
@@ -28,9 +28,9 @@ There is no need to uninstall the CLI dependencies when disabling a feature. No 
 For non-interactive setup or later changes:
 
 ```bash
-pnpm setup --yes
-pnpm setup --yes --disable mobile,computer
-pnpm setup --yes --enable computer
+pnpm run setup --yes
+pnpm run setup --yes --disable mobile,computer
+pnpm run setup --yes --enable computer
 ```
 
 Unspecified feature flags keep their prior values. On first setup, `--project /absolute/path --id my-project` registers a different project. Add further projects in `config/projects.local.yaml`.
@@ -66,4 +66,4 @@ Setting a feature to ON does not install third-party CLIs or grant OS permission
 - [Browser](browser-runtime.md): install Chrome and configure the isolated profile
 - [Repository Actions](repo-actions.md): declare allowed actions for individual repositories
 
-`pnpm doctor` skips dependency checks for disabled capabilities. A missing optional CLI affects that tool family, not core project, workspace, and Git operations.
+`pnpm run doctor` skips dependency checks for disabled capabilities. A missing optional CLI affects that tool family, not core project, workspace, and Git operations.

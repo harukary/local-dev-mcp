@@ -1,6 +1,6 @@
 # Mobile automation
 
-The `mobile.*` tools use one backend per device. They do not require a shared Appium or WebDriverAgent server. Mobile is optional (default ON); `pnpm setup --yes --disable mobile` hides the tool family and skips mobile dependency diagnostics. See [Setup](setup.md).
+The `mobile.*` tools use one backend per device. They do not require a shared Appium or WebDriverAgent server. Mobile is optional (default ON); `pnpm run setup --yes --disable mobile` hides the tool family and skips mobile dependency diagnostics. See [Setup](setup.md).
 
 | Target | Backend | Prerequisites |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ The standalone iPhone path does **not** require RoamRun.app, Xcode, WDA, or repe
 4. Check `roamrunctl devices`. A listed alias means the pairing key is **saved**; it does not prove the device is online. The CLI stores local pairing keys under `~/.config/roamrunctl/devices/` with owner-only permissions. Other processes running as that user can use an unencrypted key; consider upstream passphrase protection and a protected `ROAMRUNCTL_PASSPHRASE_COMMAND` for unattended sessions. Never commit keys, pairing files, passwords or screenshots.
 5. In ChatGPT, select a project and call `mobile.status` or `mobile.list_devices`. A paired device appears as `roamrunctl:phone` with backend `ios_roamrunctl` and state `Paired`. Verify an **actual** `mobile.screenshot` before any tap. After initial pairing, the phone can be on another Wi-Fi connected through Tailscale; starting on cellular alone is not guaranteed.
 
-`pnpm doctor` reports whether the standalone CLI exists and how many saved pairings it found. It does not contact the iPhone to verify its screen. RoamRun.app's legacy GUI pairing is **not** automatically a standalone `roamrunctl` pairing. Preserve a working old connection until the new one has been explicitly verified.
+`pnpm run doctor` reports whether the standalone CLI exists and how many saved pairings it found. It does not contact the iPhone to verify its screen. RoamRun.app's legacy GUI pairing is **not** automatically a standalone `roamrunctl` pairing. Preserve a working old connection until the new one has been explicitly verified.
 
 ## Physical iPhone tool behavior
 

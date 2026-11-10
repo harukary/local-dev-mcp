@@ -6,7 +6,7 @@ Prefer `browser.*` for ordinary web DOM operations and `mobile.*` for phones. Us
 
 ## Setup
 
-Computer defaults to ON. To hide its tools and skip its optional dependency, use `pnpm setup --yes --disable computer`.
+Computer defaults to ON. To hide its tools and skip its optional dependency, use `pnpm run setup --yes --disable computer`.
 
 For Computer use, install the stable Cua Driver CLI on the macOS host after inspecting its official installer.
 

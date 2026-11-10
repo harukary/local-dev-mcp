@@ -62,7 +62,7 @@ async function readProjectAgentInstructions(projectRoot: string, workingRoot: st
 }
 
 async function readAgentInstructions(projectRoot: string, workingRoot: string) {
-  const codexHome = process.env.CODEX_HOME?.trim() || join(homedir(), ".haru", ".codex");
+  const codexHome = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
   const [globalInstructions, projectInstructions] = await Promise.all([
     readInstructionFile(join(codexHome, "AGENTS.md"), "$CODEX_HOME/AGENTS.md", "global"),
     readProjectAgentInstructions(projectRoot, workingRoot),

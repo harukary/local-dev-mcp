@@ -6,7 +6,7 @@ Webの通常操作は `browser.*`、スマートフォンは `mobile.*` を使�
 
 ## セットアップ
 
-機能の既定値はONです。使わない場合は `pnpm setup --yes --disable computer` でツール一覧から非公開にできます。OFFならCua DriverのインストールもmacOS権限の付与も不要です。
+機能の既定値はONです。使わない場合は `pnpm run setup --yes --disable computer` でツール一覧から非公開にできます。OFFならCua DriverのインストールもmacOS権限の付与も不要です。
 
 使う場合はMac上で公式の安定版Cua Driver CLIを導入します。最新の公式インストーラーを確認してから実行してください。
 

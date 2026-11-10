@@ -15,7 +15,7 @@ For an interactive `project.select`, local-dev resolves instructions in this ord
 1. global instructions from `$CODEX_HOME/AGENTS.md`,
 2. project instructions from the selected working root.
 
-`CODEX_HOME` defaults to `~/.haru/.codex` when the environment variable is unset or blank.
+`CODEX_HOME` defaults to `~/.codex` when the environment variable is unset or blank. Set `CODEX_HOME` explicitly if the global instructions live elsewhere.
 
 For a normal project root, the project source is:
 

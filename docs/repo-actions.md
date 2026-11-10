@@ -2,7 +2,7 @@
 
 `repo.action.*` provides a closed-world interface for repository-owned commands. The repository declares executable and argument positions in `.local-dev/actions.json`; the model supplies only an action ID and schema-validated values, never arbitrary shell text. Commands use direct process execution (`shell=false`).
 
-Repository Actions are optional (default ON). `pnpm setup --yes --disable repo-actions` hides `repo.action.*` without affecting `workspace.*`, `git.*`, or `shell.*`. No action manifest is needed until a project uses Repository Actions. See [Setup](setup.md).
+Repository Actions are optional (default ON). `pnpm run setup --yes --disable repo-actions` hides `repo.action.*` without affecting `workspace.*`, `git.*`, or `shell.*`. No action manifest is needed until a project uses Repository Actions. See [Setup](setup.md).
 
 ## Manifest and calls
 

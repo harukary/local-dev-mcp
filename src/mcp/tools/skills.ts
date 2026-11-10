@@ -214,7 +214,7 @@ function codexSystemSkillsRoot(): string {
 }
 
 function codexHome(): string {
-  return resolve(process.env.CODEX_HOME?.trim() || join(homedir(), ".haru", ".codex"));
+  return resolve(process.env.CODEX_HOME?.trim() || join(homedir(), ".codex"));
 }
 
 async function listSkillFiles(

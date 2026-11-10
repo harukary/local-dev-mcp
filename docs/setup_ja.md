@@ -10,11 +10,11 @@ Node.js 22以降、pnpm、Gitを用意します。
 git clone https://github.com/harukary/local-dev-mcp.git
 cd local-dev-mcp
 pnpm install
-pnpm setup
-pnpm doctor
+pnpm run setup
+pnpm run doctor
 ```
 
-`pnpm setup` では操作を許可するプロジェクトの場所・IDと、次のオプションを選択します。**初期値はすべてON**です。OFFにした機能はツール一覧に出ず、旧ツール呼び出しも拒否されます。
+`pnpm run setup` では操作を許可するプロジェクトの場所・IDと、次のオプションを選択します。**初期値はすべてON**です。OFFにした機能はツール一覧に出ず、旧ツール呼び出しも拒否されます。
 
 | オプション | 提供する機能 | 導入が必要になるもの |
 | --- | --- | --- |
@@ -28,9 +28,9 @@ pnpm doctor
 対話なしでセットアップする場合:
 
 ```bash
-pnpm setup --yes
-pnpm setup --yes --disable mobile,computer
-pnpm setup --yes --enable computer
+pnpm run setup --yes
+pnpm run setup --yes --disable mobile,computer
+pnpm run setup --yes --enable computer
 ```
 
 `--disable` / `--enable` は既存環境でも実行できます。指定しなかった項目の設定は維持します。初回に別のプロジェクトを登録する場合は `--project /absolute/path --id my-project` を指定します。2つ目以降のプロジェクトは `config/projects.local.yaml` に追記します。
@@ -67,4 +67,4 @@ Claude・Museへの任意の接続はそれぞれ[Claudeの接続設定](claude-
 - [Browser](browser-runtime.md)：Chromeと隔離プロファイルの動作を確認する
 - [Repository Actions](repo-actions.md)：リポジトリごとに実行できるアクションを宣言する
 
-`pnpm doctor` はOFFの機能の依存ツールを診断対象から外します。ONの機能でツールが未インストールなら、対応する機能だけ利用できません。コアのMCPサーバーは引き続き使用できます。
+`pnpm run doctor` はOFFの機能の依存ツールを診断対象から外します。ONの機能でツールが未インストールなら、対応する機能だけ利用できません。コアのMCPサーバーは引き続き使用できます。

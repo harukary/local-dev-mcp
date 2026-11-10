@@ -17,7 +17,21 @@ function run(dir, args = []) {
   return execFileSync(process.execPath, [script, ...args, "--yes"], { cwd: dir, encoding: "utf8", env: { ...process.env } });
 }
 
-describe("pnpm setup", () => {
+describe("pnpm run setup", () => {
+  it("runs the documented pnpm command in a fresh checkout", () => {
+    const dir = fixture();
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { setup: `node ${JSON.stringify(script)}` } }));
+    const result = spawnSync("pnpm", ["run", "setup", "--yes", "--disable", "mobile,computer"], { cwd: dir, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Saved .env:");
+    const env = readFileSync(join(dir, ".env"), "utf8");
+    expect(env).toContain("LOCAL_DEV_MCP_FEATURE_MOBILE=0");
+    expect(env).toContain("LOCAL_DEV_MCP_FEATURE_COMPUTER=0");
+    expect(env).toContain("LOCAL_DEV_MCP_FEATURE_BROWSER=1");
+    expect(env).toContain("LOCAL_DEV_MCP_FEATURE_REPO_ACTIONS=1");
+    expect(readFileSync(join(dir, "config/projects.local.yaml"), "utf8")).toContain("projects:");
+  });
+
   it("creates a project registry and enables all four optional features by default", () => {
     const dir = fixture();
     run(dir);

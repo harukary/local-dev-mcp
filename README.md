@@ -159,15 +159,15 @@ Install Node.js 22+, pnpm, and Git, then run:
 git clone https://github.com/harukary/local-dev-mcp.git
 cd local-dev-mcp
 pnpm install
-pnpm setup
-pnpm doctor
+pnpm run setup
+pnpm run doctor
 ```
 
-`pnpm setup` registers an authorized project and selects **Mobile, Computer, Browser, and Repository Actions** independently. **All four default to ON.** Disabled tool families are hidden from ChatGPT, Claude, and Muse, and do not require their external command-line tools.
+`pnpm run setup` registers an authorized project and selects **Mobile, Computer, Browser, and Repository Actions** independently. **All four default to ON.** Disabled tool families are hidden from ChatGPT, Claude, and Muse, and do not require their external command-line tools.
 
 ```bash
-pnpm setup --yes --disable mobile,computer
-pnpm setup --yes --enable computer
+pnpm run setup --yes --disable mobile,computer
+pnpm run setup --yes --enable computer
 ```
 
 Flags live in the Git-ignored `.env`; registered projects live in `config/projects.local.yaml`. Existing secrets and project registry entries are preserved. Restart the MCP server after changing feature settings. For the complete guided setup and connection options, see [Setup](docs/setup.md).
@@ -176,7 +176,7 @@ Use `pnpm dev` for local stdio MCP clients. ChatGPT uses OpenAI Secure MCP Tunne
 
 The project registry controls Shell permissions: `write_policy=allow` permits normal writes, `confirm` requires approval, and `deny` blocks writes. Destructive operations remain subject to approval policy. Recursive `rm` options are recognized as options, not mistaken for hyphenated path segments. Host Shell execution is not OS-sandboxed to the project root; enable it only for trusted clients.
 
-`skills.list`, `skills.read`, and the global agent-instruction source used by `project.select` use `CODEX_HOME`, defaulting to `~/.haru/.codex`. The global instruction file is `$CODEX_HOME/AGENTS.md`. Set `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` to select the skill origin manifest; relative paths resolve under `CODEX_HOME`, and the default is `.haru-context-origins.json`. When generating LaunchAgents, set these environment variables to pass them into the server plist.
+`skills.list`, `skills.read`, and the global agent-instruction source used by `project.select` use `CODEX_HOME`, defaulting to `~/.codex`. The global instruction file is `$CODEX_HOME/AGENTS.md`. Set `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` to select the skill origin manifest; relative paths resolve under `CODEX_HOME`, and the default is `.haru-context-origins.json`. When generating LaunchAgents, set these environment variables to pass them into the server plist.
 
 ## OpenAI Secure MCP Tunnel
 
@@ -448,7 +448,7 @@ Per-conversation project selection is stored through `project.select`. Use `proj
 
 Physical iPhones on iOS 27+ use the official standalone `roamrunctl` CLI over Tailscale; **RoamRun.app and Xcode are not required for remote screen control**. Install with `brew tap mh-mobile/tap && brew install mh-mobile/tap/roamrunctl`, then pair once on the same Wi-Fi using `roamrunctl pair control --to <iphone-tailnet-name> --as phone` and approve the code on iPhone Developer Mode. `mobile.list_devices` then shows `roamrunctl:phone`. The new CLI pairing is independent of any old RoamRun GUI pairing.
 
-After `mobile.screenshot`, `mobile.tap`/`swipe`/`type` use the screenshot's short-lived authorization internally (one action per look, no automatic replay). iPhone snapshots contain captions without element geometry, so `mobile.tap_element` is unsupported on physical iPhone. iOS Simulator still uses `agent-device`/simctl; Android continues through ADB. `pnpm doctor` checks the CLI, saved pairings and other dependencies without touching the phone. See [Mobile automation](docs/mobile-automation.md) for first-time setup, supported features, safe operation and recovery.
+After `mobile.screenshot`, `mobile.tap`/`swipe`/`type` use the screenshot's short-lived authorization internally (one action per look, no automatic replay). iPhone snapshots contain captions without element geometry, so `mobile.tap_element` is unsupported on physical iPhone. iOS Simulator still uses `agent-device`/simctl; Android continues through ADB. `pnpm run doctor` checks the CLI, saved pairings and other dependencies without touching the phone. See [Mobile automation](docs/mobile-automation.md) for first-time setup, supported features, safe operation and recovery.
 
 ## Safety Notes
 
@@ -465,8 +465,10 @@ After `mobile.screenshot`, `mobile.tap`/`swipe`/`type` use the screenshot's shor
 Run the full local checks before committing:
 
 ```bash
-pnpm typecheck
-pnpm test
+pnpm run typecheck
+pnpm run build
+pnpm run test
+python3 -m unittest discover -s integrations/muse -p 'test_*.py'
 bash -n scripts/server.sh scripts/tunnel.sh scripts/install-launchd.sh scripts/install-openai-tunnel-client.sh
 ```
 
@@ -474,4 +476,4 @@ After changing the tool surface, increment `TOOL_SCHEMA_VERSION` and follow the 
 
 ## License and Contributions
 
-Source code is provided under the [Apache License 2.0](LICENSE), except for files or subprojects carrying their own licenses. The bundled `agentic-inbox/` directory retains its separate [license and attribution](agentic-inbox/LICENSE). See [CONTRIBUTING.md](CONTRIBUTING.md) for issues, pull requests, and security reporting guidance.
+Source code is provided under the [Apache License 2.0](LICENSE), except where a tracked file states a different license. See [CONTRIBUTING.md](CONTRIBUTING.md) for contributions and [SECURITY.md](SECURITY.md) for private vulnerability reports.

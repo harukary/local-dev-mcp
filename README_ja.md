@@ -110,15 +110,15 @@ Node.js 22以降とpnpmを用意し、次のコマンドを実行します。
 git clone https://github.com/harukary/local-dev-mcp.git
 cd local-dev-mcp
 pnpm install
-pnpm setup
-pnpm doctor
+pnpm run setup
+pnpm run doctor
 ```
 
-`pnpm setup`では許可するプロジェクトと、**Mobile / Computer / Browser / Repository Actions** のON/OFFを指定できます。**初期値は全てON**です。OFFにしたツールはChatGPT・Claude・Museに公開されず、関連する外部CLIの導入も不要です。
+`pnpm run setup`では許可するプロジェクトと、**Mobile / Computer / Browser / Repository Actions** のON/OFFを指定できます。**初期値は全てON**です。OFFにしたツールはChatGPT・Claude・Museに公開されず、関連する外部CLIの導入も不要です。
 
 ```bash
-pnpm setup --yes --disable mobile,computer
-pnpm setup --yes --enable computer
+pnpm run setup --yes --disable mobile,computer
+pnpm run setup --yes --enable computer
 ```
 
 設定はGit管理外の`.env`、プロジェクト登録は`config/projects.local.yaml`に保存します。既存の秘密情報やプロジェクト設定は上書きしません。切り替えはサーバー再起動後に反映されます。導入手順と接続方法は[セットアップガイド](docs/setup_ja.md)を参照してください。
@@ -127,7 +127,7 @@ local MCPクライアントからstdioで使う場合は`pnpm dev`、ChatGPTか�
 
 Shellの通常のファイル編集・移動・単一ファイル削除は`write_policy=allow`で自動実行でき、`confirm`では承認が必要、`deny`では拒否します。`approval_mode=policy`では再帰削除などの危険操作は引き続き承認対象です。`rm`の再帰削除判定では、ファイルパスに含まれる`-r`をオプションと見なしません。Host ShellはOSレベルでプロジェクト外へのアクセスを遮断しないため、`write_policy=allow`は信頼できるクライアントへのShell実行権限の委譲です。
 
-`skills.list` / `skills.read` のCodex Skills参照先は `CODEX_HOME` で指定できます。未設定時は `~/.haru/.codex` を使います。Skillsの由来ファイルは `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` で指定でき、相対パスは `CODEX_HOME` を基準に解決します。未設定時は `.haru-context-origins.json` です。LaunchAgentを再生成する場合も、この2つの環境変数を指定するとserverのplistへ引き継がれます。
+`skills.list` / `skills.read` のCodex Skills参照先は `CODEX_HOME` で指定できます。未設定時は `~/.codex` を使います。Skillsの由来ファイルは `LOCAL_DEV_MCP_SKILL_ORIGINS_FILE` で指定でき、相対パスは `CODEX_HOME` を基準に解決します。未設定時は `.haru-context-origins.json` です。LaunchAgentを再生成する場合も、この2つの環境変数を指定するとserverのplistへ引き継がれます。
 
 ## OpenAI Secure MCP Tunnel
 
@@ -379,7 +379,7 @@ conversation単位の選択は`project.select`で保持します。global + proj
 
 iOS 27以降のiPhone実機は、GUI不要の公式`roamrunctl`を使ってTailscale経由で遠隔操作します。導入は`brew tap mh-mobile/tap && brew install mh-mobile/tap/roamrunctl`。初回のみ同じWi-Fiで`roamrunctl pair control --to <iphone-tailnet-name> --as phone`を実行し、iPhoneのデベロッパモードで承認してください。`mobile.list_devices`に`roamrunctl:phone`が現れます。旧RoamRun GUIのペアリングとは別です。
 
-`mobile.screenshot`で現在の画面を取得した後、`mobile.tap`・`swipe`・`type`を実行します。短命の画面取得IDはMCPサーバー側で管理し、古い画面への操作や失敗した操作の自動再送は行いません。iPhone実機の`mobile.snapshot`は文字情報のみで位置・要素参照がなく、`mobile.tap_element`は使用できません。Simulatorは従来のagent-device、AndroidはADBを維持します。`pnpm doctor`でCLIの導入と保存済みペアリングを確認できます。詳細は[モバイルのセットアップ・操作ガイド](docs/mobile-automation.md)を参照してください。
+`mobile.screenshot`で現在の画面を取得した後、`mobile.tap`・`swipe`・`type`を実行します。短命の画面取得IDはMCPサーバー側で管理し、古い画面への操作や失敗した操作の自動再送は行いません。iPhone実機の`mobile.snapshot`は文字情報のみで位置・要素参照がなく、`mobile.tap_element`は使用できません。Simulatorは従来のagent-device、AndroidはADBを維持します。`pnpm run doctor`でCLIの導入と保存済みペアリングを確認できます。詳細は[モバイルのセットアップ・操作ガイド](docs/mobile-automation.md)を参照してください。
 
 ## Safety Notes
 
@@ -396,8 +396,10 @@ iOS 27以降のiPhone実機は、GUI不要の公式`roamrunctl`を使ってTails
 commit前の基本check:
 
 ```bash
-pnpm typecheck
-pnpm test
+pnpm run typecheck
+pnpm run build
+pnpm run test
+python3 -m unittest discover -s integrations/muse -p 'test_*.py'
 bash -n scripts/server.sh scripts/tunnel.sh scripts/install-launchd.sh scripts/install-openai-tunnel-client.sh
 ```
 
@@ -405,4 +407,4 @@ tool surfaceを変更したら`TOOL_SCHEMA_VERSION`を更新し、対象scopeの
 
 ## ライセンスと貢献
 
-ソースコードは、ファイルや同梱プロジェクトで別途指定がある場合を除き、[Apache License 2.0](LICENSE)で提供します。`agentic-inbox/`には別の[ライセンスと出典表示](agentic-inbox/LICENSE)があります。Issue・プルリクエスト・脆弱性報告は[貢献ガイド](CONTRIBUTING_ja.md)を参照してください。
+ソースコードは、Git管理されているファイルに別途明記がある場合を除き、[Apache License 2.0](LICENSE)で提供します。貢献については[貢献ガイド](CONTRIBUTING_ja.md)、脆弱性の非公開報告については[セキュリティポリシー](SECURITY.md)を参照してください。

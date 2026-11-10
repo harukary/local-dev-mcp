@@ -18,7 +18,7 @@ const features = {
 const featureNames = Object.keys(features);
 
 function usage() {
-  console.log(`Usage: pnpm setup [--disable mobile,computer,browser,repo-actions] [--enable name,...]
+  console.log(`Usage: pnpm run setup [--disable mobile,computer,browser,repo-actions] [--enable name,...]
                   [--project /absolute/path] [--id project-id] [--yes]
 
 All four optional features are ON by default. Without flags, interactive terminals
@@ -125,6 +125,6 @@ async function main() {
   ].join("\n");
   atomicPrivateWrite(envPath, `${retained ? retained + "\n\n" : ""}${section}\n`);
   console.log(`Saved .env: ${featureNames.map(name => `${name}=${settings[name] ? "ON" : "OFF"}`).join(", ")}`);
-  console.log("Run 'pnpm doctor' to verify the selected project and installed optional tools.");
+  console.log("Run 'pnpm run doctor' to verify the selected project and installed optional tools.");
 }
 main().catch(error => { console.error("Setup error:", error.message); process.exitCode = 1; });
