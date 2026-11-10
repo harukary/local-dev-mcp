@@ -64,7 +64,7 @@ MCP server側でもproject policyとshell risk policyを適用します。ChatGP
 - `shell.*` — shell実行、approval、background job、cancel
 - `browser.*`（任意）— Chrome DevTools Protocol browser automation
 - `computer.*`（任意）— Cua DriverによるmacOSウィンドウ操作（ブラウザのプロファイルとは独立、[セットアップ・操作](docs/computer-automation_ja.md)）
-- `mobile.*`（任意）— iOS/Android確認・操作
+- `mobile.*`（任意）— iPhone実機は単独`roamrunctl`、iOS Simulatorはsimctl/agent-device、AndroidはADBで確認・操作（[セットアップと操作](docs/mobile-automation.md)）
 - `todo.*` — shared Todo Service操作
 - `skills.*` — project/user/system Skillsの読み取り
 - `image.read` — public URLやcustom viewerを使わないinline画像確認
@@ -377,9 +377,9 @@ conversation単位の選択は`project.select`で保持します。global + proj
 
 ## 物理モバイル端末の自動操作
 
-`mobile.*`は既存の`agent-device`を使ってiOS/Androidの端末を操作します。通常操作ではスクリーンショットを省略し、必要なときだけ`observe=snapshot/after`または`wait_for`を指定します。`mobile.snapshot`は参照ID・階層・座標を維持しながら重複フィールドを削減します。`mobile.batch`は最大20ステップを同一端末で順番に実行し、途中失敗時は完了済み操作を再実行せず停止します。
+iOS 27以降のiPhone実機は、GUI不要の公式`roamrunctl`を使ってTailscale経由で遠隔操作します。導入は`brew tap mh-mobile/tap && brew install mh-mobile/tap/roamrunctl`。初回のみ同じWi-Fiで`roamrunctl pair control --to <iphone-tailnet-name> --as phone`を実行し、iPhoneのデベロッパモードで承認してください。`mobile.list_devices`に`roamrunctl:phone`が現れます。旧RoamRun GUIのペアリングとは別です。
 
-macOSでは`pnpm doctor`がproject-local `agent-device`とphysical iOSのDeveloper Tools Security状態を確認します。操作契約やエラー復旧は[Mobile automation](docs/mobile-automation.md)を参照してください。
+`mobile.screenshot`で現在の画面を取得した後、`mobile.tap`・`swipe`・`type`を実行します。短命の画面取得IDはMCPサーバー側で管理し、古い画面への操作や失敗した操作の自動再送は行いません。iPhone実機の`mobile.snapshot`は文字情報のみで位置・要素参照がなく、`mobile.tap_element`は使用できません。Simulatorは従来のagent-device、AndroidはADBを維持します。`pnpm doctor`でCLIの導入と保存済みペアリングを確認できます。詳細は[モバイルのセットアップ・操作ガイド](docs/mobile-automation.md)を参照してください。
 
 ## Safety Notes
 

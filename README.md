@@ -64,7 +64,7 @@ Core tool families include:
 - `shell.*` — managed shell execution, approvals, background jobs, and cancellation
 - `browser.*` (optional) — Chrome DevTools Protocol browser automation
 - `computer.*` (optional) — macOS desktop window observation and interaction via Cua Driver (separate from browser profiles); see [computer setup and operation](docs/computer-automation.md)
-- `mobile.*` (optional) — iOS/Android inspection and interaction (timed iOS swipes use agent-device `gesture pan`; Android swipes use ADB; see [`docs/mobile-automation.md`](docs/mobile-automation.md))
+- `mobile.*` (optional) — physical iPhone control through standalone `roamrunctl` (no RoamRun GUI, WDA or repeated pairing), Simulator via simctl/agent-device and Android via ADB; see [mobile setup and operation](docs/mobile-automation.md)
 - `todo.*` — shared Todo Service operations
 - `skills.*` — readable project/user/system Skills
 - `image.read` — inline image inspection without a custom viewer or public URL
@@ -446,9 +446,9 @@ Per-conversation project selection is stored through `project.select`. Use `proj
 
 ## Physical Mobile Automation
 
-The `mobile.*` tools operate discovered iOS and Android targets through the existing `agent-device` backend. Actions return compact status without a screenshot by default; request `observe=snapshot/after` or `wait_for` when UI evidence is needed. `mobile.snapshot` removes redundant node fields and preserves refs, identifiers, hierarchy and geometry. `mobile.batch` serializes up to 20 prevalidated steps on one device, stopping on errors without replaying completed actions.
+Physical iPhones on iOS 27+ use the official standalone `roamrunctl` CLI over Tailscale; **RoamRun.app and Xcode are not required for remote screen control**. Install with `brew tap mh-mobile/tap && brew install mh-mobile/tap/roamrunctl`, then pair once on the same Wi-Fi using `roamrunctl pair control --to <iphone-tailnet-name> --as phone` and approve the code on iPhone Developer Mode. `mobile.list_devices` then shows `roamrunctl:phone`. The new CLI pairing is independent of any old RoamRun GUI pairing.
 
-On macOS, `pnpm doctor` checks the project-local `agent-device` installation and reports the physical iOS Developer Tools Security state. See [Mobile automation](docs/mobile-automation.md) for tool contracts, batch usage and recovery behavior.
+After `mobile.screenshot`, `mobile.tap`/`swipe`/`type` use the screenshot's short-lived authorization internally (one action per look, no automatic replay). iPhone snapshots contain captions without element geometry, so `mobile.tap_element` is unsupported on physical iPhone. iOS Simulator still uses `agent-device`/simctl; Android continues through ADB. `pnpm doctor` checks the CLI, saved pairings and other dependencies without touching the phone. See [Mobile automation](docs/mobile-automation.md) for first-time setup, supported features, safe operation and recovery.
 
 ## Safety Notes
 

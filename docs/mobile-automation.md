@@ -1,51 +1,69 @@
 # Mobile automation
 
-The `mobile.*` tools use the existing `agent-device` backend for physical iOS devices and iOS/Android simulators or emulators. There is no additional WebDriverAgent service, mobile server, or dependency. Mobile is optional (default ON); `pnpm setup --yes --disable mobile` hides the tool family and skips mobile dependency diagnostics. See [Setup](setup.md).
+The `mobile.*` tools use one backend per device. They do not require a shared Appium or WebDriverAgent server. Mobile is optional (default ON); `pnpm setup --yes --disable mobile` hides the tool family and skips mobile dependency diagnostics. See [Setup](setup.md).
 
-## Observing the device
+| Target | Backend | Prerequisites |
+| --- | --- | --- |
+| Physical iPhone/iPad (iOS/iPadOS 27+) | Official standalone `roamrunctl mcp` | A saved device-control pairing, Wi-Fi and reachable Tailscale |
+| iOS Simulator | Xcode Simulator + project-local `agent-device` | Xcode, iOS runtime and `pnpm install` |
+| Android physical device/emulator | ADB; `agent-device` for accessibility operations | Android SDK Platform-Tools and authorized debugging |
 
-Use `mobile.list_devices` to choose an exact device ID. Read the current UI with `mobile.snapshot` or `mobile.screenshot` before operating on a page whose content is unknown.
+The standalone iPhone path does **not** require RoamRun.app, Xcode, WDA, or repeated XCUITest/passcode authorization. The app's older Xcode bridge is not used. An iPhone reboot may still require the owner to unlock it once; Face ID, passcodes and trust prompts are never bypassed.
 
-Actions such as `mobile.tap`, `mobile.tap_element`, `mobile.type`, `mobile.swipe`, `mobile.launch_app`, and `mobile.press` return **compact status by default**, without a screenshot or fixed post-action delay. When the next decision depends on the updated page, request `observe: "snapshot"` for its accessibility tree or `observe: "after"` for an inline screenshot. Use `wait_for: { "target": "...", "timeout_ms": 10000 }` when the operation has a known UI postcondition.
+## Physical iPhone setup (OSS)
 
-`mobile.swipe` keeps the same four absolute coordinates and optional `duration_ms` (500 ms by default) on both platforms. On iOS it converts the rounded endpoints to a relative `agent-device gesture pan x y dx dy durationMs` (supported by pinned agent-device 0.21.0); the older `agent-device swipe x1 y1 x2 y2 durationMs` CLI form is invalid. Android continues using ADB `input swipe x1 y1 x2 y2 durationMs`. The `swipe` step inside `mobile.batch` uses the same implementation.
+1. Install Tailscale on the Mac and iPhone from [its official site](https://tailscale.com/) and join the permitted tailnet. Keep debugging/MCP ports private.
+2. Install the open-source standalone CLI. The official Homebrew formula builds the Rust source:
 
-A successful action distinguishes execution from verification:
+   ```bash
+   brew tap mh-mobile/tap
+   brew install mh-mobile/tap/roamrunctl
+   roamrunctl --version
+   ```
 
-- `action_applied: true`: the device backend reported successful execution.
-- `action_complete: true`: the action and its explicitly requested observation/wait completed.
-- `verified: true`: a requested `wait_for` UI target was found, not that a business transaction succeeded.
-- `verification_deferred: true`: no UI postcondition was requested.
+   On other supported hosts, consult the [upstream CLI instructions](https://github.com/mh-mobile/RoamRun/tree/main/Rust/roamrunctl). Verify source, checksums and code signing as applicable; do not silently bypass macOS Gatekeeper. If the server's launchd PATH does not contain Homebrew, the standard /opt/homebrew/bin and /usr/local/bin are checked automatically. Set `LOCAL_DEV_MCP_ROAMRUNCTL_BIN` only when using a different **verified** executable.
+3. Pair **once**, with the Mac and iPhone on the **same Wi-Fi** (not only remotely via a Tailscale relay). Enable iPhone Developer Mode. The device owner runs:
 
-An action-level transport error may report `action_applied: null`: execution is uncertain. Never replay an uncertain tap, text entry, or submission without first observing the current device state. If an observation fails *after* an action, `action_applied: true` and `retry_action: false` preserve that distinction.
+   ```bash
+   roamrunctl pair control --to <iphone-tailnet-name> --as phone
+   ```
 
-If `mobile.launch_app` or a snapshot repeatedly fails with the same backend/device error, **do not immediately repeat the launch**. Use `mobile.status` and `mobile.list_devices` to verify the backend and device, check the current UI with `mobile.snapshot` or `mobile.screenshot` where possible, then address a missing device, unavailable simulator, or stale session before retrying once. Repeated failures are not evidence that the app was never launched. This is an operational recovery rule, not an automatic retry or extra mobile service.
+   On iPhone, open Settings → Privacy & Security → Developer Mode, select the Mac's pairing request, and enter the code shown in the terminal. This manual approval is required. For a host that cannot be near the iPhone, follow upstream's trusted-introducer procedure rather than bypassing pairing.
+4. Check `roamrunctl devices`. A listed alias means the pairing key is **saved**; it does not prove the device is online. The CLI stores local pairing keys under `~/.config/roamrunctl/devices/` with owner-only permissions. Other processes running as that user can use an unencrypted key; consider upstream passphrase protection and a protected `ROAMRUNCTL_PASSPHRASE_COMMAND` for unattended sessions. Never commit keys, pairing files, passwords or screenshots.
+5. In ChatGPT, select a project and call `mobile.status` or `mobile.list_devices`. A paired device appears as `roamrunctl:phone` with backend `ios_roamrunctl` and state `Paired`. Verify an **actual** `mobile.screenshot` before any tap. After initial pairing, the phone can be on another Wi-Fi connected through Tailscale; starting on cellular alone is not guaranteed.
 
-`mobile.snapshot` removes redundant values and common true flags. It keeps `ref`, `identifier`, `label`, type, hierarchy, and relevant state. Element rectangles are `[x,y,width,height]` in the backend's screen coordinates. Element refs expire after page mutations, cross-chat actions or 60 seconds; use fresh refs instead of replaying stale ones.
+`pnpm doctor` reports whether the standalone CLI exists and how many saved pairings it found. It does not contact the iPhone to verify its screen. RoamRun.app's legacy GUI pairing is **not** automatically a standalone `roamrunctl` pairing. Preserve a working old connection until the new one has been explicitly verified.
 
-## Batching known steps
+## Physical iPhone tool behavior
 
-`mobile.batch` executes at most 20 known steps sequentially on **one device**. Supported operations are `tap`, `tap_element`, `type`, `swipe`, `press`, `launch_app`, `open_url` and `wait`. Every step is schema-validated before the first device operation. Step objects cannot override the batch device. The same per-device operation queue used by other `mobile.*` tools serializes the entire batch.
+A local-dev MCP server process holds its own persistent **stdio** `roamrunctl mcp` session (via the maintained MCP SDK). No public or local HTTP port is opened. It is independent of haruclaw's separate RoamRunCTL session.
 
-For example, to open settings and return to the previous screen:
+- `mobile.screenshot` returns inline image content, a project-local private JPEG path and original screenshot width/height (`capture.coordinate_space: "image-pixels"`). The phone's native UIKit point size and displayed thumbnail size are **not** coordinate spaces for taps.
+- One screenshot authorizes **one** `mobile.tap`, `mobile.swipe` or `mobile.type` in that conversation/device, within 55 seconds. local-dev MCP stores RoamRun's short-lived `lookId` internally; callers need not pass it. An `observe: "after"` screenshot after an action establishes a new look for the next operation. Another client's look or action may invalidate a token; do not automatically retry.
+- `mobile.type` uses key input for ASCII and paste for non-ASCII (Japanese included); an iOS paste permission prompt may require manual approval.
+- `mobile.launch_app` accepts an exact bundle ID. `mobile.press` supports Home, but not an artificial iOS Back button.
+- `mobile.snapshot` reads accessibility captions only: **no element refs, bounding rectangles or selection geometry**. `mobile.tap_element` returns a clear unsupported error on physical iOS; inspect a screenshot and tap its coordinates instead. `mobile.wait` can check visible caption text, not agent-device selector syntax.
+- `mobile.open_url`, `mobile.stop_app` and `mobile.restart_app` are not supported on physical iOS. No automatic fallback to Xcode, Appium or another device occurs.
+- `mobile.batch` supports at most **one** tap/swipe/type per observed screen on a physical iPhone. It rejects unsupported operations or multiple coordinate/text gestures *before* touching the device. Run another `mobile.screenshot` before subsequent gestures.
 
-```json
-{
-  "device": "your-device-id",
-  "steps": [
-    { "op": "tap_element", "args": { "target": "設定" } },
-    { "op": "wait", "args": { "target": "通知" } },
-    { "op": "press", "args": { "key": "back", "observe": "snapshot" } }
-  ]
-}
-```
+A typical interaction is `mobile.list_devices` → `mobile.screenshot` → inspect the image → `mobile.tap` with the exact device and pixel coordinates → `mobile.screenshot` to verify. Only perform a mutation after observing the target screen. Do not include raw screenshots, text input or pairing keys in normal log outputs.
 
-Only the final step may request a screenshot or snapshot. If an intermediate result requires a decision, finish the batch there and inspect its state before starting another one. For uncertain targets, purchase/submit actions, or destructive operations, do not blindly chain subsequent steps; include an explicit postcondition and verify the outcome.
+## Simulator and Android
 
-A batch returns `complete`, `completed_steps`, and `results`. On failure it also returns `stopped_at`, `stop_reason`, `failed_step`, and `replay_action: false`. A per-batch 90-second scheduling budget stops *before* another step, rather than replaying or silently dropping steps. Earlier completed steps must not be resent.
+iOS Simulator continues to use `agent-device` 0.21.0 for accessibility/tap/swipe, and simctl for app lifecycle/screenshot. The timed swipe adapter uses `agent-device gesture pan`, not its unsupported duration-extended `swipe` command. Android uses ADB and `agent-device` for accessibility. They are **not** switched to RoamRunCTL.
 
-## Error recovery
+For these backends, `mobile.snapshot` can include refs, hierarchy and `rect=[x,y,width,height]`. Snapshot refs expire after mutation, cross-chat actions or 60 seconds. `mobile.tap_element` and ref-aware `mobile.wait` remain supported as before.
 
-For element lookup/visibility failures, `mobile.tap_element` returns a recovery hint. A single screenshot is attached when the backend reports a recognized UI-target error and image capture succeeds; otherwise inspect with `mobile.screenshot`. Authentication, device/session faults, and uncertain transport failures are not treated as missing UI elements. The original error remains available even if screenshot capture fails.
+## Observations, batching and failures
 
-Keep screenshots and large UI dumps out of normal action results. Request them only when the next decision, a final checkpoint, or a failure requires visual evidence.
+Actions return a compact result unless `observe: "snapshot"`, `observe: "after"` or `wait_for` is requested. `action_applied: true` means the backend accepted the operation, not that the app reached the intended business state. `verified: true` means an explicit UI wait condition was met. A failed post-action observation preserves `action_applied: true` and `retry_action: false`.
+
+`mobile.batch` prevalidates up to 20 known steps for one device; only the last step may request observation. A failure stops at `stopped_at`, returns completed steps and **never** resends an uncertain or completed operation. For physical iPhone, the stricter one-gesture-per-look rule applies.
+
+If a mutation outcome is uncertain, capture a fresh screen first. A missing CLI, unpaired device, sleeping/offline iPhone, expired look token, unsupported element operation, and application failure are different diagnoses. When a device is named explicitly, the tool never changes to another target silently.
+
+## Security and lifecycle
+
+The mobile backend runs under the same host-user and MCP authentication rules as local-dev MCP. RoamRunCTL's pairing key provides broad access to the phone screen (including notifications) to processes with the host user's privileges. Protect the pairing directory, avoid exposing another RoamRun HTTP MCP service, and revoke retired device-control pairings on the iPhone under Developer Mode.
+
+The `roamrunctl mcp` subprocess is created only when a physical iPhone operation needs it and is closed with the local-dev MCP process. Saved keys survive restarts; old look tokens do not. The normal ChatGPT Secure MCP Tunnel, project-selection policy and image.read/artifact.link rules remain unchanged.

@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ProjectRegistry } from "../project/registry.js";
 import { isFeatureEnabled, OPTIONAL_FEATURES } from "../features.js";
+import { isRoamrunctlAvailable, listRoamrunctlDevices, roamrunctlBinary } from "../mcp/tools/mobile-roamrunctl.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,6 +33,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   }
   if (isFeatureEnabled("mobile")) {
     results.push(await checkAgentDevice());
+    results.push(await checkRoamrunctl());
     if (process.platform === "darwin") results.push(await checkDeveloperToolsSecurity());
   }
   if (isFeatureEnabled("computer")) results.push(await checkComputerDriver());
@@ -94,25 +96,41 @@ async function checkAgentDevice(): Promise<CheckResult> {
   }
 }
 
+async function checkRoamrunctl(): Promise<CheckResult> {
+  if (!(await isRoamrunctlAvailable())) return {
+    status: "warn", label: "roamrunctl (optional iPhone control)",
+    detail: "not installed; for iOS 27+ device control, see docs/mobile-automation.md",
+  };
+  try {
+    const devices = await listRoamrunctlDevices();
+    return {
+      status: devices.length ? "ok" : "warn", label: "roamrunctl (optional iPhone control)",
+      detail: `${roamrunctlBinary()}; ${devices.length} saved pairing(s) (live connection not checked)`,
+    };
+  } catch {
+    return { status: "warn", label: "roamrunctl (optional iPhone control)", detail: "installed, but saved pairings could not be listed" };
+  }
+}
+
 async function checkDeveloperToolsSecurity(): Promise<CheckResult> {
   try {
     const { stdout, stderr } = await execFileAsync("DevToolsSecurity", ["-status"], { timeout: 10_000, maxBuffer: 1024 * 1024 });
     const detail = `${stdout}\n${stderr}`.trim();
     if (/currently enabled/i.test(detail)) {
-      return { status: "ok", label: "physical iOS DevToolsSecurity", detail: "enabled" };
+      return { status: "ok", label: "optional iOS XCTest DevToolsSecurity", detail: "enabled" };
     }
     if (/currently disabled/i.test(detail)) {
       return {
         status: "warn",
-        label: "physical iOS DevToolsSecurity",
-        detail: "disabled; physical iOS XCTest requires: sudo DevToolsSecurity -enable",
+        label: "optional iOS XCTest DevToolsSecurity",
+        detail: "disabled; optional physical iOS XCTest may need manual authorization (roamrunctl screen control does not require it)",
       };
     }
-    return { status: "warn", label: "physical iOS DevToolsSecurity", detail: detail || "status unknown" };
+    return { status: "warn", label: "optional iOS XCTest DevToolsSecurity", detail: detail || "status unknown" };
   } catch (err) {
     return {
       status: "warn",
-      label: "physical iOS DevToolsSecurity",
+      label: "optional iOS XCTest DevToolsSecurity",
       detail: err instanceof Error ? err.message : String(err),
     };
   }

@@ -84,7 +84,8 @@ describe("mobile tools", () => {
     expect(result.structuredContent).toEqual(body);
     expect(body.backends).toMatchObject({
       ios_simctl: { available: expect.any(Boolean) },
-      ios_physical_agent_device: { available: expect.any(Boolean) },
+      ios_physical_roamrunctl: { available: expect.any(Boolean) },
+      ios_simulator_agent_device: { available: expect.any(Boolean) },
       android_adb: { available: expect.any(Boolean) },
       android_agent_device: { available: expect.any(Boolean) },
     });

@@ -28,9 +28,20 @@ import {
   agentIosType,
   agentIosWait,
   isAgentDeviceAvailable,
-  listAgentIosPhysicalDevices,
   type AgentDeviceNode,
 } from "./mobile-agent-device.js";
+import {
+  isRoamrunctlAvailable,
+  listRoamrunctlDevices,
+  roamrunctlScreenshot,
+  roamrunctlTap,
+  roamrunctlSwipe,
+  roamrunctlType,
+  roamrunctlLaunch,
+  roamrunctlPress,
+  roamrunctlElements,
+  roamrunctlWait,
+} from "./mobile-roamrunctl.js";
 
 const execFileBase = promisify(execFile);
 const execFileAsync: typeof execFileBase = ((file: string, args: string[], options: Record<string, unknown> = {}) => execFileBase(file, args, { timeout: 30_000, signal: requestSignal(), ...options })) as typeof execFileBase;
@@ -41,7 +52,7 @@ type MobileDevice = {
   platform: "ios" | "android";
   type: "simulator" | "emulator" | "device";
   state?: string;
-  backend?: "ios_simctl" | "ios_agent_device" | "android_adb";
+  backend?: "ios_simctl" | "ios_roamrunctl" | "android_adb";
 };
 
 type ImageContent = { type: "image"; data: string; mimeType: string };
@@ -157,10 +168,10 @@ async function resolveAdbPath(): Promise<string | null> {
   return null;
 }
 
-async function artifactPath(project: ProjectConfig, prefix: string): Promise<{ absolutePath: string; relativePath: string }> {
+async function artifactPath(project: ProjectConfig, prefix: string, extension = "png"): Promise<{ absolutePath: string; relativePath: string }> {
   const dir = join(project.hostRoot, "generated", "local-dev-mcp", "mobile");
   await mkdir(dir, { recursive: true });
-  const absolutePath = join(dir, `${prefix}-${Date.now()}.png`);
+  const absolutePath = join(dir, `${prefix}-${Date.now()}.${extension}`);
   return { absolutePath, relativePath: relative(project.hostRoot, absolutePath).replace(/\\/g, "/") };
 }
 
@@ -180,15 +191,8 @@ async function listIosSimulators(): Promise<MobileDevice[]> {
 }
 
 async function listIosPhysicalDevices(): Promise<MobileDevice[]> {
-  const devices = await listAgentIosPhysicalDevices();
-  return devices.map((device) => ({
-    id: device.id,
-    name: device.name,
-    platform: "ios",
-    type: "device",
-    state: device.booted ? "Connected" : "Unavailable",
-    backend: "ios_agent_device",
-  }));
+  // Saved pairing aliases are not live-connectivity assertions.
+  return await listRoamrunctlDevices();
 }
 
 async function listAndroidDevices(): Promise<MobileDevice[]> {
@@ -217,7 +221,7 @@ async function listAndroidDevices(): Promise<MobileDevice[]> {
 }
 
 async function listDevices() {
-  const sources = ["ios_simctl", "ios_agent_device", "android_adb"];
+  const sources = ["ios_simctl", "ios_roamrunctl", "android_adb"];
   const results = await Promise.allSettled([
     listIosSimulators(),
     listIosPhysicalDevices(),
@@ -315,10 +319,11 @@ async function screenshotIosSimulator(project: ProjectConfig, device: MobileDevi
   return output;
 }
 
-async function screenshotIosPhysical(project: ProjectConfig, device: MobileDevice) {
-  const output = await artifactPath(project, "ios-device-shot");
-  await agentIosScreenshot(device.id, output.absolutePath);
-  return output;
+async function screenshotIosPhysical(project: ProjectConfig, device: MobileDevice, chat: string) {
+  const output = await artifactPath(project, "ios-device-shot", "jpg");
+  const capture = await roamrunctlScreenshot(device.id, chat);
+  await writeFile(output.absolutePath, capture.bytes, { mode: 0o600 });
+  return { ...output, capture: { width: capture.width, height: capture.height, coordinate_space: "image-pixels" } };
 }
 
 async function screenshotAndroid(project: ProjectConfig, device: MobileDevice) {
@@ -333,27 +338,33 @@ async function screenshotAndroid(project: ProjectConfig, device: MobileDevice) {
   return output;
 }
 
-async function screenshotDevice(project: ProjectConfig, device: MobileDevice) {
+async function screenshotDevice(project: ProjectConfig, device: MobileDevice, chat: string) {
   if (device.platform === "android") return await screenshotAndroid(project, device);
   return isPhysicalIos(device)
-    ? await screenshotIosPhysical(project, device)
+    ? await screenshotIosPhysical(project, device, chat)
     : await screenshotIosSimulator(project, device);
 }
 
 export async function handleMobileStatus(ctx: AppContext, chatContextId: string) {
   const project = getProject(ctx, chatContextId);
   if ("error" in project) return project.error;
-  const [xcrunAvailable, adbPath, agentDeviceAvailable, discovery] = await Promise.all([
+  const [xcrunAvailable, adbPath, agentDeviceAvailable, roamrunctlAvailable, discovery] = await Promise.all([
     commandExists("xcrun"),
     resolveAdbPath(),
     isAgentDeviceAvailable(),
+    isRoamrunctlAvailable(),
     listDevices(),
   ]);
   return jsonResult({
     project_id: project.projectId,
     backends: {
       ios_simctl: { available: xcrunAvailable },
-      ios_physical_agent_device: { available: agentDeviceAvailable },
+      ios_physical_roamrunctl: {
+        available: roamrunctlAvailable,
+        saved_pairings: discovery.devices.filter((device) => device.backend === "ios_roamrunctl").length,
+        connection_verified: false,
+      },
+      ios_simulator_agent_device: { available: agentDeviceAvailable },
       android_adb: { available: !!adbPath, path: adbPath },
       android_agent_device: { available: agentDeviceAvailable && !!adbPath, adb_path: adbPath },
     },
@@ -374,7 +385,7 @@ export async function handleMobileScreenshot(ctx: AppContext, chatContextId: str
   const device = await resolveDevice(args.device);
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   try {
-    const screenshot = await screenshotDevice(project, device);
+    const screenshot = await screenshotDevice(project, device, chatContextId);
     const imageResult = await handleImageRead(ctx, chatContextId, { path: screenshot.relativePath });
     const imageText = imageResult.content[0]?.type === "text" ? imageResult.content[0].text : "{}";
     const screenshotMetadata = JSON.parse(String(imageText || "{}"));
@@ -385,6 +396,7 @@ export async function handleMobileScreenshot(ctx: AppContext, chatContextId: str
       action: "mobile.screenshot",
       device,
       screenshot: screenshotMetadata,
+      ...("capture" in screenshot ? { capture: screenshot.capture } : {}),
       image_read: { path: screenshot.relativePath },
     }, imageContent);
   } catch (err) {
@@ -403,7 +415,7 @@ function validateUrlForMobile(url: string): string | null {
 }
 
 async function screenshotPayload(ctx: AppContext, chatContextId: string, project: ProjectConfig, device: MobileDevice, action: string, extra: Record<string, unknown> = {}) {
-  const screenshot = await screenshotDevice(project, device);
+  const screenshot = await screenshotDevice(project, device, chatContextId);
   const imageResult = await handleImageRead(ctx, chatContextId, { path: screenshot.relativePath });
   const imageText = imageResult.content[0]?.type === "text" ? imageResult.content[0].text : "{}";
   if (imageResult.isError) throw new Error(`Screenshot saved but image inspection failed: ${imageText}`);
@@ -490,7 +502,7 @@ export async function handleMobileOpenUrl(ctx: AppContext, chatContextId: string
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   try {
     if (isPhysicalIos(device)) {
-      await agentIosOpenUrl(device.id, url);
+      throw new Error("roamrunctl does not support mobile.open_url. Use app-specific navigation after observing the screen.");
     } else if (device.platform === "ios") {
       await execFileAsync("xcrun", ["simctl", "openurl", device.id, url], { maxBuffer: 2 * 1024 * 1024 });
     } else {
@@ -512,7 +524,9 @@ export async function handleMobileTap(ctx: AppContext, chatContextId: string, ar
   const device = await resolveDevice(args.device);
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   try {
-    if (device.platform === "ios") {
+    if (isPhysicalIos(device)) {
+      await roamrunctlTap(device.id, chatContextId, args.x, args.y);
+    } else if (device.platform === "ios") {
       await agentIosTap(device.id, args.x, args.y);
     } else {
       const adb = await resolveAdbPath();
@@ -537,7 +551,9 @@ export async function handleMobileType(ctx: AppContext, chatContextId: string, a
   const device = await resolveDevice(args.device);
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   try {
-    if (device.platform === "ios") {
+    if (isPhysicalIos(device)) {
+      await roamrunctlType(device.id, chatContextId, args.text);
+    } else if (device.platform === "ios") {
       await agentIosType(device.id, args.text);
     } else {
       const adb = await resolveAdbPath();
@@ -564,7 +580,9 @@ export async function handleMobileSnapshot(ctx: AppContext, chatContextId: strin
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   try {
     let nodes: AgentDeviceNode[];
-    if (device.platform === "ios") {
+    if (isPhysicalIos(device)) {
+      nodes = (await roamrunctlElements(device.id)).map((label) => ({ type: "Text", label }));
+    } else if (device.platform === "ios") {
       nodes = await agentIosSnapshot(device.id);
     } else {
       const adb = await resolveAdbPath();
@@ -586,6 +604,7 @@ export async function handleMobileSnapshot(ctx: AppContext, chatContextId: strin
       matched_nodes: filtered.length,
       query: args.query ?? null,
       truncated: filtered.length > limit,
+      ...(isPhysicalIos(device) ? { positions_available: false, element_refs_available: false } : {}),
       nodes: filtered.slice(0, limit).map(compactMobileNode),
     });
   } catch (err) {
@@ -600,6 +619,9 @@ export async function handleMobileTapElement(ctx: AppContext, chatContextId: str
   const target = args.target.trim();
   const device = await resolveDevice(args.device);
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
+  if (isPhysicalIos(device)) {
+    return jsonError("MOBILE_TAP_ELEMENT_UNSUPPORTED", "roamrunctl accessibility captions have no element positions or tappable refs. Use mobile.screenshot and mobile.tap with image-pixel coordinates.", { device, target });
+  }
   try {
     if (device.platform === "ios") {
       await agentIosTapTarget(device.id, target);
@@ -623,7 +645,9 @@ export async function handleMobileLaunchApp(ctx: AppContext, chatContextId: stri
   const device = await resolveDevice(args.device);
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   try {
-    if (device.platform === "ios") {
+    if (isPhysicalIos(device)) {
+      await roamrunctlLaunch(device.id, app);
+    } else if (device.platform === "ios") {
       await agentIosLaunchApp(device.id, app);
     } else {
       const adb = await resolveAdbPath();
@@ -646,7 +670,9 @@ export async function handleMobileSwipe(ctx: AppContext, chatContextId: string, 
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   const duration = Math.max(0, Math.round(args.duration_ms ?? 500));
   try {
-    if (device.platform === "ios") {
+    if (isPhysicalIos(device)) {
+      await roamrunctlSwipe(device.id, chatContextId, args.x1!, args.y1!, args.x2!, args.y2!, duration);
+    } else if (device.platform === "ios") {
       await agentIosSwipe(device.id, args.x1!, args.y1!, args.x2!, args.y2!, duration);
     } else {
       const adb = await resolveAdbPath();
@@ -667,7 +693,10 @@ export async function handleMobilePress(ctx: AppContext, chatContextId: string, 
   const device = await resolveDevice(args.device);
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   try {
-    if (device.platform === "ios") {
+    if (isPhysicalIos(device)) {
+      if (args.key === "back") return jsonError("MOBILE_PRESS_UNSUPPORTED", "roamrunctl has no iOS Back button; observe the screen and tap its visible Back control.", { device });
+      await roamrunctlPress(device.id);
+    } else if (device.platform === "ios") {
       await agentIosPress(device.id, args.key);
     } else {
       const keyCode = args.key === "home" ? "KEYCODE_HOME" : "KEYCODE_BACK";
@@ -822,7 +851,9 @@ export async function handleMobileWait(ctx: AppContext, chatContextId: string, a
   const device = await resolveDevice(args.device);
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device or simulator was found.", { device: args.device });
   try {
-    if (device.platform === "ios") {
+    if (isPhysicalIos(device)) {
+      await roamrunctlWait(device.id, target, timeoutMs);
+    } else if (device.platform === "ios") {
       await agentIosWait(device.id, target, timeoutMs);
     } else {
       const adb = await resolveAdbPath();
@@ -866,6 +897,11 @@ export async function handleMobileBatch(ctx: AppContext, chatContextId: string, 
   const device = await resolveDevice(args.device);
   if (!device) return jsonError("MOBILE_DEVICE_NOT_FOUND", "No mobile device was found.", { device: args.device });
 
+  if (isPhysicalIos(device)) {
+    const requiresLook = steps.filter((step) => ["tap", "swipe", "type"].includes(step.op));
+    const unsupported = steps.find((step) => ["tap_element", "open_url"].includes(step.op) || (step.op === "press" && step.args.key === "back"));
+    if (unsupported || requiresLook.length > 1) return jsonError("INVALID_BATCH", "On roamrunctl, batch supports at most one tap/swipe/type per screenshot, and no tap_element, open_url or Back. Use mobile.screenshot between gestures.");
+  }
   const results: Array<Record<string, unknown>> = [];
   const startedAt = Date.now();
   for (const [index, step] of steps.entries()) {
