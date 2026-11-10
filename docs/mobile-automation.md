@@ -46,7 +46,7 @@ A local-dev MCP server process holds its own persistent **stdio** `roamrunctl mc
 - `mobile.open_url`, `mobile.stop_app` and `mobile.restart_app` are not supported on physical iOS. No automatic fallback to Xcode, Appium or another device occurs.
 - `mobile.batch` supports at most **one** tap/swipe/type per observed screen on a physical iPhone. It rejects unsupported operations or multiple coordinate/text gestures *before* touching the device. Run another `mobile.screenshot` before subsequent gestures.
 
-A typical interaction is `mobile.list_devices` → `mobile.screenshot` → inspect the image → `mobile.tap` with the exact device and pixel coordinates → `mobile.screenshot` to verify. Only perform a mutation after observing the target screen. Do not include raw screenshots, text input or pairing keys in normal log outputs.
+A typical interaction is `mobile.list_devices` → `mobile.screenshot` → inspect the image → `mobile.tap` with the exact device and pixel coordinates → `mobile.screenshot` to verify. When an exact `roamrunctl:<alias>` ID is supplied, operations skip unrelated Simulator/ADB discovery. Only perform a mutation after observing the target screen. Do not include raw screenshots, text input or pairing keys in normal log outputs.
 
 ## Simulator and Android
 

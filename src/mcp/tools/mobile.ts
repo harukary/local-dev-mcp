@@ -260,6 +260,11 @@ async function resolveDevice(deviceIdOrName?: string): Promise<MobileDevice | nu
   const cached = deviceCache && deviceCache.expires > Date.now() ? deviceCache.devices : undefined;
   const exactCached = deviceIdOrName ? cached?.find(device => device.id === deviceIdOrName) : undefined;
   if (exactCached) return exactCached;
+  // An explicit paired iPhone ID should not wait for Xcode/ADB discovery.
+  // Some hosts have no usable Simulator runtime, even when roamrunctl works.
+  if (deviceIdOrName?.startsWith("roamrunctl:")) {
+    return (await listRoamrunctlDevices()).find(device => device.id === deviceIdOrName) ?? null;
+  }
   const devices = cached ?? (await listDevices()).devices;
   deviceCache = { devices, expires: Date.now() + 10_000 };
   if (!deviceIdOrName) {
