@@ -14,7 +14,7 @@ import { BrowserLifecycleService, browserIdleTimeoutMsFromEnv, type BrowserStopR
 import { ActiveTabStore } from "../../browser/active-tab-store.js";
 import { BrowserOperationCoordinator } from "../../browser/browser-operation-coordinator.js";
 import { CdpClient, withCdpClient, closeCdpClients } from "../../browser/cdp-client.js";
-import { withBrowserPage, clickElement, fillElement, locatorFor, closeBrowserConnections } from "../../browser/interaction.js";
+import { withBrowserPage, clickElement, fillElement, locatorFor, readAccessibilitySnapshot, readDomElement, closeBrowserConnections } from "../../browser/interaction.js";
 import { navigateWithHttpBasicAuth, validateHttpCredentials, type BrowserHttpCredentials } from "../../browser/http-basic-auth.js";
 import { observeAfterAction } from "../observation.js";
 import { structuredTextFallback, utf8Prefix } from "../output.js";
@@ -45,7 +45,6 @@ export function browserToolUsesOuterOperationLock(toolName: string): boolean {
 export function browserToolRefreshesIdleDeadline(toolName: string): boolean {
   return toolName.startsWith("browser.")
     && toolName !== "browser.status"
-    && toolName !== "browser.sessions"
     && toolName !== "browser.stop";
 }
 
@@ -759,7 +758,7 @@ export async function handleBrowserStatus(ctx: AppContext, chatContextId: string
         : status?.state ?? "not_created";
     return jsonResult({
       project_id: project.projectId,
-      backend: "chrome-devtools-protocol",
+      backend: "playwright-over-cdp",
       chrome_available: chrome.available,
       port_range: { min: PORT_MIN, max: PORT_MAX },
       profile: {
@@ -888,22 +887,6 @@ export async function handleBrowserStart(ctx: AppContext, chatContextId: string,
     snapshot_copy_mode: profile.copyMode,
     snapshot_verification: profile.snapshotVerification,
   });
-}
-
-export async function handleBrowserSessions(ctx: AppContext, chatContextId: string) {
-  const project = getProject(ctx, chatContextId);
-  if ("error" in project) return project.error;
-  try {
-    const manager = new BrowserProfileManager({ home: BROWSER_HOME });
-    const profile = await manager.getOptionalOwnedProfile(chatContextId);
-    if (!profile) return jsonResult({ project_id: project.projectId, sessions: [{ state: "not_created", ready: false }] });
-    const status = await manager.statusForChat(chatContextId);
-    let ready = false;
-    if (profile.port) try { await waitForCdp(profile.port, 800); ready = true; } catch { ready = false; }
-    return jsonResult({ project_id: project.projectId, sessions: [{ state: status.state, ready, port: profile.port, last_used_at: status.lastUsedAt, snapshot_verification: status.snapshotVerification }] });
-  } catch (error) {
-    return profileError(error);
-  }
 }
 
 export async function handleBrowserStop(ctx: AppContext, chatContextId: string, args: { session_id?: string } = {}) {
@@ -1190,7 +1173,7 @@ export async function handleBrowserTabClose(ctx: AppContext, chatContextId: stri
   }
 }
 
-export async function handleBrowserDom(ctx: AppContext, chatContextId: string, args: { session_id?: string; selector?: string; mode?: "text" | "html" | "both"; max_bytes?: number } = {}) {
+export async function handleBrowserDom(ctx: AppContext, chatContextId: string, args: { session_id?: string; selector?: string; frame?: string; mode?: "text" | "html" | "both"; max_bytes?: number } = {}) {
   const selected = await activeSessionAndProject(ctx, chatContextId, args.session_id);
   if ("error" in selected) return selected.error;
   const { project, session } = selected;
@@ -1199,111 +1182,65 @@ export async function handleBrowserDom(ctx: AppContext, chatContextId: string, a
   const limit = Math.min(128 * 1024, Math.max(1, args.max_bytes ?? 32 * 1024));
   const perField = mode === "both" ? Math.floor(limit / 2) : limit;
   try {
-    const dom = await evaluate<{
-      selector: string;
-      found: boolean;
-      tagName?: string;
-      outerText?: string;
-      outerHTML?: string;
-      title: string;
-      url: string;
-      truncated?: boolean;
-    }>(session, `(() => {
-      const selector = ${jsString(selector)};
-      const element = document.querySelector(selector);
-      return {
-        selector,
-        found: Boolean(element),
-        tagName: element?.tagName,
-        outerText: ${jsString(mode)} === "html" ? undefined : (element?.innerText ?? element?.textContent ?? "").slice(0, ${perField}),
-        outerHTML: ${jsString(mode)} === "text" ? undefined : (element?.outerHTML ?? "").slice(0, ${perField}),
-        truncated: (${jsString(mode)} !== "html" && (element?.innerText ?? element?.textContent ?? "").length > ${perField}) || (${jsString(mode)} !== "text" && (element?.outerHTML ?? "").length > ${perField}),
-        title: document.title,
-        url: location.href,
-      };
-    })()`);
-    const outerText = dom.outerText === undefined ? undefined : utf8Prefix(dom.outerText, perField);
-    const outerHTML = dom.outerHTML === undefined ? undefined : utf8Prefix(dom.outerHTML, perField);
-    return jsonResult({ project_id: project.projectId, ...dom, mode, outerText, outerHTML, truncated: dom.truncated || outerText !== dom.outerText || outerHTML !== dom.outerHTML });
-  } catch (err) {
-    return jsonError("BROWSER_DOM_FAILED", err instanceof Error ? err.message : String(err), { port: session.port, selector });
+    const target = await validateActiveTarget(session);
+    const dom = await withBrowserPage(session.port, target.id, async page => {
+      const value = await readDomElement(page, { selector, frame: args.frame, mode, maxBytes: perField });
+      return { selector, title: await page.title(), url: page.url(), ...value };
+    });
+    return jsonResult({ project_id: project.projectId, ...dom, mode, truncated: dom.truncated ?? false });
+  } catch (error) {
+    return jsonError("BROWSER_DOM_FAILED", error instanceof Error ? error.message : String(error), { port: session.port, selector });
   }
 }
 
-export async function handleBrowserSelectors(ctx: AppContext, chatContextId: string, args: { session_id?: string; limit?: number; query?: string } = {}) {
+export function selectBrowserSnapshot(source: string, args: { query?: string; offset?: number; maxBytes: number }) {
+  const term = args.query?.toLowerCase();
+  const lines = source.split("\n").filter(line => !term || line.toLowerCase().includes(term));
+  const offset = Math.min(Math.max(args.offset ?? 0, 0), lines.length);
+  const selected: string[] = [];
+  let next = offset;
+  let clippedLine = false;
+  let bytes = 0;
+  while (next < lines.length) {
+    const line = lines[next];
+    const extra = Buffer.byteLength(line) + (selected.length ? 1 : 0);
+    if (bytes + extra > args.maxBytes) {
+      if (!selected.length) {
+        selected.push(utf8Prefix(line, args.maxBytes));
+        next++;
+        clippedLine = true;
+      }
+      break;
+    }
+    selected.push(line);
+    bytes += extra;
+    next++;
+  }
+  return { snapshot: selected.join("\n"), offset, total_lines: lines.length,
+    next_offset: next < lines.length ? next : null, truncated: clippedLine || next < lines.length };
+}
+
+export async function handleBrowserSnapshot(ctx: AppContext, chatContextId: string, args: { session_id?: string; selector?: string; frame?: string; query?: string; offset?: number; max_bytes?: number } = {}) {
   const selected = await activeSessionAndProject(ctx, chatContextId, args.session_id);
   if ("error" in selected) return selected.error;
   const { project, session } = selected;
-  const limit = Math.min(Math.max(args.limit ?? 80, 1), 500);
-  const query = (args.query ?? "").toLowerCase();
+  const selector = args.selector || "body";
+  const limit = Math.min(Math.max(args.max_bytes ?? 16 * 1024, 1), 32 * 1024);
   try {
-    const result = await evaluate<{
-      title: string;
-      url: string;
-      candidates: Array<{
-        selector: string;
-        tagName: string;
-        text: string;
-        role?: string | null;
-        ariaLabel?: string | null;
-        name?: string | null;
-        href?: string | null;
-        inputType?: string | null;
-        disabled: boolean;
-        visible: boolean;
-        rect: { x: number; y: number; width: number; height: number };
-      }>;
-    }>(session, `(() => {
-      const limit = ${Number(limit)};
-      const query = ${jsString(query)};
-      const cssEscape = globalThis.CSS?.escape || ((value) => String(value).replace(/[^a-zA-Z0-9_-]/g, "\\\\$&"));
-      function selectorFor(el) {
-        if (el.id) return "#" + cssEscape(el.id);
-        const parts = [];
-        let cur = el;
-        while (cur && cur.nodeType === 1 && cur !== document.body && parts.length < 4) {
-          let part = cur.tagName.toLowerCase();
-          const parent = cur.parentElement;
-          if (parent) {
-            const siblings = Array.from(parent.children).filter((child) => child.tagName === cur.tagName);
-            if (siblings.length > 1) part += ":nth-of-type(" + (siblings.indexOf(cur) + 1) + ")";
-          }
-          parts.unshift(part);
-          cur = parent;
-        }
-        return parts.join(" > ") || el.tagName.toLowerCase();
-      }
-      function isVisible(el, rect) {
-        const style = getComputedStyle(el);
-        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity || "1") > 0;
-      }
-      const nodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],summary,[onclick],[tabindex]'));
-      const candidates = [];
-      for (const el of nodes) {
-        const rect = el.getBoundingClientRect();
-        const text = (el.innerText || el.textContent || el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("value") || "").trim().replace(/\\s+/g, " ").slice(0, 160);
-        const item = {
-          selector: selectorFor(el),
-          tagName: el.tagName.toLowerCase(),
-          text,
-          role: el.getAttribute("role"),
-          ariaLabel: el.getAttribute("aria-label"),
-          name: el.getAttribute("name"),
-          href: el.getAttribute("href"),
-          inputType: el.getAttribute("type"),
-          disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true"),
-          visible: isVisible(el, rect),
-          rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
-        };
-        const haystack = [item.selector, item.tagName, item.text, item.role, item.ariaLabel, item.name, item.href, item.inputType].filter(Boolean).join(" ").toLowerCase();
-        if (!query || haystack.includes(query)) candidates.push(item);
-        if (candidates.length >= limit) break;
-      }
-      return { title: document.title, url: location.href, candidates };
-    })()`);
-    return jsonResult({ project_id: project.projectId, port: session.port, ...result });
-  } catch (err) {
-    return jsonError("BROWSER_SELECTORS_FAILED", err instanceof Error ? err.message : String(err), { port: session.port });
+    const target = await validateActiveTarget(session);
+    const observation = await withBrowserPage(session.port, target.id, async page => ({
+      snapshot: await readAccessibilitySnapshot(page, { selector, frame: args.frame }),
+      title: await page.title(),
+      url: page.url(),
+    }));
+    return jsonResult({
+      ok: true, project_id: project.projectId, target_id: target.id,
+      selector, title: observation.title, url: observation.url,
+      query: args.query ?? null,
+      ...selectBrowserSnapshot(observation.snapshot, { query: args.query, offset: args.offset, maxBytes: limit }),
+    });
+  } catch (error) {
+    return jsonError("BROWSER_SNAPSHOT_FAILED", error instanceof Error ? error.message : String(error), { selector, reason: classifyBrowserFailureReason(error) });
   }
 }
 
@@ -1321,7 +1258,7 @@ async function observeBrowserAction(
     if (args.observe === "none" || (args.observe === undefined && args.wait_for)) return jsonResult(metadata);
     if (args.observe === "snapshot") {
       const target = await validateActiveTarget(session);
-      const snapshot = await withBrowserPage(session.port, target.id, page => page.locator("body").ariaSnapshot({ timeout: 5000 }));
+      const snapshot = await withBrowserPage(session.port, target.id, page => readAccessibilitySnapshot(page, { selector: "body" }));
       return jsonResult({ ...metadata, snapshot: utf8Prefix(snapshot, 32 * 1024), truncated: Buffer.byteLength(snapshot) > 32 * 1024 });
     }
     return await captureCdpScreenshot(ctx, chat, project, session, action, metadata);
@@ -1403,7 +1340,8 @@ export async function handleBrowserWait(ctx: AppContext, chatContextId: string, 
 }
 
 
-export async function handleBrowserEval(ctx: AppContext, chatContextId: string, args: { session_id?: string; expression?: string } = {}) {
+export async function handleBrowserEval(ctx: AppContext, chatContextId: string, args: { session_id?: string; expression?: string; unsafe?: boolean } = {}) {
+  if (args.unsafe !== true) return jsonError("UNSAFE_CONFIRMATION_REQUIRED", "browser.eval requires unsafe=true. Prefer browser.snapshot, browser.dom, or typed interactions.");
   const selected = await activeSessionAndProject(ctx, chatContextId, args.session_id);
   if ("error" in selected) return selected.error;
   const { project, session } = selected;

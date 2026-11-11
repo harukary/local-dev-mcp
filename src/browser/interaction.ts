@@ -63,6 +63,32 @@ export async function closeBrowserConnections(): Promise<void> {
   await Promise.allSettled(entries.map(async entry => { clearTimeout(entry.timer); await (await entry.ready).close(); }));
 }
 
+export async function readAccessibilitySnapshot(page: Page, input: BrowserLocator): Promise<string> {
+  return await locatorFor(page, input).ariaSnapshot({ timeout: 10_000 });
+}
+
+export async function readDomElement(page: Page, input: BrowserLocator & { mode: "text" | "html" | "both"; maxBytes: number }) {
+  const element = locatorFor(page, input);
+  if (await element.count() === 0) return { found: false as const, truncated: false };
+  const value = await element.first().evaluate((node, { mode, maxBytes }) => {
+    const clip = (source: string) => {
+      // Truncate in the browser before transferring content over CDP.
+      const bytes = new TextEncoder().encode(source.slice(0, maxBytes));
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      let length = Math.min(bytes.length, maxBytes);
+      while (length > 0) {
+        try { return { text: decoder.decode(bytes.subarray(0, length)), truncated: source.length > maxBytes || length < bytes.length }; }
+        catch { length--; }
+      }
+      return { text: "", truncated: source.length > 0 };
+    };
+    const text = mode === "html" ? undefined : clip((node as HTMLElement).innerText ?? node.textContent ?? "");
+    const html = mode === "text" ? undefined : clip(node.outerHTML);
+    return { tagName: node.tagName, outerText: text?.text, outerHTML: html?.text, truncated: !!(text?.truncated || html?.truncated) };
+  }, { mode: input.mode, maxBytes: input.maxBytes });
+  return { found: true as const, ...value };
+}
+
 export async function clickElement(page: Page, input: BrowserLocator): Promise<void> {
   await locatorFor(page, input).click();
 }

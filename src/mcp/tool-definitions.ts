@@ -8,9 +8,9 @@ import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 import { buildFeedbackToolDefinitions } from "./feedback-tool-definitions.js";
 import { buildRepoActionToolDefinitions } from "./repo-action-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-11-10.1";
-export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-10.1";
-export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-10.1";
+export const TOOL_SCHEMA_VERSION = "2026-11-11.2";
+export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-11.2";
+export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-11.2";
 export type ClientToolProfile = "chatgpt" | "claude" | "muse";
 
 // External clients opt into each tool explicitly. Adding a handler to ChatGPT
@@ -23,9 +23,9 @@ const EXTERNAL_SHARED_TOOLS = new Set([
   "workspace.search", "workspace.patch",
   "git.inspect", "git.status", "git.log", "git.show", "git.diff", "git.commit", "git.push",
   "repo.action.list", "repo.action.read", "repo.action.write",
-  "browser.interact", "browser.status", "browser.start", "browser.sessions",
+  "browser.interact", "browser.status", "browser.start",
   "browser.stop", "browser.tabs", "browser.tab.open", "browser.tab.use",
-  "browser.tab.close", "browser.dom", "browser.selectors", "browser.click",
+  "browser.tab.close", "browser.dom", "browser.snapshot", "browser.click",
   "browser.type", "browser.wait", "browser.eval", "browser.press",
   "browser.reload", "browser.back", "browser.forward", "browser.screenshot", "browser.open",
   "computer.status", "computer.list_apps", "computer.list_windows", "computer.get_window_state",

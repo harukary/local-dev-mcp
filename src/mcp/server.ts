@@ -52,7 +52,7 @@ import { jsonError } from "./tools/dev/common.js";
 import { handleBrowserInteract } from "./tools/browser.js";
 import { handleComputerTool, runComputerToolOperation } from "./tools/computer.js";
 import { handleGitInspect, handleGitStatus, handleGitLog, handleGitShow, handleGitDiff, handleGitCommit, handleGitPush } from "./tools/dev/git.js";
-import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserToolOperation, handleBrowserStatus, handleBrowserStart, handleBrowserSessions, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserTabOpen, handleBrowserTabUse, handleBrowserTabClose, handleBrowserDom, handleBrowserSelectors, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
+import { beginBrowserOperationDrain, createBrowserLifecycleService, runBrowserToolOperation, handleBrowserStatus, handleBrowserStart, handleBrowserStop, handleBrowserScreenshot, handleBrowserOpen, handleBrowserTabs, handleBrowserTabOpen, handleBrowserTabUse, handleBrowserTabClose, handleBrowserDom, handleBrowserSnapshot, handleBrowserClick, handleBrowserType, handleBrowserWait, handleBrowserEval, handleBrowserPress, handleBrowserReload, handleBrowserBack, handleBrowserForward } from "./tools/browser.js";
 import { handleMobileStatus, handleMobileListDevices, handleMobileScreenshot, handleMobileSnapshot, handleMobileCurrentApp, handleMobileLogs, handleMobileStopApp, handleMobileRestartApp, handleMobileBoot, handleMobileLaunchApp, handleMobileOpenUrl, handleMobileTap, handleMobileTapElement, handleMobileType, handleMobileSwipe, handleMobilePress, handleMobileWait, handleMobileBatch } from "./tools/mobile.js";
 import { handleTodoProjects, handleTodoList, handleTodoGet, handleTodoCreate, handleTodoUpdate, handleTodoDecompose, handleTodoSetCompleted, handleTodoMove, handleTodoDelete } from "./tools/todo.js";
 import { handleFeedbackReport, handleFeedbackList, handleFeedbackUpdate } from "./tools/feedback.js";
@@ -504,9 +504,6 @@ export function createMcpServer(ctx: AppContext): Server {
         case "browser.start":
           return await handleBrowserStart(ctx, chatContextId, args as { url?: string; session_id?: string });
 
-        case "browser.sessions":
-          return await handleBrowserSessions(ctx, chatContextId);
-
         case "browser.stop":
           return await handleBrowserStop(ctx, chatContextId, args as { session_id?: string });
 
@@ -523,10 +520,10 @@ export function createMcpServer(ctx: AppContext): Server {
           return await handleBrowserTabClose(ctx, chatContextId, args as { target_id?: string });
 
         case "browser.dom":
-          return await handleBrowserDom(ctx, chatContextId, args as { session_id?: string; selector?: string });
+          return await handleBrowserDom(ctx, chatContextId, args as { session_id?: string; selector?: string; frame?: string; mode?: "text" | "html" | "both"; max_bytes?: number });
 
-        case "browser.selectors":
-          return await handleBrowserSelectors(ctx, chatContextId, args as { session_id?: string; limit?: number; query?: string });
+        case "browser.snapshot":
+          return await handleBrowserSnapshot(ctx, chatContextId, args as { session_id?: string; selector?: string; frame?: string; query?: string; offset?: number; max_bytes?: number });
 
         case "browser.interact":
           return await handleBrowserInteract(ctx, chatContextId, args);
@@ -540,7 +537,7 @@ export function createMcpServer(ctx: AppContext): Server {
           return await handleBrowserWait(ctx, chatContextId, args as { session_id?: string; selector?: string; text?: string; url_contains?: string; title_contains?: string; timeout_ms?: number });
 
         case "browser.eval":
-          return await handleBrowserEval(ctx, chatContextId, args as { session_id?: string; expression?: string });
+          return await handleBrowserEval(ctx, chatContextId, args as { session_id?: string; expression?: string; unsafe?: boolean });
 
         case "browser.press":
           return await handleBrowserPress(ctx, chatContextId, args as { session_id?: string; key?: string; selector?: string; observe?: "none" | "after"; wait_ms?: number });

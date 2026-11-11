@@ -97,6 +97,10 @@ A typical feedback report is an MCP call to `feedback.report` with `{"kind":"bug
 
 When an existing website uses an HTTP Basic challenge, pass `http_credentials: { username, password }` to `browser.open` along with its HTTPS URL. See [`docs/browser-http-basic-auth.md`](docs/browser-http-basic-auth.md) for the scoped challenge flow and verification. The browser responds only to server challenges from the **exact URL origin**. It never embeds the credentials in the URL, outputs them, or persists them as a tool setting. Ordinary `browser.open` calls need no credentials. Plain HTTP is supported only for loopback development servers. Do not use this for Cloudflare Access login, which remains a separate authentication boundary.
 
+## Browser Tools
+
+Browser controls use Playwright Core attached to a managed Chrome profile through CDP. Use `browser.snapshot` first to inspect accessible roles and names; its output is a bounded ARIA snapshot (16 KiB by default, 32 KiB maximum), supports query search and offset pagination for long pages, and can be scoped to a locator or iframe. Use `browser.dom` for exact text or HTML from a selected element, including open Shadow DOM or an iframe. `browser.screenshot` provides visual inspection. Once the target is known, use `browser.click`, `browser.type`, or `browser.interact` with a strict Playwright locator; `wait_for` can verify a post-action condition in the same call. A failed or uncertain action is not automatically replayed. `browser.status` provides profile and session information, and `browser.tabs` manages page selection. Arbitrary page JavaScript is an advanced escape hatch: `browser.eval` requires `unsafe: true`. See [Browser runtime operations](docs/browser-runtime.md).
+
 ## Browser Profiles
 
 Browser state is isolated by the ChatGPT `openai/session` identity or a Claude work

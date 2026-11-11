@@ -2,6 +2,14 @@
 
 Browser automation is optional (default ON). `pnpm run setup --yes --disable browser` hides `browser.*` and prevents the managed Chrome lifecycle from starting. No Chrome installation is necessary when disabled. See [Setup](setup.md).
 
+## Browser tool contract
+
+- Use `browser.snapshot` to read a bounded accessibility/ARIA view of the selected tab, optionally scoped by `selector` and `frame`. Use `query` to search lines anywhere in the accessibility snapshot and `next_offset` for subsequent pages (offset counts matching lines). This is the default discovery route; accessible roles and names are preferred to fragile positional CSS selectors.
+- Use `browser.dom` only for exact text or HTML, with `selector`, optional `frame`, `mode`, and `max_bytes`. DOM text and HTML are truncated inside the page before transfer over CDP. Both operations use Playwright locators so they can inspect open Shadow DOM and iframe content.
+- Use `browser.click`, `browser.type`, and `browser.interact` for actions. `wait_for` verifies a postcondition and avoids an extra screenshot unless `observe: "after"` is requested. An unknown action result is not a reason to retry an irreversible action automatically.
+- Use `browser.tabs` to select or inspect the target tab and `browser.status` for the chat-owned browser lifecycle. Arbitrary `browser.eval` requires an explicit `unsafe: true`; prefer typed tools for normal operation.
+- The browser operation engine is Playwright Core attached over CDP (`noDefaults: true`), preserving the existing Chrome process, download settings, and on-disk profile management. Connection to an unresponsive tab may fail; a timeout is not evidence that another tab is unavailable.
+
 ## Profile operation locks
 
 Browser operations on the same chat profile are serialized across coordinator

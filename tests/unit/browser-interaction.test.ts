@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { chromium } from "playwright-core";
 import { expect, it } from "vitest";
-import { clickElement, fillElement, withBrowserPage, closeBrowserConnections } from "../../src/browser/interaction.js";
+import { clickElement, fillElement, readAccessibilitySnapshot, readDomElement, withBrowserPage, closeBrowserConnections } from "../../src/browser/interaction.js";
 import { withCdpClient, closeCdpClients } from "../../src/browser/cdp-client.js";
 
 it("uses the selected live Chrome target, iframe and shadow locators, and disconnects without closing Chrome", async () => {
@@ -20,6 +20,29 @@ it("uses the selected live Chrome target, iframe and shadow locators, and discon
       await fillElement(selected, { selector: "input[aria-label=Name]", text: "sample" });
       await fillElement(selected, { frame: "iframe", selector: "#field", text: "frame" });
       await fillElement(selected, { selector: "#shadow", text: "shadow" });
+      const snapshot = await readAccessibilitySnapshot(selected, { selector: "body" });
+      expect(snapshot).toContain("button \"Submit\"");
+      const frameSnapshot = await readAccessibilitySnapshot(selected, { selector: "body", frame: "iframe" });
+      expect(frameSnapshot).toContain("textbox");
+      const shadowSnapshot = await readAccessibilitySnapshot(selected, { selector: "#host" });
+      expect(shadowSnapshot).toContain("textbox");
+      const frameDom = await readDomElement(selected, { selector: "#field", frame: "iframe", mode: "html", maxBytes: 100 });
+      expect(frameDom.found).toBe(true);
+      expect(frameDom.outerHTML).toContain("field");
+      await selected.evaluate(() => {
+        const node = document.createElement("div");
+        node.id = "large";
+        node.textContent = "日本語😀".repeat(30_000);
+        document.body.appendChild(node);
+      });
+      const bounded = await readDomElement(selected, { selector: "#large", mode: "both", maxBytes: 80 });
+      expect(bounded.found).toBe(true);
+      expect(bounded.truncated).toBe(true);
+      expect(Buffer.byteLength(bounded.outerText ?? "")).toBeLessThanOrEqual(80);
+      expect(Buffer.byteLength(bounded.outerHTML ?? "")).toBeLessThanOrEqual(80);
+      expect(bounded.outerText).not.toContain("�");
+      const missing = await readDomElement(selected, { selector: "#missing", mode: "text", maxBytes: 80 });
+      expect(missing.found).toBe(false);
       await clickElement(selected, { selector: "role=button[name=Submit]" });
     });
     expect(await page.locator("input[aria-label=Name]").inputValue()).toBe("sample");

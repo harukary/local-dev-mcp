@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatContextStore } from "../../src/project/context-store.js";
 import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
-import { browserResumeTabsFromTargets, browserSessionIdForContext, browserStartupTabs, browserStopRunsMaintenance, browserToolRefreshesIdleDeadline, browserToolUsesOuterOperationLock, classifyBrowserFailureReason, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse, isGoogleAuthInteractionRequiredUrl } from "../../src/mcp/tools/browser.js";
+import { browserResumeTabsFromTargets, browserSessionIdForContext, browserStartupTabs, browserStopRunsMaintenance, browserToolRefreshesIdleDeadline, browserToolUsesOuterOperationLock, classifyBrowserFailureReason, selectBrowserSnapshot, handleBrowserEval, handleBrowserOpen, handleBrowserStart, handleBrowserTabClose, handleBrowserTabUse, isGoogleAuthInteractionRequiredUrl } from "../../src/mcp/tools/browser.js";
+import { buildBrowserToolDefinitions } from "../../src/mcp/browser-tool-definitions.js";
 
 const CHAT_ID = "chatgpt-session:chat-a";
 
@@ -55,6 +56,52 @@ function payload(result: { content: Array<{ text?: string }> }) {
 }
 
 describe("browser tools", () => {
+  it("exposes one accessible snapshot reader and removes redundant browser discovery tools", () => {
+    const definitions = buildBrowserToolDefinitions();
+    const names = definitions.map(definition => definition.name);
+    expect(names).toHaveLength(20);
+    expect(names).toContain("browser.snapshot");
+    expect(names).not.toContain("browser.sessions");
+    expect(names).not.toContain("browser.selectors");
+    const snapshot = definitions.find(definition => definition.name === "browser.snapshot");
+    expect(snapshot?.annotations.readOnlyHint).toBe(true);
+    expect(snapshot?.inputSchema.properties).toHaveProperty("query");
+    expect(snapshot?.inputSchema.properties).toHaveProperty("offset");
+    const evaluation = definitions.find(definition => definition.name === "browser.eval");
+    expect(evaluation?.inputSchema.required).toContain("unsafe");
+  });
+
+  it("finds controls beyond the first snapshot page and supports continuing from next_offset", () => {
+    const source = Array.from({ length: 300 }, (_, index) => `- button "Row ${String(index).padStart(3, "0")}"`).join("\n") + "\n- button \"Find Me\"";
+    const first = selectBrowserSnapshot(source, { maxBytes: 80 });
+    expect(first.truncated).toBe(true);
+    expect(first.next_offset).toBeGreaterThan(0);
+    expect(first.snapshot).not.toContain("Find Me");
+    const found = selectBrowserSnapshot(source, { query: "find me", maxBytes: 80 });
+    expect(found.snapshot).toContain("Find Me");
+    expect(found.total_lines).toBe(1);
+    expect(found.next_offset).toBeNull();
+    const second = selectBrowserSnapshot(source, { offset: first.next_offset!, maxBytes: 80 });
+    expect(second.offset).toBe(first.next_offset);
+    expect(second.snapshot.startsWith("- button \"Row")).toBe(true);
+    let offset = 0;
+    const parts: string[] = [];
+    do {
+      const page = selectBrowserSnapshot(source, { offset, maxBytes: 80 });
+      parts.push(page.snapshot);
+      if (page.next_offset === null) break;
+      offset = page.next_offset;
+    } while (true);
+    expect(parts.join("\n")).toBe(source);
+  });
+
+  it("requires explicit unsafe acknowledgement before evaluating page JavaScript", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-mcp-browser-"));
+    const ctx = createContext(createProject(tmpRoot));
+    const result = await handleBrowserEval(ctx, CHAT_ID, { expression: "document.title" });
+    expect(payload(result).error.code).toBe("UNSAFE_CONFIRMATION_REQUIRED");
+  });
+
   it("does not hold the outer profile operation lock across browser.stop maintenance", () => {
     expect(browserToolUsesOuterOperationLock("browser.stop")).toBe(false);
     expect(browserToolUsesOuterOperationLock("browser.start")).toBe(true);
@@ -65,7 +112,6 @@ describe("browser tools", () => {
     expect(browserToolRefreshesIdleDeadline("browser.open")).toBe(true);
     expect(browserToolRefreshesIdleDeadline("browser.wait")).toBe(true);
     expect(browserToolRefreshesIdleDeadline("browser.status")).toBe(false);
-    expect(browserToolRefreshesIdleDeadline("browser.sessions")).toBe(false);
     expect(browserToolRefreshesIdleDeadline("browser.stop")).toBe(false);
   });
 
