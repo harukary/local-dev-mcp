@@ -71,20 +71,33 @@ export async function readDomElement(page: Page, input: BrowserLocator & { mode:
   const element = locatorFor(page, input);
   if (await element.count() === 0) return { found: false as const, truncated: false };
   const value = await element.first().evaluate((node, { mode, maxBytes }) => {
-    const clip = (source: string) => {
-      // Truncate in the browser before transferring content over CDP.
-      const bytes = new TextEncoder().encode(source.slice(0, maxBytes));
-      const decoder = new TextDecoder("utf-8", { fatal: true });
-      let length = Math.min(bytes.length, maxBytes);
-      while (length > 0) {
-        try { return { text: decoder.decode(bytes.subarray(0, length)), truncated: source.length > maxBytes || length < bytes.length }; }
-        catch { length--; }
-      }
-      return { text: "", truncated: source.length > 0 };
+    // Keep this browser-evaluated closure self-contained. The tsx runtime may
+    // wrap nested functions with __name, which is undefined inside the page.
+    const result = {
+      outerText: mode === "html" ? undefined : ((node as HTMLElement).innerText ?? node.textContent ?? ""),
+      outerHTML: mode === "text" ? undefined : node.outerHTML,
+      truncated: false,
     };
-    const text = mode === "html" ? undefined : clip((node as HTMLElement).innerText ?? node.textContent ?? "");
-    const html = mode === "text" ? undefined : clip(node.outerHTML);
-    return { tagName: node.tagName, outerText: text?.text, outerHTML: html?.text, truncated: !!(text?.truncated || html?.truncated) };
+    for (const field of ["outerText", "outerHTML"] as const) {
+      const source = result[field];
+      if (source === undefined) continue;
+      let prefix = source.slice(0, maxBytes);
+      const last = prefix.charCodeAt(prefix.length - 1);
+      if (last >= 0xd800 && last <= 0xdbff) prefix = prefix.slice(0, -1);
+      const bytes = new TextEncoder().encode(prefix);
+      let length = Math.min(bytes.length, maxBytes);
+      for (;;) {
+        try {
+          result[field] = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length));
+          break;
+        } catch {
+          if (length === 0) { result[field] = ""; break; }
+          length--;
+        }
+      }
+      result.truncated ||= prefix.length < source.length || length < bytes.length;
+    }
+    return { tagName: node.tagName, ...result };
   }, { mode: input.mode, maxBytes: input.maxBytes });
   return { found: true as const, ...value };
 }
