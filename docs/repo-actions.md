@@ -1,60 +1,61 @@
 # Repository actions
 
-`repo.action.*` provides a closed-world interface for repository-owned commands. The repository declares executable and argument positions in `.local-dev/actions.json`; the model supplies only an action ID and schema-validated values, never arbitrary shell text. Commands use direct process execution (`shell=false`).
-
-Repository Actions are optional (default ON). `pnpm run setup --yes --disable repo-actions` hides `repo.action.*` without affecting `workspace.*`, `git.*`, or `shell.*`. No action manifest is needed until a project uses Repository Actions. See [Setup](setup.md).
+`repo.action.*` is the closed-world interface for repository-declared commands. The repository supplies the executable and fixed argument positions in `.local-dev/actions.json`; the caller supplies an action ID and schema-validated values. Execution uses direct argv (`shell=false`), never model-authored shell text. Repository Actions are optional; `pnpm run setup --yes --disable repo-actions` hides them.
 
 ## Manifest and calls
 
-The manifest has `version: 1` and an `actions` object. A typical local read/write action declares `mode`, `description`, `executable`, fixed `argv`, optional validated parameter references (`{ "param": "name" }`), `input_schema`, and `timeout_seconds`.
+The manifest has `version: 1` and an `actions` object. Each action defines `mode`, `executable`, fixed `argv` (with optional `{ "param": "name" }` references), a validated `input_schema`, and optional `timeout_seconds`.
 
-- `repo.action.list(project_id=...)` returns the repository's action catalog, input schemas, network classification, and catalog hash without executing actions.
-- `repo.action.read(project_id=..., action=..., args=...)` runs local actions with `mode: "read"`.
-- `repo.action.write(project_id=..., action=..., args=...)` runs local write actions, or an explicitly declared verified deployment action. Project `write_policy` must be `allow`.
-- `working_dir` selects a real project-contained worktree. For Scheduled Tasks, include `project_id` and `working_dir` on each call instead of relying on `project.select`.
+- `repo.action.list(project_id=...)` returns the available IDs, argument schemas, flags, and catalog hash without execution.
+- `repo.action.read(project_id=..., action=..., args=...)` runs a declared read action.
+- `repo.action.write(project_id=..., action=..., args=...)` runs an allowed write action or a verified deployment; the project requires `write_policy=allow`.
+- Scheduled Tasks must specify `project_id` (and `working_dir` if used) on every call.
 
-## Production deployment actions
+## Host-pinned credentialed reads
 
-External network actions are rejected by default. Deployment is the only supported credential-backed exception. It must be declared as `mode: "write"`, `operation: "deployment"`, `network: true`, and `credential_scope: "bitwarden"`; the project also needs `network_policy=allow` and `write_policy=allow`. Example:
+An audited, fixed, read-only repository probe that needs remote credentials can opt into `operation: "credentialed_read"`. It must declare `mode: "read"`, `network: true`, `credential_scope: "bitwarden"`, and a closed `input_schema` (`additionalProperties: false`). The project must have `network_policy=allow`.
+
+Example repository manifest entry:
 
 ```json
-{
-  "version": 1,
-  "actions": {
-    "pages.deploy": {
-      "mode": "write",
-      "operation": "deployment",
-      "network": true,
-      "credential_scope": "bitwarden",
-      "description": "Deploy the already-verified pushed commit.",
-      "executable": "pnpm",
-      "argv": ["run", "deploy:pages", "--", "--expected-head", { "param": "expected_head" }],
-      "input_schema": {
-        "type": "object",
-        "properties": { "expected_head": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" } },
-        "required": ["expected_head"],
-        "additionalProperties": false
-      },
-      "timeout_seconds": 240
-    }
-  }
+"signal.inspect": {
+  "mode": "read",
+  "operation": "credentialed_read",
+  "network": true,
+  "credential_scope": "bitwarden",
+  "executable": "node",
+  "argv": ["scripts/world-model/production-signal-operation.mjs", "probe", "--signal-id", {"param":"signal_id"}],
+  "input_schema": {
+    "type": "object",
+    "properties": {"signal_id":{"type":"integer","minimum":1}},
+    "required": ["signal_id"],
+    "additionalProperties": false
+  },
+  "timeout_seconds": 120
 }
 ```
 
-The deployment executable is a repository-owned fixed command. The single permitted parameter reference in its argv is `expected_head`; the backend validates the exact 40-character commit SHA, a clean tracked Git worktree, checked-out branch, configured upstream, and live remote HEAD equality *before* reading Bitwarden credentials. This also works with clean project-contained Git worktrees and refuses dirty or behind/unpushed checkouts.
+**The repository declaration alone grants no credentials.** The host operator must independently pin the exact manifest entry in the host-only project configuration (`config/projects.local.yaml`, not committed):
 
-The Bitwarden access token is resolved from the existing macOS Keychain configuration and injected only into the action subprocess. The repo-specific wrapper resolves the Cloudflare deployment credentials in-process; neither the token nor the account secret belongs in the action arguments or manifest.
+```yaml
+projects:
+  recipie:
+    credentialed_read_actions:
+      signal.inspect: <sha256-of-manifest-action-json>
+```
 
-Use distinct preflight and production action IDs when the repository offers a dry-run/preflight mode. A production action must be called only after validation, successful commit/push, and an independent production read-back plan. If the action or credential gate fails, report the blocker; do not fall back to a generic credential-bearing `shell.run` in unattended tasks.
+Compute the SHA-256 of `JSON.stringify(actions["signal.inspect"])` from the manifest using a trusted local tool, then review the executable, referenced script, arguments, schema, and remote read-only behavior before pinning. Any manifest change invalidates the pin and fails closed until explicitly reapproved. The action is **code executed with the token**: pinning a script requires trusting its implementation and imports, not merely its manifest name. Keep that script reviewed and control its changes accordingly. The host-owned allowlist is not a secret but must remain outside the source-controlled project.
 
-## Safety and scope
+The host resolves the existing Bitwarden Keychain token only after confirming the pin, read mode, network policy, safe argv shape, and validated arguments. It injects credentials into the one subprocess, redacts known secret values from returned output, and audits the execution. It never logs the token. If credentials are missing or the manifest has changed, execution is refused. Generic networked read actions and arbitrary credential-bearing `shell.run` remain unchanged; this does not bypass the latter's approval policy. This operation cannot invoke the Queue or mutate Production under its approved repository contract.
 
-- Shell/eval executables, interpreter eval flags, generic dispatchers, `find -exec`, dynamic package-manager dispatch, catastrophic commands, and forbidden paths are rejected.
-- Normal repository actions remain local-only. `network: true` without `operation: "deployment"` is rejected.
-- The deployment operation is explicitly marked as an external write, never a read; other dynamic argv parameters are not allowed.
-- Credentials are redacted from subprocess output and are not supplied to read actions.
-- Removing `.local-dev/actions.json` disables the repository's declared actions. No per-project MCP tool or additional public ingress is required.
+## Verified production deployment
 
-## Git and publishing
+Deployment remains a distinct operation: `mode: "write"`, `operation: "deployment"`, `network: true`, and `credential_scope: "bitwarden"`. It requires `network_policy=allow`, `write_policy=allow`, a fixed argv with exactly one dynamic `expected_head` parameter, and a checked-out Git branch with a clean tracked worktree whose exact HEAD matches the live upstream remote. Credentials are resolved only after these checks. A successful CLI result is not a substitute for independent deployed-version read-back.
 
-Use typed `git.status`, `git.commit`, and `git.push` to finalize verified tracked changes. Git push and Cloudflare deployment are distinct. The deployment command requires `HEAD == upstream remote HEAD`, and successful CLI execution still requires application-specific live URL read-back before reporting production completion.
+## Safety
+
+- Shell/eval executables, interpreter eval flags, generic dispatchers, dynamic package-manager executable selection, catastrophic commands, and forbidden paths are rejected.
+- Ordinary read/write actions remain local-only. An unapproved network action is rejected.
+- The host-pinned credentialed-read exception is explicitly scoped to one reviewed action definition; it does not make arbitrary Node/shell scripts read-only.
+- The existing deployment contract, shell command approval rules, and project policies remain unchanged.
+- Use typed `git.status`, `git.commit`, and `git.push` for verified Git changes, and keep Production data mutations on each repository's guarded writer/Queue path.

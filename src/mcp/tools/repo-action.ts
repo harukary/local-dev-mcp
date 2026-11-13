@@ -26,7 +26,7 @@ type RepoAction = {
   input_schema?: Record<string, unknown>;
   timeout_seconds?: number;
   network?: boolean;
-  operation?: "deployment";
+  operation?: "deployment" | "credentialed_read";
   credential_scope?: "bitwarden";
 };
 
@@ -110,7 +110,7 @@ function validateActionDefinition(id: string, rawAction: unknown) {
   if (action.network !== undefined && typeof action.network !== "boolean") {
     return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} network must be boolean when present.`);
   }
-  if (action.operation !== undefined && action.operation !== "deployment") {
+  if (action.operation !== undefined && action.operation !== "deployment" && action.operation !== "credentialed_read") {
     return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} has an unsupported operation.`);
   }
   if (action.credential_scope !== undefined && action.credential_scope !== "bitwarden") {
@@ -125,8 +125,13 @@ function validateActionDefinition(id: string, rawAction: unknown) {
         !argv.some((token) => typeof token !== "string" && token?.param === "expected_head" && token.encoding === undefined)) {
       return manifestError("ACTION_MANIFEST_INVALID", `Deployment action ${id} must bind only the expected_head parameter into its fixed argv.`);
     }
+  } else if (action.operation === "credentialed_read") {
+    if (action.mode !== "read" || action.network !== true || action.credential_scope !== "bitwarden" ||
+        !action.input_schema || (action.input_schema as Record<string, unknown>).additionalProperties !== false) {
+      return manifestError("ACTION_MANIFEST_INVALID", `Credentialed read ${id} requires mode=read, network=true, credential_scope=bitwarden and a closed input schema.`);
+    }
   } else if (action.credential_scope !== undefined) {
-    return manifestError("ACTION_MANIFEST_INVALID", `Credential scope is available only for deployment actions.`);
+    return manifestError("ACTION_MANIFEST_INVALID", `Credential scope requires an explicit deployment or credentialed_read operation.`);
   }
   if (action.timeout_seconds !== undefined && (!Number.isInteger(action.timeout_seconds) || Number(action.timeout_seconds) < 1 || Number(action.timeout_seconds) > 240)) {
     return manifestError("ACTION_MANIFEST_INVALID", `Action ${id} timeout_seconds must be an integer from 1 to 240.`);
@@ -348,8 +353,18 @@ async function executeAction(
     return jsonError("ACTION_MODE_MISMATCH", `Action ${args.action} is declared as mode=${action.mode}, not mode=${requestedMode}.`);
   }
   const deployment = action.operation === "deployment";
-  if (action.network && !deployment) {
-    return jsonError("ACTION_EXTERNAL_UNSUPPORTED", "Networked repository actions require the explicit deployment operation contract.");
+  const credentialedRead = action.operation === "credentialed_read";
+  if (action.network && !deployment && !credentialedRead) {
+    return jsonError("ACTION_EXTERNAL_UNSUPPORTED", "Networked repository actions require an explicit permitted operation contract.");
+  }
+  if (credentialedRead) {
+    if (project.networkPolicy !== "allow") {
+      return jsonError("ACTION_READ_NETWORK_NOT_ALLOWED", "Credentialed reads require network_policy=allow for the selected project.");
+    }
+    const approvedHash = project.credentialedReadActions?.[args.action];
+    if (!approvedHash || approvedHash !== sha256(JSON.stringify(action))) {
+      return jsonError("ACTION_CREDENTIALED_READ_NOT_APPROVED", "This credentialed read action is not pinned in the host-owned project configuration.");
+    }
   }
   if (deployment && project.networkPolicy !== "allow") {
     return jsonError("ACTION_DEPLOY_NETWORK_NOT_ALLOWED", "Deployment requires network_policy=allow for the selected project.");
@@ -378,7 +393,11 @@ async function executeAction(
       reasons: risk.reasons,
     });
   }
-  if (requestedMode === "read" && !readModeRiskAllowed(risk.level)) {
+  // The generic shell classifier conservatively marks all Node scripts as workspace_write.
+  // A credentialed read has a separately pinned, host-approved exact argv and closed schema;
+  // this exception never applies to arbitrary commands or unapproved repository actions.
+  const hostPinnedReadRisk = credentialedRead && (risk.level === "network_or_dependency" || risk.level === "workspace_write");
+  if (requestedMode === "read" && !readModeRiskAllowed(risk.level) && !hostPinnedReadRisk) {
     return jsonError("ACTION_MODE_RISK_MISMATCH", "Repository read action resolved to a command classified as write/network/destructive.", {
       action: args.action,
       risk_level: risk.level,
@@ -397,13 +416,15 @@ async function executeAction(
   }
 
   let credentialEnv: Record<string, string> | undefined;
-  if (deployment) {
-    const invalidHead = await checkDeploymentHead(project, actionArgs.expected_head);
-    if (invalidHead) return invalidHead;
+  if (deployment || credentialedRead) {
+    if (deployment) {
+      const invalidHead = await checkDeploymentHead(project, actionArgs.expected_head);
+      if (invalidHead) return invalidHead;
+    }
     try {
       credentialEnv = await resolveCredentialEnv("bitwarden");
     } catch {
-      return jsonError("ACTION_DEPLOY_CREDENTIAL_UNAVAILABLE", "Bitwarden deployment credential is unavailable; no deployment command was started.");
+      return jsonError(credentialedRead ? "ACTION_READ_CREDENTIAL_UNAVAILABLE" : "ACTION_DEPLOY_CREDENTIAL_UNAVAILABLE", "Bitwarden credential is unavailable; no action command was started.");
     }
   }
 
@@ -413,7 +434,7 @@ async function executeAction(
     riskCommand,
     timeoutSeconds: action.timeout_seconds,
     purpose: action.description ?? args.action,
-    ...(deployment ? { credentialScope: "bitwarden" as const, env: credentialEnv } : {}),
+    ...(deployment || credentialedRead ? { credentialScope: "bitwarden" as const, env: credentialEnv } : {}),
   }, chatContextId);
 
   await ctx.auditLogger.log({
@@ -424,8 +445,8 @@ async function executeAction(
     projectId: project.projectId,
     command: args.action,
     purpose: action.description,
-    riskLevel: deployment ? "network_or_dependency" : result.riskLevel,
-    credentialScope: deployment ? "bitwarden" : undefined,
+    riskLevel: deployment || credentialedRead ? "network_or_dependency" : result.riskLevel,
+    credentialScope: deployment || credentialedRead ? "bitwarden" : undefined,
     enforcement: "audit_only",
     exitCode: result.exitCode,
     durationMs: result.durationMs,

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import type { AppContext } from "../../src/mcp/server.js";
 import type { ProjectConfig } from "../../src/types.js";
 import { handleRepoActionList, handleRepoActionRead, handleRepoActionWrite } from "../../src/mcp/tools/repo-action.js";
 import { ShellRunner } from "../../src/shell/runner.js";
+import { resolveCredentialEnv } from "../../src/shell/credential-env.js";
 
 vi.mock("../../src/shell/credential-env.js", () => ({
   resolveCredentialEnv: vi.fn(async () => ({ BWS_ACCESS_TOKEN: "test-only-token" })),
@@ -103,6 +105,33 @@ function createPushedGitRepo(): string {
   git("remote", "add", "origin", join(tmpRoot, "remote.git"));
   git("push", "-u", "origin", "main");
   return git("rev-parse", "HEAD");
+}
+
+function credentialedReadAction() {
+  return {
+    mode: "read",
+    operation: "credentialed_read",
+    credential_scope: "bitwarden",
+    network: true,
+    executable: "node",
+    argv: ["scripts/production-probe.mjs", "--signal-id", { param: "signal_id" }],
+    input_schema: {
+      type: "object",
+      properties: { signal_id: { type: "integer", minimum: 1 } },
+      required: ["signal_id"],
+      additionalProperties: false,
+    },
+    timeout_seconds: 120,
+  };
+}
+
+function pinnedReadProject(hostRoot: string, action = credentialedReadAction()): ProjectConfig {
+  return {
+    ...createProject(hostRoot),
+    credentialedReadActions: {
+      "signal.inspect": createHash("sha256").update(JSON.stringify(action)).digest("hex"),
+    },
+  };
 }
 
 function deploymentAction() {
@@ -315,6 +344,109 @@ describe("repo.action", () => {
     expect(body(result).error.code).toBe("ACTION_WRITE_NOT_ALLOWED");
     expect(shellRunner.run).not.toHaveBeenCalled();
     expect(shellRunner.runArgv).not.toHaveBeenCalled();
+  });
+
+  it("denies credentialed reads until the host pins the exact action", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-actions-"));
+    writeManifest({ "signal.inspect": credentialedReadAction() });
+    const { ctx, shellRunner } = createContext(createProject(tmpRoot));
+
+    const denied = await handleRepoActionRead(ctx, "chat-a", { action: "signal.inspect", args: { signal_id: 290 } });
+    expect(body(denied).error.code).toBe("ACTION_CREDENTIALED_READ_NOT_APPROVED");
+    expect(shellRunner.runArgv).not.toHaveBeenCalled();
+  });
+
+  it("runs only a host-pinned credentialed read with a validated scalar argument", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-actions-"));
+    const action = credentialedReadAction();
+    writeManifest({ "signal.inspect": action });
+    const { ctx, shellRunner, auditLogger } = createContext(pinnedReadProject(tmpRoot, action));
+
+    const invalid = await handleRepoActionRead(ctx, "chat-a", { action: "signal.inspect", args: { signal_id: "290; rm -rf /" } });
+    expect(body(invalid).error.code).toBe("ACTION_ARGUMENT_INVALID");
+    const extra = await handleRepoActionRead(ctx, "chat-a", { action: "signal.inspect", args: { signal_id: 290, command: "apply" } });
+    expect(body(extra).error.code).toBe("ACTION_ARGUMENT_INVALID");
+    const wrongMode = await handleRepoActionWrite(ctx, "chat-a", { action: "signal.inspect", args: { signal_id: 290 } });
+    expect(body(wrongMode).error.code).toBe("ACTION_MODE_MISMATCH");
+    expect(shellRunner.runArgv).not.toHaveBeenCalled();
+
+    const result = await handleRepoActionRead(ctx, "chat-a", { action: "signal.inspect", args: { signal_id: 290 } });
+    expect(result.isError).not.toBe(true);
+    expect(shellRunner.run).not.toHaveBeenCalled();
+    expect(shellRunner.runArgv).toHaveBeenCalledTimes(1);
+    expect(shellRunner.runArgv.mock.calls[0][1]).toMatchObject({
+      executable: "node", args: ["scripts/production-probe.mjs", "--signal-id", "290"],
+      credentialScope: "bitwarden", env: { BWS_ACCESS_TOKEN: "test-only-token" },
+    });
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+      event: "repo_action_executed", command: "signal.inspect",
+      riskLevel: "network_or_dependency", credentialScope: "bitwarden",
+    }));
+  });
+
+  it("denies a modified manifest, missing network permission and missing credential", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-actions-"));
+    const action = credentialedReadAction();
+    writeManifest({ "signal.inspect": action });
+    const project = pinnedReadProject(tmpRoot, action);
+    let setup = createContext({ ...project, networkPolicy: "deny" });
+    let result = await handleRepoActionRead(setup.ctx, "chat-a", { action: "signal.inspect", args: { signal_id: 290 } });
+    expect(body(result).error.code).toBe("ACTION_READ_NETWORK_NOT_ALLOWED");
+
+    writeManifest({ "signal.inspect": { ...action, argv: ["scripts/other.mjs", "--signal-id", { param: "signal_id" }] } });
+    setup = createContext(project);
+    result = await handleRepoActionRead(setup.ctx, "chat-a", { action: "signal.inspect", args: { signal_id: 290 } });
+    expect(body(result).error.code).toBe("ACTION_CREDENTIALED_READ_NOT_APPROVED");
+    expect(setup.shellRunner.runArgv).not.toHaveBeenCalled();
+
+    writeManifest({ "signal.inspect": action });
+    vi.mocked(resolveCredentialEnv).mockRejectedValueOnce(new Error("Keychain denied"));
+    result = await handleRepoActionRead(setup.ctx, "chat-a", { action: "signal.inspect", args: { signal_id: 290 } });
+    expect(body(result).error.code).toBe("ACTION_READ_CREDENTIAL_UNAVAILABLE");
+    expect(setup.shellRunner.runArgv).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsafe credentialed-read definitions before any credential injection", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-actions-"));
+    const base = credentialedReadAction();
+    for (const invalidAction of [
+      { ...base, mode: "write" },
+      { ...base, network: false },
+      { ...base, credential_scope: undefined },
+      { ...base, input_schema: { ...base.input_schema, additionalProperties: true } },
+      { ...base, executable: "bash", argv: ["-c", "echo secret"] },
+      { ...base, executable: "node", argv: ["-e", "process.exit(0)"] },
+    ]) {
+      writeManifest({ "signal.inspect": invalidAction });
+      const { ctx, shellRunner } = createContext(createProject(tmpRoot));
+      const result = await handleRepoActionList(ctx, "chat-a");
+      expect(body(result).error.code).toBe("ACTION_MANIFEST_INVALID");
+      expect(shellRunner.runArgv).not.toHaveBeenCalled();
+    }
+  });
+
+  it("redacts credentials from the output of a real host-pinned read subprocess", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-actions-"));
+    mkdirSync(join(tmpRoot, "scripts"), { recursive: true });
+    writeFileSync(join(tmpRoot, "scripts", "production-probe.mjs"), "process.stdout.write(process.env.BWS_ACCESS_TOKEN || 'missing')\n");
+    const action = credentialedReadAction();
+    writeManifest({ "signal.inspect": action });
+    const project = pinnedReadProject(tmpRoot, action);
+    const contextStore = new ChatContextStore();
+    contextStore.setCurrentProject("chat-a", project.projectId);
+    const ctx = {
+      registry: {
+        has: (id: string) => id === project.projectId,
+        get: (id: string) => id === project.projectId ? project : undefined,
+      },
+      contextStore,
+      shellRunner: new ShellRunner(),
+      auditLogger: { log: vi.fn().mockResolvedValue(undefined) },
+    } as unknown as AppContext;
+    const result = await handleRepoActionRead(ctx, "chat-a", { action: "signal.inspect", args: { signal_id: 290 } });
+    expect(result.isError).not.toBe(true);
+    expect(body(result).stdout).not.toContain("test-only-token");
+    expect(body(result).redactions.length).toBeGreaterThan(0);
   });
 
   it("restricts the credentialed deployment contract to fixed argv and write/network policy", async () => {

@@ -28,6 +28,14 @@ describe("Config Schema", () => {
     expect(config.approvalMode).toBe("policy");
   });
 
+  it("validates host-pinned credentialed read fingerprints", () => {
+    const hash = "a".repeat(64);
+    const config = validateProjectConfig("test", makeRaw({ credentialed_read_actions: { "signal.inspect": hash } }));
+    expect(config.credentialedReadActions).toEqual({ "signal.inspect": hash });
+    expect(() => validateProjectConfig("test", makeRaw({ credentialed_read_actions: { "signal.inspect": "invalid" } }))).toThrow("invalid credentialed_read_actions");
+    expect(() => validateProjectConfig("test", makeRaw({ credentialed_read_actions: { "NOT_VALID!": hash } }))).toThrow("invalid credentialed_read_actions");
+  });
+
   it("rejects missing display_name", () => {
     expect(() => validateProjectConfig("test", makeRaw({ display_name: "" }))).toThrow("missing display_name");
   });

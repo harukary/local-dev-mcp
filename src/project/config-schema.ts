@@ -11,6 +11,7 @@ export interface RawProjectConfig {
   network_policy: string;
   write_policy: string;
   approval_mode?: string;
+  credentialed_read_actions?: Record<string, string>;
   tmux_session?: string;
   denied_paths: string[];
   redaction_profile: string;
@@ -60,6 +61,16 @@ export function validateProjectConfig(
       `Project "${projectId}" has invalid approval_mode "${raw.approval_mode}"`
     );
   }
+  if (raw.credentialed_read_actions !== undefined && (
+    !raw.credentialed_read_actions ||
+    typeof raw.credentialed_read_actions !== "object" ||
+    Array.isArray(raw.credentialed_read_actions) ||
+    Object.entries(raw.credentialed_read_actions).some(([id, hash]) =>
+      !/^[a-z0-9][a-z0-9._-]{0,127}$/.test(id) || typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)
+    )
+  )) {
+    throw new Error(`Project "${projectId}" has invalid credentialed_read_actions; expected action ID to SHA-256 mappings`);
+  }
   if (raw.default_timeout_seconds < 1 || raw.default_timeout_seconds > raw.max_timeout_seconds) {
     throw new Error(
       `Project "${projectId}" has invalid timeout values (default: ${raw.default_timeout_seconds}, max: ${raw.max_timeout_seconds})`
@@ -83,6 +94,7 @@ export function validateProjectConfig(
     networkPolicy: raw.network_policy as NetworkPolicy,
     writePolicy: raw.write_policy as WritePolicy,
     approvalMode,
+    credentialedReadActions: raw.credentialed_read_actions,
     tmuxSession: raw.tmux_session,
     deniedPaths: raw.denied_paths || [],
     redactionProfile: raw.redaction_profile as RedactionProfile,

@@ -9,9 +9,9 @@ describe("authenticated client tool policy", () => {
     const chatgpt = buildToolDefinitions("chatgpt").map((tool) => tool.name);
     const claude = buildToolDefinitions("claude").map((tool) => tool.name);
     const muse = buildToolDefinitions("muse").map((tool) => tool.name);
-    expect(chatgpt).toHaveLength(98);
-    expect(claude).toHaveLength(96);
-    expect(muse).toHaveLength(91);
+    expect(chatgpt).toHaveLength(97);
+    expect(claude).toHaveLength(95);
+    expect(muse).toHaveLength(90);
     for (const names of [chatgpt, claude, muse]) {
       expect(names).toEqual(expect.arrayContaining(["computer.status", "computer.list_windows", "computer.screenshot", "computer.click"]));
     }

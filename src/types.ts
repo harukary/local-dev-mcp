@@ -25,6 +25,8 @@ export interface ProjectConfig {
   networkPolicy: NetworkPolicy;
   writePolicy: WritePolicy;
   approvalMode: ApprovalMode;
+  /** Host-owned fingerprints of permitted credentialed read Repository Actions. */
+  credentialedReadActions?: Record<string, string>;
   tmuxSession?: string;
   deniedPaths: string[];
   redactionProfile: RedactionProfile;

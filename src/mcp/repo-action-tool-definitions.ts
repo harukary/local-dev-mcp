@@ -25,14 +25,14 @@ export function buildRepoActionToolDefinitions() {
     {
       name: "repo.action.list",
       description:
-        "List repository-declared local and deployment actions from .local-dev/actions.json, with their fixed modes, argument schemas, and network/credential metadata. This is read-only and never executes discovery commands.",
+        "List repository-declared local, host-approved credentialed read, and deployment actions from .local-dev/actions.json, with their fixed modes, argument schemas, and network/credential metadata. This is read-only and never executes discovery commands.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: RO,
     },
     {
       name: "repo.action.read",
       description:
-        "Execute one repository-declared read action. The action must be registered as mode=read in .local-dev/actions.json; arbitrary shell text is not accepted. This initial surface is local-only and rejects actions declared as external/networked.",
+        "Execute a repository-declared fixed-argv read action. Networked Bitwarden reads require operation=credentialed_read and a matching action fingerprint in host-owned project configuration; arbitrary shell text is rejected.",
       inputSchema: ACTION_INPUT_SCHEMA,
       annotations: RO,
     },
