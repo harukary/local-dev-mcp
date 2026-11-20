@@ -25,14 +25,14 @@ export function buildRepoActionToolDefinitions() {
     {
       name: "repo.action.list",
       description:
-        "List repository-declared local, host-approved credentialed read, and deployment actions from .local-dev/actions.json, with their fixed modes, argument schemas, and network/credential metadata. This is read-only and never executes discovery commands.",
+        "List repository-declared local, host-approved credentialed read, and deployment actions from .local-dev/actions.json. Includes host_pinned=true/false for credentialed reads so missing host authorization is visible without exposing its hash. This is read-only and never executes discovery commands.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: RO,
     },
     {
       name: "repo.action.read",
       description:
-        "Execute a repository-declared fixed-argv read action. Networked Bitwarden reads require operation=credentialed_read and a matching action fingerprint in host-owned project configuration; arbitrary shell text is rejected.",
+        "Execute a repository-declared fixed-argv read action. Networked Bitwarden reads require operation=credentialed_read and a matching host-owned action fingerprint. Nonzero exits and timeouts return ACTION_EXIT_NONZERO or ACTION_TIMED_OUT while preserving exit_code and redacted output; arbitrary shell text is rejected.",
       inputSchema: ACTION_INPUT_SCHEMA,
       annotations: RO,
     },

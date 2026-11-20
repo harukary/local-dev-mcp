@@ -120,6 +120,7 @@ export interface AuditLogEntry {
     approved: boolean | null;
   };
   exitCode?: number | null;
+  timedOut?: boolean;
   durationMs?: number;
   redactions?: Redaction[];
   error?: string;

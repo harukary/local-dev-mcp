@@ -60,7 +60,7 @@ MCP server側でもproject policyとshell risk policyを適用します。ChatGP
 - `project.*` — project選択・確認・reload
 - `workspace.*` — boundedなlist/read/search/patch
 - `git.*` — status/diff/history/commit inspection
-- `repo.action.*`（任意）— `.local-dev/actions.json` でrepositoryが宣言するlocal read/write action。詳細は [`docs/repo-actions.md`](docs/repo-actions.md)
+- `repo.action.*`（任意）— `.local-dev/actions.json` でrepositoryが宣言するlocal read/write action。Credentialed Readのホスト承認状態は`repo.action.list`の`host_pinned`で確認し、非ゼロ終了とtimeoutは別のエラーコードで分類する。詳細は [`docs/repo-actions.md`](docs/repo-actions.md)
 - `shell.*` — shell実行、approval、background job、cancel
 - `browser.*`（任意）— Chrome DevTools Protocol browser automation
 - `computer.*`（任意）— Cua DriverによるmacOSウィンドウ操作（ブラウザのプロファイルとは独立、[セットアップ・操作](docs/computer-automation_ja.md)）

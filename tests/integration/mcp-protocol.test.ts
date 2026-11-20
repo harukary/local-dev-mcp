@@ -179,8 +179,14 @@ it("supports larger workspace.batch budgets without dropping successful reads", 
     expect(extendedResults).toHaveLength(8);
     expect(extendedResults.every(item => item.result.returned_bytes === 100 * 1024 + 1)).toBe(true);
 
-    const exhausted = await client.callTool({ name: "workspace.batch", arguments: { max_bytes: 1024, requests: [read] } });
-    expect(exhausted.structuredContent).toMatchObject({ results: [{ result: { error: { code: "BATCH_OUTPUT_LIMIT" } } }] });
+    const dense = await client.callTool({ name: "workspace.batch", arguments: { requests: Array.from({ length: 20 }, () => read) } });
+    const denseResults = (dense.structuredContent as { results: Array<{ result: any }> }).results;
+    expect(denseResults).toHaveLength(20);
+    expect(denseResults.every(item => item.result.error === undefined && item.result.truncated === true && item.result.next_start_column > 0)).toBe(true);
+    expect(denseResults.reduce((sum, item) => sum + item.result.returned_bytes, 0)).toBeLessThan(256 * 1024);
+
+    const smallBudget = await client.callTool({ name: "workspace.batch", arguments: { max_bytes: 1024, requests: [read] } });
+    expect(smallBudget.structuredContent).toMatchObject({ results: [{ result: { truncated: true, has_more: true } }] });
   } finally { await client.close(); await server.close(); metrics.flush(); }
 });
 

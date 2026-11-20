@@ -216,7 +216,7 @@ function validateClosedWorldExecution(id: string, action: RepoAction) {
   return { ok: true as const };
 }
 
-function publicActions(loaded: LoadedManifest) {
+function publicActions(loaded: LoadedManifest, project: ProjectConfig) {
   return Object.entries(loaded.manifest.actions)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([id, action]) => ({
@@ -228,6 +228,9 @@ function publicActions(loaded: LoadedManifest) {
       network: action.network ?? false,
       operation: action.operation ?? null,
       credential_scope: action.credential_scope ?? null,
+      ...(action.operation === "credentialed_read" ? {
+        host_pinned: project.credentialedReadActions?.[id] === sha256(JSON.stringify(action)),
+      } : {}),
     }));
 }
 
@@ -346,7 +349,7 @@ async function executeAction(
   const action = loaded.manifest.manifest.actions[args.action];
   if (!action) {
     return jsonError("ACTION_NOT_FOUND", `Unknown repository action: ${args.action}`, {
-      available_actions: publicActions(loaded.manifest).map((item) => item.id),
+      available_actions: publicActions(loaded.manifest, project).map((item) => item.id),
     });
   }
   if (action.mode !== requestedMode) {
@@ -428,14 +431,19 @@ async function executeAction(
     }
   }
 
-  const result = await ctx.shellRunner.runArgv(project, {
-    executable: action.executable,
-    args: argv,
-    riskCommand,
-    timeoutSeconds: action.timeout_seconds,
-    purpose: action.description ?? args.action,
-    ...(deployment || credentialedRead ? { credentialScope: "bitwarden" as const, env: credentialEnv } : {}),
-  }, chatContextId);
+  let result: Awaited<ReturnType<typeof ctx.shellRunner.runArgv>>;
+  try {
+    result = await ctx.shellRunner.runArgv(project, {
+      executable: action.executable,
+      args: argv,
+      riskCommand,
+      timeoutSeconds: action.timeout_seconds,
+      purpose: action.description ?? args.action,
+      ...(deployment || credentialedRead ? { credentialScope: "bitwarden" as const, env: credentialEnv } : {}),
+    }, chatContextId);
+  } catch {
+    return jsonError("ACTION_EXECUTION_FAILED", "Repository action could not start or finish.");
+  }
 
   await ctx.auditLogger.log({
     timestamp: new Date().toISOString(),
@@ -449,10 +457,14 @@ async function executeAction(
     credentialScope: deployment || credentialedRead ? "bitwarden" : undefined,
     enforcement: "audit_only",
     exitCode: result.exitCode,
+    timedOut: result.timedOut,
     durationMs: result.durationMs,
     redactions: result.redactions,
   });
 
+  const failureCode = result.timedOut ? "ACTION_TIMED_OUT"
+    : result.exitCode === 0 ? null
+    : result.exitCode === null ? "ACTION_EXECUTION_FAILED" : "ACTION_EXIT_NONZERO";
   const payload = {
     project_id: result.projectId,
     action: args.action,
@@ -466,10 +478,11 @@ async function executeAction(
     stdout_truncated: result.stdoutTruncated,
     stderr_truncated: result.stderrTruncated,
     redactions: result.redactions,
+    ...(failureCode ? { error: { code: failureCode, message: result.timedOut ? "Repository action timed out." : "Repository action subprocess did not exit successfully." } } : {}),
   };
 
   const response = jsonResult(payload);
-  return result.exitCode === 0 && !result.timedOut ? response : { ...response, isError: true };
+  return failureCode ? { ...response, isError: true } : response;
 }
 
 export async function handleRepoActionList(ctx: AppContext, chatContextId: string) {
@@ -489,7 +502,7 @@ export async function handleRepoActionList(ctx: AppContext, chatContextId: strin
     project_id: project.projectId,
     manifest_path: loaded.manifest.path,
     catalog_version: loaded.manifest.hash,
-    actions: publicActions(loaded.manifest),
+    actions: publicActions(loaded.manifest, project),
   });
 }
 

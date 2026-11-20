@@ -6,7 +6,7 @@
 
 The manifest has `version: 1` and an `actions` object. Each action defines `mode`, `executable`, fixed `argv` (with optional `{ "param": "name" }` references), a validated `input_schema`, and optional `timeout_seconds`.
 
-- `repo.action.list(project_id=...)` returns the available IDs, argument schemas, flags, and catalog hash without execution.
+- `repo.action.list(project_id=...)` returns the available IDs, argument schemas, flags, and catalog hash without execution. Each `credentialed_read` entry also includes `host_pinned` (boolean): whether its exact definition matches the host-owned approval hash. This does not check credential availability.
 - `repo.action.read(project_id=..., action=..., args=...)` runs a declared read action.
 - `repo.action.write(project_id=..., action=..., args=...)` runs an allowed write action or a verified deployment; the project requires `write_policy=allow`.
 - Scheduled Tasks must specify `project_id` (and `working_dir` if used) on every call.
@@ -47,6 +47,8 @@ projects:
 Compute the SHA-256 of `JSON.stringify(actions["signal.inspect"])` from the manifest using a trusted local tool, then review the executable, referenced script, arguments, schema, and remote read-only behavior before pinning. Any manifest change invalidates the pin and fails closed until explicitly reapproved. The action is **code executed with the token**: pinning a script requires trusting its implementation and imports, not merely its manifest name. Keep that script reviewed and control its changes accordingly. The host-owned allowlist is not a secret but must remain outside the source-controlled project.
 
 The host resolves the existing Bitwarden Keychain token only after confirming the pin, read mode, network policy, safe argv shape, and validated arguments. It injects credentials into the one subprocess, redacts known secret values from returned output, and audits the execution. It never logs the token. If credentials are missing or the manifest has changed, execution is refused. Generic networked read actions and arbitrary credential-bearing `shell.run` remain unchanged; this does not bypass the latter's approval policy. This operation cannot invoke the Queue or mutate Production under its approved repository contract.
+
+When a declared command fails, its redacted stdout/stderr, `exit_code`, and `timed_out` remain available. An `error.code` distinguishes `ACTION_EXIT_NONZERO`, `ACTION_TIMED_OUT`, and `ACTION_EXECUTION_FAILED` instead of grouping every failure as `TOOL_FAILED` in `tool.usage`. The audit event stores only the action ID, exit code, timeout flag and duration, not the model's arguments or process output. An exit code alone does not identify the repository script's application-level root cause.
 
 ## Verified production deployment
 

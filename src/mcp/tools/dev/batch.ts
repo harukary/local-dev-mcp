@@ -36,21 +36,67 @@ export async function handleWorkspaceBatch(ctx: AppContext, chat: string, args: 
   const capturedContext = { ...ctx, contextStore };
   const results: unknown[] = [];
   let remaining = Math.min(1024 * 1024, Math.max(1024, args.max_bytes ?? 256 * 1024));
+  const runItem = async (item: ReadBatchItem, limits: Record<string, number> = {}) => {
+    const invalid = validateToolInput(item.tool, item.arguments);
+    if (invalid) return jsonError("INVALID_ARGUMENT", invalid);
+    const options = {
+      ...item.arguments,
+      max_bytes: Math.min(Number(item.arguments.max_bytes) || 32 * 1024, 128 * 1024),
+      max_results: Math.min(Number(item.arguments.max_results) || 20, 50),
+      max_entries: Math.min(Number(item.arguments.max_entries) || 100, 200),
+      ...limits,
+    };
+    if (item.tool === "workspace.read") return await handleWorkspaceRead(capturedContext, chat, options);
+    if (item.tool === "workspace.search") return await handleWorkspaceSearch(capturedContext, chat, options);
+    return await handleWorkspaceList(capturedContext, chat, options);
+  };
   for (let offset = 0; offset < args.requests.length; offset += 4) {
-    const group = await Promise.allSettled(args.requests.slice(offset, offset + 4).map(async item => {
-      const invalid = validateToolInput(item.tool, item.arguments);
-      if (invalid) return jsonError("INVALID_ARGUMENT", invalid);
-      const options = { ...item.arguments, max_bytes: Math.min(Number(item.arguments.max_bytes) || 32 * 1024, 128 * 1024), max_results: Math.min(Number(item.arguments.max_results) || 20, 50), max_entries: Math.min(Number(item.arguments.max_entries) || 100, 200) };
-      if (item.tool === "workspace.read") return await handleWorkspaceRead(capturedContext, chat, options);
-      if (item.tool === "workspace.search") return await handleWorkspaceSearch(capturedContext, chat, options);
-      return await handleWorkspaceList(capturedContext, chat, options);
-    }));
+    const group = await Promise.allSettled(args.requests.slice(offset, offset + 4).map(item => runItem(item)));
     for (const [index, settled] of group.entries()) {
-      const result = settled.status === "fulfilled" ? settled.value : jsonError("BATCH_ITEM_FAILED", settled.reason instanceof Error ? settled.reason.message : String(settled.reason));
-      const fullValue = result.structuredContent ?? JSON.parse(result.content[0].text);
-      const value = args.detail === "full" ? fullValue : compactBatchValue(args.requests[offset + index].tool, fullValue);
-      const bytes = Buffer.byteLength(JSON.stringify(value));
-      results.push({ index: offset + index, tool: args.requests[offset + index].tool, result: bytes <= remaining ? value : { error: { code: "BATCH_OUTPUT_LIMIT", message: "Read this item separately with a smaller range or output budget." } } });
+      const position = offset + index;
+      const item = args.requests[position];
+      let result = settled.status === "fulfilled" ? settled.value : jsonError("BATCH_ITEM_FAILED", settled.reason instanceof Error ? settled.reason.message : String(settled.reason));
+      let fullValue = result.structuredContent ?? JSON.parse(result.content[0].text);
+      let value = args.detail === "full" ? fullValue : compactBatchValue(item.tool, fullValue);
+      let bytes = Buffer.byteLength(JSON.stringify(value));
+      const fairShare = Math.floor(remaining / (args.requests.length - position));
+      const limits: Record<string, number> = {};
+      // Re-run only oversized successful items with a smaller result cap. Preserve
+      // each tool's native truncation/continuation metadata instead of dropping it.
+      for (let attempt = 0; attempt < 2 && bytes > fairShare && !("isError" in result && result.isError === true); attempt += 1) {
+        const ratio = Math.max(0, Math.min(0.9, (fairShare - 768) / bytes));
+        const record = value as Record<string, unknown>;
+        let field: string;
+        let current: number;
+        if (item.tool === "workspace.read") {
+          field = "max_bytes";
+          current = Number(limits.max_bytes ?? record.returned_bytes ?? 32 * 1024);
+        } else if (item.tool === "workspace.search") {
+          field = "max_results";
+          current = Number(limits.max_results ?? (Array.isArray(record.matches) ? record.matches.length : 20));
+        } else {
+          field = "max_entries";
+          current = Number(limits.max_entries ?? (Array.isArray(record.entries) ? record.entries.length : 100));
+        }
+        const reduced = Math.max(1, Math.floor(current * ratio));
+        if (reduced >= current) break;
+        limits[field] = reduced;
+        result = await runItem(item, limits);
+        fullValue = result.structuredContent ?? JSON.parse(result.content[0].text);
+        value = args.detail === "full" ? fullValue : compactBatchValue(item.tool, fullValue);
+        bytes = Buffer.byteLength(JSON.stringify(value));
+      }
+      results.push({
+        index: position,
+        tool: item.tool,
+        result: bytes <= remaining ? value : {
+          error: {
+            code: "BATCH_OUTPUT_LIMIT",
+            message: "Read this item separately with a smaller range or a larger shared max_bytes.",
+            details: { item_bytes: bytes, remaining_bytes: remaining },
+          },
+        },
+      });
       if (bytes <= remaining) remaining -= bytes;
     }
   }

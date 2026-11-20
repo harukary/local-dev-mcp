@@ -223,6 +223,34 @@ describe("repo.action", () => {
     expect(input.riskCommand).toBe("printf %s __repo_action_param__");
   });
 
+  it("classifies nonzero exits, timeouts, and runner errors without losing redacted output", async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-actions-"));
+    writeManifest({ "status.read": { mode: "read", executable: "printf", argv: ["ok"] } });
+    const { ctx, shellRunner, auditLogger } = createContext(createProject(tmpRoot));
+    const failedProcess = {
+      projectId: "alpha", cwd: tmpRoot, command: "printf ok", riskLevel: "read_only",
+      exitCode: 1, timedOut: false, durationMs: 25, stdout: "", stderr: "application failure",
+      stdoutTruncated: false, stderrTruncated: false, redactions: [],
+    };
+    shellRunner.runArgv.mockResolvedValueOnce(failedProcess);
+    const failed = await handleRepoActionRead(ctx, "chat-a", { action: "status.read" });
+    expect(failed.isError).toBe(true);
+    expect(body(failed)).toMatchObject({ exit_code: 1, timed_out: false, stderr: "application failure", error: { code: "ACTION_EXIT_NONZERO" } });
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({ command: "status.read", exitCode: 1, timedOut: false }));
+
+    shellRunner.runArgv.mockResolvedValueOnce({ ...failedProcess, timedOut: true });
+    const timedOut = await handleRepoActionRead(ctx, "chat-a", { action: "status.read" });
+    expect(timedOut.isError).toBe(true);
+    expect(body(timedOut)).toMatchObject({ timed_out: true, error: { code: "ACTION_TIMED_OUT" } });
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({ timedOut: true }));
+
+    shellRunner.runArgv.mockRejectedValueOnce(new Error("do not expose credential details"));
+    const unavailable = await handleRepoActionRead(ctx, "chat-a", { action: "status.read" });
+    expect(unavailable.isError).toBe(true);
+    expect(body(unavailable).error.code).toBe("ACTION_EXECUTION_FAILED");
+    expect(JSON.stringify(unavailable)).not.toContain("credential details");
+  });
+
   it("keeps injection-looking model input as one argv token in the real runner", async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "local-dev-actions-"));
     const marker = join(tmpRoot, "should-not-exist");
@@ -353,6 +381,8 @@ describe("repo.action", () => {
 
     const denied = await handleRepoActionRead(ctx, "chat-a", { action: "signal.inspect", args: { signal_id: 290 } });
     expect(body(denied).error.code).toBe("ACTION_CREDENTIALED_READ_NOT_APPROVED");
+    const listed = body(await handleRepoActionList(ctx, "chat-a"));
+    expect(listed.actions).toEqual([expect.objectContaining({ id: "signal.inspect", host_pinned: false })]);
     expect(shellRunner.runArgv).not.toHaveBeenCalled();
   });
 
@@ -361,6 +391,9 @@ describe("repo.action", () => {
     const action = credentialedReadAction();
     writeManifest({ "signal.inspect": action });
     const { ctx, shellRunner, auditLogger } = createContext(pinnedReadProject(tmpRoot, action));
+    expect(body(await handleRepoActionList(ctx, "chat-a")).actions).toEqual([
+      expect.objectContaining({ id: "signal.inspect", host_pinned: true }),
+    ]);
 
     const invalid = await handleRepoActionRead(ctx, "chat-a", { action: "signal.inspect", args: { signal_id: "290; rm -rf /" } });
     expect(body(invalid).error.code).toBe("ACTION_ARGUMENT_INVALID");

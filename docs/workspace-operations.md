@@ -4,7 +4,7 @@
 
 `workspace.batch` は複数の読み取り・検索・一覧取得を実行し、`results[]` に各項目の結果またはエラーを返す。部分失敗しても、成功した項目の結果は維持する。
 
-出力予算はBatch全体でデフォルト256 KiB、`max_bytes`指定時は最大1 MiB。各項目の`workspace.read`はデフォルト32 KiB、指定時でも最大128 KiBとする。Batch側の合計予算を使い切った項目だけ`BATCH_OUTPUT_LIMIT`となる。Secure TunnelのMCP応答上限9 MiBとは独立した、モデルへ過大な出力を返さないための制御である。必要な場合だけ明示的に`max_bytes`を増やす。
+出力予算はBatch全体でデフォルト256 KiB、`max_bytes`指定時は最大1 MiB。各項目の`workspace.read`はデフォルト32 KiB、指定時でも最大128 KiBとする。成功項目が残り予算を後続項目数で割った目安を超える場合、同じ読み取り・検索・一覧取得を最大2回だけ小さい上限で再実行する。省略が生じた場合も`truncated`や`next_start_line` / `next_start_column` / `next_offset`を維持する。極端に大きな単一項目など、残り予算に収まらない場合のみ`BATCH_OUTPUT_LIMIT`を返し、必要なbytesと残りbytesを示す。Secure TunnelのMCP応答上限9 MiBとは独立した制御である。必要な場合だけ明示的に`max_bytes`を増やす。
 
 `tool.usage` では、外側の呼び出し数 `calls` と内部の結果を区別する。
 

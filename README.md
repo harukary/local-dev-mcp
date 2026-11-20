@@ -60,7 +60,7 @@ Core tool families include:
 - `project.*` — select, inspect, and reload registered projects
 - `workspace.*` — bounded file listing, reading, searching, and patching
 - `git.*` — structured repository status, diff, history, and commit inspection
-- `repo.action.*` (optional) — local read/write actions, host-pinned credentialed reads, and verified deployments declared in `.local-dev/actions.json`; see [`docs/repo-actions.md`](docs/repo-actions.md)
+- `repo.action.*` (optional) — local read/write actions, host-pinned credentialed reads, and verified deployments declared in `.local-dev/actions.json`; list credentialed reads with `host_pinned` and distinguish nonzero exits from timeouts; see [`docs/repo-actions.md`](docs/repo-actions.md)
 - `shell.*` — managed shell execution, approvals, background jobs, and cancellation
 - `browser.*` (optional) — Chrome DevTools Protocol browser automation
 - `computer.*` (optional) — macOS desktop window observation and interaction via Cua Driver (separate from browser profiles); see [computer setup and operation](docs/computer-automation.md)
@@ -82,7 +82,7 @@ Prefer typed tools over broad shell commands:
 - in Claude, a first `project.select` generates a `context_id`; reuse it on each project-scoped call to keep the selected project, working directory and browser profile isolated. Claude receives compact text from file-reading, search, listing, Skill reading and project-selection tools, while ChatGPT retains its structured results. See [Claude work contexts](docs/claude-work-context-design.md)
 - `project.select` composes `$CODEX_HOME/AGENTS.md` first and the selected project/worktree `AGENTS.md` second, so project/worktree instructions take precedence on conflicts; the full instruction body is returned only in `structuredContent`, while the text fallback carries metadata without duplicating the instructions into the transcript; see [`docs/project-select-agent-instructions.md`](docs/project-select-agent-instructions.md)
 - use `project.inspect` rather than filesystem discovery for the active project
-- use bounded `workspace.read`, `workspace.list`, and `workspace.search` rather than large shell scans; combine independent reads with `workspace.batch` (256 KiB default / 1 MiB max shared response, 32 KiB default / 128 KiB max per read) and inspect partial failures in `tool.usage` (see [`docs/workspace-operations.md`](docs/workspace-operations.md))
+- use bounded `workspace.read`, `workspace.list`, and `workspace.search` rather than large shell scans; combine independent reads with `workspace.batch` (256 KiB default / 1 MiB max shared response, 32 KiB default / 128 KiB max per read). Oversized successful batch items can be fetched again with smaller limits and continuation metadata, without dropping the entire item. Inspect remaining partial failures in `tool.usage` (see [`docs/workspace-operations.md`](docs/workspace-operations.md))
 - use typed `git.*` tools for common repository inspection
 - use `repo.action.list` to discover fixed repository-declared actions; call `repo.action.read` for local reads or host-pinned credentialed probes, and `repo.action.write` for local writes and verified credential-backed deployments
 - use `shell.run` for builds, tests, installs, and unsupported or ad-hoc operations; use `repo.action.write` for declared verified deployments
