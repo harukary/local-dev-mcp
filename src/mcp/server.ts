@@ -954,6 +954,7 @@ export function createMcpServer(ctx: AppContext): Server {
             network_policy: project.networkPolicy,
             write_policy: project.writePolicy,
             approval_mode: project.approvalMode,
+            credential_approval_mode: project.credentialApprovalMode ?? "always",
             active_jobs: activeJobs.map((j) => ({
               id: j.id,
               command: j.command,
@@ -982,6 +983,7 @@ export function createMcpServer(ctx: AppContext): Server {
           network_policy: project.networkPolicy,
           write_policy: project.writePolicy,
           approval_mode: project.approvalMode,
+          credential_approval_mode: project.credentialApprovalMode ?? "always",
           denied_paths: project.deniedPaths,
           redaction_profile: project.redactionProfile,
         }, null, 2),

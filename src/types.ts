@@ -25,6 +25,8 @@ export interface ProjectConfig {
   networkPolicy: NetworkPolicy;
   writePolicy: WritePolicy;
   approvalMode: ApprovalMode;
+  /** Host-owned opt-in for credentialed shell commands; defaults to separate approval. */
+  credentialApprovalMode?: "always" | "project_policy";
   /** Host-owned fingerprints of permitted credentialed read Repository Actions. */
   credentialedReadActions?: Record<string, string>;
   tmuxSession?: string;

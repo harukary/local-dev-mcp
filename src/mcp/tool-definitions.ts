@@ -8,9 +8,9 @@ import { buildTodoToolDefinitions } from "./todo-tool-definitions.js";
 import { buildFeedbackToolDefinitions } from "./feedback-tool-definitions.js";
 import { buildRepoActionToolDefinitions } from "./repo-action-tool-definitions.js";
 
-export const TOOL_SCHEMA_VERSION = "2026-11-20.1";
-export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-20.1";
-export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-20.1";
+export const TOOL_SCHEMA_VERSION = "2026-11-26.1";
+export const CLAUDE_TOOL_SCHEMA_VERSION = "2026-11-26.1";
+export const MUSE_TOOL_SCHEMA_VERSION = "2026-11-26.1";
 export type ClientToolProfile = "chatgpt" | "claude" | "muse";
 
 // External clients opt into each tool explicitly. Adding a handler to ChatGPT
@@ -272,7 +272,7 @@ export function buildToolDefinitions(profile: ClientToolProfile = "chatgpt"): To
             type: "string",
             enum: ["bitwarden"],
             description:
-              "Inject the Bitwarden Secrets Manager access token from macOS Keychain into this command only. Approval follows the project normal risk policy; the scope alone does not force approval. The token is redacted from command output.",
+              "Inject the Bitwarden Secrets Manager access token from macOS Keychain into this command only. Separate approval is required by default. A host-authorized project with credential_approval_mode=project_policy follows its ordinary shell risk policy instead; Muse still cannot use credentialed shell commands. Prefer host-pinned credentialed read Repository Actions or deployment actions where applicable. The token is redacted from command output.",
           },
           async: {
             type: "boolean",

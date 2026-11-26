@@ -57,6 +57,7 @@ export async function handleProjectInspect(ctx: AppContext, chatContextId: strin
       write_policy: project.writePolicy,
       network_policy: project.networkPolicy,
       approval_mode: project.approvalMode,
+      credential_approval_mode: project.credentialApprovalMode ?? "always",
     },
   });
 }

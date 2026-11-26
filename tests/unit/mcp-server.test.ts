@@ -197,7 +197,7 @@ describe("Secure Tunnel HTTP host boundary", () => {
 describe("client-isolated tool schemas", () => {
   it("pins the current ChatGPT descriptors, including output schemas", () => {
     const sha256 = createHash("sha256").update(JSON.stringify(buildToolDefinitions())).digest("hex");
-    expect(sha256).toBe("0a57b4370fa61ae90b49c356e013345131f3e32be4810f2aad2bfbd3ae4890f9");
+    expect(sha256).toBe("48526edf45f527b9c6b1ee8a6b22e556e32da6b4a4fd06e73ab6c9c058b57acd");
     expect(buildToolDefinitions().length).toBe(97);
   });
 
@@ -220,7 +220,7 @@ describe("client-isolated tool schemas", () => {
     expect(validateToolInput("workspace.read", { path: "README.md" })).toBeUndefined();
     expect(validateToolInput("workspace.read", { path: "README.md", context_id: "ctx_test" }, "claude")).toBeUndefined();
     expect(validateToolInput("artifact.link", { path: "README.md" }, "claude")).toContain("Unknown tool");
-    expect(buildToolSchemaSnapshot({}, "claude").schema_version).toBe("2026-11-20.1");
+    expect(buildToolSchemaSnapshot({}, "claude").schema_version).toBe("2026-11-26.1");
     const feedback = tools.find((tool) => tool.name === "feedback.report");
     expect(feedback?.inputSchema.required).not.toContain("context_id");
     expect(feedback?.inputSchema.properties).toHaveProperty("context_id");
@@ -249,7 +249,7 @@ describe("tool schema snapshot", () => {
     const repoActionList = snapshot.tools.find((tool) => tool.name === "repo.action.list");
     const repoActionRead = snapshot.tools.find((tool) => tool.name === "repo.action.read");
     const repoActionWrite = snapshot.tools.find((tool) => tool.name === "repo.action.write");
-    expect(snapshot.schema_version).toBe("2026-11-20.1");
+    expect(snapshot.schema_version).toBe("2026-11-26.1");
     expect(names).toEqual(expect.arrayContaining(["feedback.report", "feedback.list", "feedback.update"]));
     expect(projectSelect?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
     expect(names).toContain("tool.schema");

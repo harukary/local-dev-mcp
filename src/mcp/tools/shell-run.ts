@@ -159,7 +159,7 @@ export async function handleShellRun(
       async: args.async,
       timeoutSeconds: args.timeout_seconds,
       longRunning: args.long_running ?? (args.async === true && args.timeout_seconds === undefined),
-      force: Boolean(args.credential_scope),
+      force: Boolean(args.credential_scope) && (ctx.clientProfile === "muse" || project.credentialApprovalMode !== "project_policy"),
       createRequest: ctx.clientProfile !== "muse",
       credentialScope: args.credential_scope,
     }

@@ -48,6 +48,7 @@ export async function handleProjectCurrent(
     network_policy: project.networkPolicy,
     write_policy: project.writePolicy,
     approval_mode: project.approvalMode,
+    credential_approval_mode: project.credentialApprovalMode ?? "always",
   });
 }
 

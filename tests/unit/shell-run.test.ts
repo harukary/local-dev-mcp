@@ -117,7 +117,15 @@ describe("handleShellRun", () => {
     }));
   });
 
-  it("requires separate approval for Bitwarden access on an otherwise safe command", async () => {
+  it.each([
+    { name: "default", credentialApprovalMode: undefined, clientProfile: "chatgpt", approvalMode: "catastrophic_only", writePolicy: "allow", networkPolicy: "allow", expected: "APPROVAL_REQUIRED", command: "pnpm env:sync" },
+    { name: "trusted project", credentialApprovalMode: "project_policy", clientProfile: "chatgpt", approvalMode: "catastrophic_only", writePolicy: "allow", networkPolicy: "allow", expected: "ok", command: "pnpm env:sync" },
+    { name: "explicit separate approval", credentialApprovalMode: "always", clientProfile: "chatgpt", approvalMode: "catastrophic_only", writePolicy: "allow", networkPolicy: "allow", expected: "APPROVAL_REQUIRED", command: "pwd" },
+    { name: "normal network approval", credentialApprovalMode: "project_policy", clientProfile: "chatgpt", approvalMode: "policy", writePolicy: "allow", networkPolicy: "ask", expected: "APPROVAL_REQUIRED", command: "curl https://example.com" },
+    { name: "forbidden path", credentialApprovalMode: "project_policy", clientProfile: "chatgpt", approvalMode: "catastrophic_only", writePolicy: "allow", networkPolicy: "allow", expected: "FORBIDDEN_COMMAND", command: "cat .env" },
+    { name: "catastrophic command", credentialApprovalMode: "project_policy", clientProfile: "chatgpt", approvalMode: "catastrophic_only", writePolicy: "allow", networkPolicy: "allow", expected: "FORBIDDEN_COMMAND", command: "shutdown -h now" },
+    { name: "Muse cannot approve", credentialApprovalMode: "project_policy", clientProfile: "muse", approvalMode: "catastrophic_only", writePolicy: "allow", networkPolicy: "allow", expected: "APPROVAL_UNAVAILABLE", command: "pwd" },
+  ])("applies credential approval policy: $name", async ({ credentialApprovalMode, clientProfile, approvalMode, writePolicy, networkPolicy, expected, command }) => {
     const contextStore = new ChatContextStore();
     contextStore.setCurrentProject("chat-a", "alpha");
     const shellRunner = {
@@ -146,13 +154,15 @@ describe("handleShellRun", () => {
       defaultShell: "/bin/bash",
       defaultTimeoutSeconds: 30,
       maxTimeoutSeconds: 300,
-      networkPolicy: "allow",
-      writePolicy: "allow",
-      approvalMode: "catastrophic_only",
-      deniedPaths: [],
+      networkPolicy,
+      writePolicy,
+      approvalMode,
+      credentialApprovalMode,
+      deniedPaths: [".env"],
       redactionProfile: "default",
     };
     const ctx = {
+      clientProfile,
       registry: {
         has: () => true,
         get: () => project,
@@ -164,15 +174,22 @@ describe("handleShellRun", () => {
     } as unknown as AppContext;
 
     const result = await handleShellRun(ctx, "chat-a", {
-      command: "pnpm env:sync",
+      command,
       credential_scope: "bitwarden",
     });
 
-    expect(result.isError).toBe(true);
-    expect(JSON.parse(result.content[0].text).error).toMatchObject({
-      code: "APPROVAL_REQUIRED", approval_policy: "ask", credential_scope: "bitwarden",
-    });
-    expect(shellRunner.run).not.toHaveBeenCalled();
+    if (expected === "ok") {
+      expect(result.isError).not.toBe(true);
+      expect(shellRunner.run).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ command, credentialScope: "bitwarden", env: expect.objectContaining({ BWS_ACCESS_TOKEN: "test-token" }) }),
+        "chat-a"
+      );
+    } else {
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text).error.code).toBe(expected);
+      expect(shellRunner.run).not.toHaveBeenCalled();
+    }
   });
   it("requires async mode for long-running jobs", async () => {
     const contextStore = new ChatContextStore();

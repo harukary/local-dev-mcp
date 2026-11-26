@@ -12,6 +12,7 @@ export async function handleProjectList(ctx: AppContext, chatContextId: string) 
       network_policy: p.networkPolicy,
       write_policy: p.writePolicy,
       approval_mode: p.approvalMode,
+      credential_approval_mode: p.credentialApprovalMode ?? "always",
       current: p.projectId === current,
     })),
   };

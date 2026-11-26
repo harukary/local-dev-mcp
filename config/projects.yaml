@@ -10,6 +10,7 @@ projects:
     network_policy: ask
     write_policy: confirm
     approval_mode: policy
+    credential_approval_mode: always
     denied_paths:
       - .env
       - .env.*

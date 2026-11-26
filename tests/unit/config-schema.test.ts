@@ -26,6 +26,13 @@ describe("Config Schema", () => {
     expect(config.displayName).toBe("Test Project");
     expect(config.sandboxType).toBe("host");
     expect(config.approvalMode).toBe("policy");
+    expect(config.credentialApprovalMode).toBe("always");
+  });
+
+  it("requires an explicit valid credential approval policy", () => {
+    expect(validateProjectConfig("test", makeRaw({ credential_approval_mode: "project_policy" })).credentialApprovalMode).toBe("project_policy");
+    expect(validateProjectConfig("test", makeRaw({ credential_approval_mode: "always" })).credentialApprovalMode).toBe("always");
+    expect(() => validateProjectConfig("test", makeRaw({ credential_approval_mode: "invalid" }))).toThrow("invalid credential_approval_mode");
   });
 
   it("validates host-pinned credentialed read fingerprints", () => {

@@ -11,6 +11,7 @@ export interface RawProjectConfig {
   network_policy: string;
   write_policy: string;
   approval_mode?: string;
+  credential_approval_mode?: string;
   credentialed_read_actions?: Record<string, string>;
   tmux_session?: string;
   denied_paths: string[];
@@ -61,6 +62,10 @@ export function validateProjectConfig(
       `Project "${projectId}" has invalid approval_mode "${raw.approval_mode}"`
     );
   }
+  const credentialApprovalMode = raw.credential_approval_mode === undefined ? "always" : raw.credential_approval_mode;
+  if (credentialApprovalMode !== "always" && credentialApprovalMode !== "project_policy") {
+    throw new Error(`Project "${projectId}" has invalid credential_approval_mode; expected always or project_policy`);
+  }
   if (raw.credentialed_read_actions !== undefined && (
     !raw.credentialed_read_actions ||
     typeof raw.credentialed_read_actions !== "object" ||
@@ -94,6 +99,7 @@ export function validateProjectConfig(
     networkPolicy: raw.network_policy as NetworkPolicy,
     writePolicy: raw.write_policy as WritePolicy,
     approvalMode,
+    credentialApprovalMode,
     credentialedReadActions: raw.credentialed_read_actions,
     tmuxSession: raw.tmux_session,
     deniedPaths: raw.denied_paths || [],
